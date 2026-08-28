@@ -4,11 +4,11 @@ These instructions apply to everything under `ai-gateway/`.
 
 ## Status
 
-Phase 2 (provider-neutral gateway foundation) is implemented and has been hardened per independent review: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, and the first `FoodAnalysisUseCase`. The production provider adapter (official GitHub Copilot SDK via the Copilot CLI in headless/server mode) is **not implemented yet**. Do not add real provider integration unless a task explicitly authorizes that phase.
+Phase 2 (provider-neutral gateway foundation) and Phase 3 (real Copilot SDK provider) are implemented: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, the real `GitHubCopilotProvider` (official GitHub Copilot SDK via the Copilot CLI in headless/server mode), and the first `FoodAnalysisUseCase`. Production deployment (Azure Container Apps, production authentication mechanism, secret storage) is **not implemented yet** — do not invent that architecture without an explicit task.
 
 ## Provider decision (final)
 
-- Production provider: the official GitHub Copilot SDK, run through the Copilot CLI in headless/server mode.
+- Production provider: the official GitHub Copilot SDK, run through the Copilot CLI in headless/server mode. Implemented as `app/providers/github_copilot.py::GitHubCopilotProvider`.
 - `trsdn/github_copilot_openai_api_wrapper` is **not** part of the production architecture and must not be reintroduced without an explicit decision recorded in `docs/architecture.md`.
 
 ## Target boundary
@@ -31,16 +31,17 @@ Phase 2 (provider-neutral gateway foundation) is implemented and has been harden
 
 ## Authentication
 
-- Production authentication is not implemented yet. Fail-closed by default: `GATEWAY_DEV_AUTH_BYPASS` defaults to false and only takes effect when `APP_ENV=development`. The default configuration (no env vars set) refuses every `/v1/*` request. `GET /healthz` remains anonymous.
+- Production (deployed) authentication is not decided yet. Fail-closed by default: `GATEWAY_DEV_AUTH_BYPASS` defaults to false and only takes effect when `APP_ENV=development`. The default configuration (no env vars set) refuses every `/v1/*` request. `GET /healthz` remains anonymous.
 - Never enable `GATEWAY_DEV_AUTH_BYPASS` outside a trusted local environment, and never set `APP_ENV=production` with `AI_PROVIDER=fake` (rejected at startup).
+- Copilot's own authentication (separate from the above) is documented in `README.md`: a locally logged-in `copilot` CLI session by default, or an explicit `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN`. Never hard-code or commit a token.
 
 ## Provider abstraction
 
 - `StructuredGenerationProvider` (`app/providers/base.py`) is domain-blind: it only receives generic messages, an opaque `model_purpose` routing key, a JSON output schema, optional attachments, and a timeout. Providers must never branch on domain task names.
-- All food-specific instructions, schema selection, and result interpretation belong in `FoodAnalysisUseCase` (or a future use case), never in a provider implementation.
-- Model/provider routing is server-side configuration (e.g. `FOOD_TEXT_MODEL_PURPOSE`) and must never be exposed through the public API or influence the public request/response shape.
+- All food-specific instructions, schema selection, and result interpretation belong in `FoodAnalysisUseCase` (or a future use case), never in a provider implementation. `GitHubCopilotProvider` must stay domain-blind too: do not add food-specific prompts/fields to it.
+- Model/provider routing is server-side configuration (`FOOD_TEXT_MODEL_PURPOSE`, `COPILOT_MODEL_ROUTES_JSON`) and must never be exposed through the public API or influence the public request/response shape. A configured model must never be silently substituted.
 
 ## Secrets and validation
 
 - Never commit GitHub/Copilot credentials, OAuth/access/refresh tokens, `.env`, local settings, virtual environments, caches, or build output. Example configuration must contain placeholders only.
-- Tests must exercise provider-independent behavior through `FakeProvider` and must not require real credentials. Isolate any opt-in integration test that would exercise a real provider.
+- Tests must exercise provider-independent behavior through `FakeProvider`/mocked SDK boundaries and must not require real credentials. The only exception is `tests/test_copilot_integration.py`, which is opt-in only (`RUN_COPILOT_INTEGRATION_TESTS=1`) and must never run in normal CI/local test runs.

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-#: Providers implemented today. "copilot_sdk" is reserved for the future
-#: production adapter and is intentionally not accepted yet.
-SUPPORTED_PROVIDERS = frozenset({"fake"})
+#: Providers implemented today. "copilot" is the real GitHub Copilot SDK
+#: adapter (see app/providers/github_copilot.py); "fake" is deterministic
+#: and credential-free.
+SUPPORTED_PROVIDERS = frozenset({"fake", "copilot"})
 
 #: Fail-closed by default: only "development" may ever enable the dev auth
 #: bypass. "test" is for the automated test suite; "production" is the
@@ -38,6 +40,18 @@ class Settings(BaseSettings):
     # Development-only bypass, off by default. Even when true, it only takes
     # effect if app_env == "development" (enforced in app.security).
     gateway_dev_auth_bypass: bool = Field(default=False, alias="GATEWAY_DEV_AUTH_BYPASS")
+
+    # JSON object mapping a model-routing purpose (e.g. "food_text_v1") to a
+    # concrete Copilot model id (e.g. "gpt-5"). Required, with no default,
+    # when AI_PROVIDER=copilot, so a model is never silently substituted.
+    copilot_model_routes_json: str = Field(default="", alias="COPILOT_MODEL_ROUTES_JSON")
+
+    # Optional explicit GitHub token for the Copilot SDK. When unset (the
+    # default), the SDK falls back to its own documented mechanisms: a
+    # locally logged-in `copilot` CLI session, or the standard
+    # COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN environment variables. This
+    # setting never has a hard-coded value and is never committed.
+    copilot_github_token: str | None = Field(default=None, alias="COPILOT_GITHUB_TOKEN")
 
     def validate(self) -> None:
         if self.app_env not in ALLOWED_APP_ENVS:
@@ -72,6 +86,37 @@ class Settings(BaseSettings):
 
         if not self.food_text_model_purpose.strip():
             raise ValueError("FOOD_TEXT_MODEL_PURPOSE must not be blank.")
+
+        if self.ai_provider == "copilot":
+            routes = self.copilot_model_routes()
+            if self.food_text_model_purpose not in routes:
+                raise ValueError(
+                    "COPILOT_MODEL_ROUTES_JSON must map every configured model "
+                    f"purpose (here: '{self.food_text_model_purpose}') to a model id. "
+                    "A model is never silently substituted."
+                )
+
+    def copilot_model_routes(self) -> dict[str, str]:
+        """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.
+
+        Raises ValueError on any malformed configuration; never falls back
+        to a default/guessed model.
+        """
+
+        raw = self.copilot_model_routes_json.strip()
+        if not raw:
+            raise ValueError(
+                "COPILOT_MODEL_ROUTES_JSON is required when AI_PROVIDER=copilot."
+            )
+        try:
+            parsed = json.loads(raw)
+        except ValueError as exc:
+            raise ValueError(f"COPILOT_MODEL_ROUTES_JSON is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()
+        ):
+            raise ValueError("COPILOT_MODEL_ROUTES_JSON must be a JSON object of string to string.")
+        return parsed
 
 
 @lru_cache

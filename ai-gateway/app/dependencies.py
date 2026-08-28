@@ -13,7 +13,16 @@ from app.use_cases.food_analysis import FoodAnalysisUseCase
 def _build_provider(settings: Settings) -> StructuredGenerationProvider:
     if settings.ai_provider == "fake":
         return FakeProvider()
-    # Unreachable: Settings.validate_provider() already rejects other values.
+    if settings.ai_provider == "copilot":
+        # Imported lazily so the optional Copilot SDK dependency is only
+        # required when it is actually configured/used.
+        from app.providers.github_copilot import GitHubCopilotProvider
+
+        return GitHubCopilotProvider(
+            model_routes=settings.copilot_model_routes(),
+            github_token=settings.copilot_github_token,
+        )
+    # Unreachable: Settings.validate() already rejects other values.
     raise ValueError(f"Unsupported AI_PROVIDER '{settings.ai_provider}'.")
 
 

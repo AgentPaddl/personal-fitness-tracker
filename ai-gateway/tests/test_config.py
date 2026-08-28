@@ -62,3 +62,41 @@ def test_get_settings_uses_env_overrides(monkeypatch):
         assert settings.gateway_dev_auth_bypass is True
     finally:
         get_settings.cache_clear()
+
+
+def test_copilot_provider_requires_model_routes():
+    settings = Settings(app_env="development", ai_provider="copilot", copilot_model_routes_json="")
+    with pytest.raises(ValueError, match="COPILOT_MODEL_ROUTES_JSON"):
+        settings.validate()
+
+
+def test_copilot_provider_rejects_malformed_json():
+    settings = Settings(app_env="development", ai_provider="copilot", copilot_model_routes_json="not json")
+    with pytest.raises(ValueError, match="COPILOT_MODEL_ROUTES_JSON"):
+        settings.validate()
+
+
+def test_copilot_provider_requires_route_for_configured_purpose():
+    settings = Settings(
+        app_env="development",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"some_other_purpose": "gpt-5"}',
+    )
+    with pytest.raises(ValueError, match="food_text_v1"):
+        settings.validate()
+
+
+def test_copilot_provider_valid_configuration_passes():
+    settings = Settings(
+        app_env="development",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5"}',
+    )
+    settings.validate()  # must not raise
+    assert settings.copilot_model_routes() == {"food_text_v1": "gpt-5"}
+
+
+def test_copilot_model_routes_never_silently_defaults():
+    settings = Settings(ai_provider="copilot", copilot_model_routes_json="")
+    with pytest.raises(ValueError):
+        settings.copilot_model_routes()

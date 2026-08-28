@@ -98,3 +98,12 @@ class StructuredGenerationProvider(ABC):
         call (e.g. a session/handshake check rather than a full request).
         """
         return True
+
+    async def aclose(self) -> None:
+        """Release any long-lived provider resources (connections, processes).
+
+        Default no-op. A provider that owns a reusable runtime/client
+        (e.g. a persistent SDK connection) should override this and hook
+        it into the application's shutdown lifecycle.
+        """
+        return None

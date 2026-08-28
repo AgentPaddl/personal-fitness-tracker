@@ -66,6 +66,26 @@ class ProviderUnavailableError(GatewayError):
         super().__init__("The AI provider is currently unavailable.")
 
 
+class ProviderAuthenticationError(GatewayError):
+    """The provider rejected our credentials/session (never exposes which)."""
+
+    code = "provider_authentication_failed"
+    http_status = 502
+
+    def __init__(self) -> None:
+        super().__init__("The AI provider rejected the gateway's credentials.")
+
+
+class ModelUnavailableError(GatewayError):
+    """The configured model/purpose is not available; never substituted silently."""
+
+    code = "model_unavailable"
+    http_status = 502
+
+    def __init__(self) -> None:
+        super().__init__("The configured AI model is not currently available.")
+
+
 class ServiceNotReadyError(GatewayError):
     """Raised by /readyz when the configured provider is not ready.
 

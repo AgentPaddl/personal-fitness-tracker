@@ -39,7 +39,7 @@ Fitness API / domain backend
 Personal AI Gateway
     |
     | StructuredGenerationProvider (provider-neutral adapter interface)
-    +--> Copilot SDK adapter (production; not implemented yet)
+    +--> GitHubCopilotProvider (real; official GitHub Copilot SDK)
     |       Copilot CLI in headless/server mode
     +--> FakeProvider (deterministic, used for local development and tests)
     +--> Future provider adapter(s)
@@ -65,7 +65,7 @@ Personal AI Gateway
 
 - Provides our authenticated, server-side AI API to the domain backend (FastAPI app under `ai-gateway/`).
 - Owns AI schema validation, provider/model routing, timeouts, limits, and normalized errors.
-- Uses replaceable provider adapters behind the `StructuredGenerationProvider` interface. The deterministic `FakeProvider` is implemented for local development and tests. The production adapter targets the official GitHub Copilot SDK via the Copilot CLI in headless/server mode and is not implemented yet.
+- Uses replaceable provider adapters behind the `StructuredGenerationProvider` interface. The deterministic `FakeProvider` is implemented for local development and tests. `GitHubCopilotProvider` (Phase 3) wraps the official GitHub Copilot SDK via the Copilot CLI in headless/server mode and is implemented for local use; production deployment/authentication is not decided yet.
 - Keeps provider-specific transport details behind the adapter boundary; the public gateway API never exposes provider or model identifiers.
 - Is not a public proxy. Any future Copilot CLI process must never be exposed directly to the public internet and should be reachable only through controlled server-side networking.
 
@@ -127,11 +127,16 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 - A final catch-all exception boundary (gateway `app/main.py`, use case `_generate_with_timeout`) normalizes any unexpected/provider exception so raw internals never reach a client.
 - Readiness (`GET /readyz`) delegates to a provider's own cheap `check_ready()` check, letting a future real adapter report connectivity without performing a billed generation call.
 
-### Phase 3 — Copilot SDK adapter
+### Phase 3 — Copilot SDK adapter (implemented for local use)
 
-- Run the Copilot CLI in headless/server mode as an internal-only process reachable solely by the gateway.
-- Implement a `StructuredGenerationProvider` adapter around the official GitHub Copilot SDK without exposing SDK/CLI details to backend domain logic or the iOS client.
-- Add opt-in integration checks and operational secret management. `trsdn/github_copilot_openai_api_wrapper` is not part of this plan.
+- Implemented `GitHubCopilotProvider`, wrapping the official GitHub Copilot SDK for Python (`github-copilot-sdk`), which drives the Copilot CLI in headless/server mode. It remains domain-blind: it understands only generic messages, an opaque `model_purpose` routing key, a JSON output schema, and a timeout.
+- Structured output uses a terminal tool (`submit_structured_result`, `Tool(is_terminal=True)`) whose parameter schema is supplied by the calling use case; the provider never hard-codes a domain schema, and the use case still authoritatively re-validates whatever the tool call returns.
+- Server-side model routing (`COPILOT_MODEL_ROUTES_JSON`) maps each model-routing purpose to a concrete Copilot model id with no default and no silent substitution; `GET /readyz` validates the configured model is actually available via the SDK's `list_models()`/`get_auth_status()` without a billed generation call.
+- Local-development authentication uses the Copilot CLI's own documented mechanisms (locally logged-in session via `copilot`/`/login`, or an optional explicit token) — never a hard-coded credential. The production authentication mechanism for a deployed gateway is intentionally not decided yet.
+- One long-lived `CopilotClient` (and its underlying CLI process) is reused across requests; only a lightweight SDK session is created and disconnected per request.
+- Normalizes provider authentication failure, rate limiting, model unavailability, timeouts, invalid structured output, and unexpected SDK/runtime failures to the gateway's existing error model; a catch-all boundary ensures no raw SDK exception, prompt, or GitHub-specific metadata reaches the public API.
+- Unit tests mock the SDK client boundary and require no credentials; an opt-in integration/smoke test (`RUN_COPILOT_INTEGRATION_TESTS=1`) exercises the real CLI and is never run in normal CI/local test runs. `trsdn/github_copilot_openai_api_wrapper` is not part of this plan.
+- Remaining for production: Azure Container Apps packaging, a chosen production auth mechanism (server-to-server token vs. another documented option), secret storage, and network isolation for the CLI process.
 
 ### Phase 4 — food analysis workflow
 
