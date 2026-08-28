@@ -115,13 +115,17 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 - Decide privacy, consent, retention, deletion, observability, and deployment controls.
 - Add contract tests before provider integration.
 
-### Phase 2 — provider-neutral gateway foundation (implemented)
+### Phase 2 — provider-neutral gateway foundation (implemented, reviewed, and hardened)
 
-- Implemented the gateway core (FastAPI), configuration, request/response schemas with numeric bounds, normalized errors, and the `StructuredGenerationProvider` adapter interface.
-- Implemented the deterministic `FakeProvider` and the first `FoodAnalysisUseCase`; tests use the fake provider and do not require real credentials.
-- Modularized the Azure Functions backend into blueprints, added an internal gateway HTTP client, and a food-analysis backend route that works end-to-end against the gateway's `FakeProvider` path locally.
-- Gateway authentication is not implemented yet; the request path is structured so authentication can be added without reshaping the contracts, and any bypass is explicitly marked as development-only.
-- Provider/model selection remains configurable server-side; only `fake` is currently a valid provider selection.
+- Implemented the gateway core (FastAPI), configuration, request/response schemas with numeric bounds, normalized errors, and a domain-blind `StructuredGenerationProvider` adapter interface. Concrete providers only ever see generic generation messages, an opaque `model_purpose` routing key, a JSON output schema, optional attachments, and a timeout — never domain task names like "food_analysis_text". All food-specific orchestration (instructions, schema, interpretation) lives in `FoodAnalysisUseCase`.
+- Implemented the deterministic, schema-driven `FakeProvider` (derives values purely from the requested JSON schema, with no food-specific knowledge) and the first `FoodAnalysisUseCase`; tests use the fake provider and do not require real credentials.
+- Server-side model routing: `FOOD_TEXT_MODEL_PURPOSE` selects a routing key independently of the public contract; changing it never changes the request/response shape and it is never exposed to clients.
+- Modularized the Azure Functions backend into blueprints, added an internal `GatewayClient` with distinct timeout/connectivity/upstream-error handling, and a food-analysis backend route that works locally against the gateway's `FakeProvider` path.
+- The backend owns its own public request/response contract (`backend/schemas.py`) and explicitly maps the gateway's internal response onto it; unknown fields (provider, model, usage, debug/execution metadata) can never reach the client because only declared fields are ever read and re-serialized.
+- Authentication fails closed by default everywhere: the gateway's dev auth bypass requires both `APP_ENV=development` and `GATEWAY_DEV_AUTH_BYPASS=true`; the backend's food-analysis route requires `APP_ENV=development`. Neither is enabled by default. `GET /health` (backend) and `GET /healthz` (gateway) remain anonymous and configuration-independent.
+- `AI_PROVIDER=fake` is rejected outright when `APP_ENV=production`, so the fake provider can never silently become a production default; today this means the gateway has no valid production configuration until a real provider adapter exists, which is intentional.
+- A final catch-all exception boundary (gateway `app/main.py`, use case `_generate_with_timeout`) normalizes any unexpected/provider exception so raw internals never reach a client.
+- Readiness (`GET /readyz`) delegates to a provider's own cheap `check_ready()` check, letting a future real adapter report connectivity without performing a billed generation call.
 
 ### Phase 3 — Copilot SDK adapter
 

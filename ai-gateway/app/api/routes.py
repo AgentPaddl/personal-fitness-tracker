@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.dependencies import get_food_analysis_use_case
+from app.dependencies import get_food_analysis_use_case, get_provider
+from app.errors import ProviderUnavailableError
+from app.providers.base import StructuredGenerationProvider
 from app.schemas.food_analysis import FoodAnalysisRequest, FoodAnalysisResponse
 from app.security import require_authenticated_caller
 from app.use_cases.food_analysis import FoodAnalysisUseCase
@@ -22,11 +24,18 @@ async def healthz() -> dict[str, str]:
 
 
 @health_router.get("/readyz")
-async def readyz() -> dict[str, str]:
-    # Confirms the gateway can build its configured provider without error.
-    from app.dependencies import get_provider
+async def readyz(provider: StructuredGenerationProvider = Depends(get_provider)) -> dict[str, str]:
+    # Uses the provider's own cheap readiness check (never a billed
+    # generation call); a real adapter can later report meaningful
+    # connectivity/auth health here.
+    try:
+        ready = await provider.check_ready()
+    except Exception:
+        ready = False
 
-    get_provider()
+    if not ready:
+        raise ProviderUnavailableError()
+
     return {"status": "ready"}
 
 

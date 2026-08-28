@@ -2,9 +2,11 @@ import json
 import logging
 
 import azure.functions as func
+from pydantic import ValidationError
 
-from config import get_gateway_base_url, get_gateway_timeout_seconds
+from config import get_gateway_base_url, get_gateway_timeout_seconds, is_development_mode
 from gateway_client import GatewayClient, GatewayClientError
+from schemas import FoodAnalysisPublicRequest, map_gateway_response_to_public
 
 bp = func.Blueprint()
 
@@ -13,29 +15,49 @@ logger = logging.getLogger(__name__)
 
 @bp.route(route="food-analysis", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def food_analysis(req: func.HttpRequest) -> func.HttpResponse:
-    # DEVELOPMENT-ONLY: anonymous auth. Add real authentication/authorization
-    # before this route is reachable outside a trusted local environment.
+    # DEVELOPMENT-ONLY: this route has no production authentication yet, so
+    # it fails closed unless APP_ENV=development is explicitly set. Add real
+    # authentication/authorization before removing this gate.
+    if not is_development_mode():
+        return _error_response(
+            403,
+            "not_implemented",
+            "This endpoint is only available with APP_ENV=development until "
+            "production authentication is implemented.",
+        )
+
     try:
         body = req.get_json()
     except ValueError:
         return _error_response(400, "invalid_request", "Request body must be valid JSON.")
 
-    food_description = body.get("food_description") if isinstance(body, dict) else None
-    if not isinstance(food_description, str) or not food_description.strip():
+    try:
+        public_request = FoodAnalysisPublicRequest.model_validate(body)
+    except ValidationError:
         return _error_response(
-            400, "invalid_request", "food_description is required and must be a non-empty string."
+            400, "invalid_request", "food_description is required and must be a 1-2000 character string."
         )
 
     client = GatewayClient(base_url=get_gateway_base_url(), timeout=get_gateway_timeout_seconds())
     try:
-        result = client.analyze_food_text(food_description)
+        gateway_response = client.analyze_food_text(public_request.food_description)
     except GatewayClientError as exc:
         logger.warning("gateway request failed with code=%s", exc.code)
-        return _error_response(502, "gateway_error", "The AI gateway could not complete this request.")
+        return _error_response(exc.http_status, exc.code, exc.message)
     finally:
         client.close()
 
-    return func.HttpResponse(json.dumps(result), status_code=200, mimetype="application/json")
+    try:
+        public_response = map_gateway_response_to_public(gateway_response)
+    except (ValueError, TypeError):
+        logger.warning("gateway returned an unexpected response shape")
+        return _error_response(
+            502, "gateway_invalid_response", "The AI gateway returned an unexpected response."
+        )
+
+    return func.HttpResponse(
+        public_response.model_dump_json(), status_code=200, mimetype="application/json"
+    )
 
 
 def _error_response(status_code: int, code: str, message: str) -> func.HttpResponse:

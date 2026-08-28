@@ -2,5 +2,6 @@
 # Ref: aka.ms/functions-azure-monitor-python
 # azure-monitor-opentelemetry
 
-azure-functions
-httpx>=0.27,<1
+azure-functions==2.2.0
+httpx==0.28.1
+pydantic==2.13.5

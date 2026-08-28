@@ -3,17 +3,62 @@ import pytest
 from app.config import Settings, get_settings
 
 
-def test_unsupported_provider_rejected(monkeypatch):
-    monkeypatch.setenv("AI_PROVIDER", "copilot_sdk")
+def test_default_settings_fail_closed():
+    # No env vars: APP_ENV defaults to "production" and AI_PROVIDER defaults
+    # to "fake", which is an intentionally invalid combination (fake must
+    # never silently become the production provider).
+    with pytest.raises(ValueError):
+        Settings().validate()
+
+
+def test_dev_auth_bypass_rejected_outside_development():
+    settings = Settings(app_env="production", gateway_dev_auth_bypass=True, ai_provider="fake")
+    with pytest.raises(ValueError, match="GATEWAY_DEV_AUTH_BYPASS"):
+        settings.validate()
+
+
+def test_fake_provider_rejected_in_production():
+    settings = Settings(app_env="production", gateway_dev_auth_bypass=False, ai_provider="fake")
+    with pytest.raises(ValueError, match="AI_PROVIDER=fake"):
+        settings.validate()
+
+
+def test_unsupported_provider_rejected():
+    settings = Settings(app_env="development", gateway_dev_auth_bypass=True, ai_provider="copilot_sdk")
+    with pytest.raises(ValueError):
+        settings.validate()
+
+
+def test_unsupported_app_env_rejected():
+    settings = Settings(app_env="staging")
+    with pytest.raises(ValueError):
+        settings.validate()
+
+
+def test_timeout_out_of_bounds_rejected():
+    settings = Settings(
+        app_env="development",
+        gateway_dev_auth_bypass=True,
+        ai_provider="fake",
+        ai_provider_timeout_seconds=0,
+    )
+    with pytest.raises(ValueError):
+        settings.validate()
+
+
+def test_valid_development_configuration_passes():
+    settings = Settings(app_env="development", gateway_dev_auth_bypass=True, ai_provider="fake")
+    settings.validate()  # must not raise
+
+
+def test_get_settings_uses_env_overrides(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("GATEWAY_DEV_AUTH_BYPASS", "true")
+    monkeypatch.setenv("AI_PROVIDER", "fake")
     get_settings.cache_clear()
     try:
-        with pytest.raises(ValueError):
-            get_settings()
+        settings = get_settings()
+        assert settings.app_env == "development"
+        assert settings.gateway_dev_auth_bypass is True
     finally:
         get_settings.cache_clear()
-        monkeypatch.delenv("AI_PROVIDER", raising=False)
-
-
-def test_default_provider_is_fake():
-    settings = Settings()
-    assert settings.ai_provider == "fake"

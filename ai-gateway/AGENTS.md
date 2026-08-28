@@ -4,7 +4,7 @@ These instructions apply to everything under `ai-gateway/`.
 
 ## Status
 
-Phase 2 (provider-neutral gateway foundation) is implemented: a FastAPI app with a `StructuredGenerationProvider` adapter interface, a deterministic `FakeProvider`, and the first `FoodAnalysisUseCase`. The production provider adapter (official GitHub Copilot SDK via the Copilot CLI in headless/server mode) is **not implemented yet**. Do not add real provider integration unless a task explicitly authorizes that phase.
+Phase 2 (provider-neutral gateway foundation) is implemented and has been hardened per independent review: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, and the first `FoodAnalysisUseCase`. The production provider adapter (official GitHub Copilot SDK via the Copilot CLI in headless/server mode) is **not implemented yet**. Do not add real provider integration unless a task explicitly authorizes that phase.
 
 ## Provider decision (final)
 
@@ -31,7 +31,14 @@ Phase 2 (provider-neutral gateway foundation) is implemented: a FastAPI app with
 
 ## Authentication
 
-- Production authentication is not implemented yet. The request path (FastAPI dependency `require_authenticated_caller` in `app/security.py`) is a clearly marked development-only bypass so real authentication can be added without reshaping routes or use cases.
+- Production authentication is not implemented yet. Fail-closed by default: `GATEWAY_DEV_AUTH_BYPASS` defaults to false and only takes effect when `APP_ENV=development`. The default configuration (no env vars set) refuses every `/v1/*` request. `GET /healthz` remains anonymous.
+- Never enable `GATEWAY_DEV_AUTH_BYPASS` outside a trusted local environment, and never set `APP_ENV=production` with `AI_PROVIDER=fake` (rejected at startup).
+
+## Provider abstraction
+
+- `StructuredGenerationProvider` (`app/providers/base.py`) is domain-blind: it only receives generic messages, an opaque `model_purpose` routing key, a JSON output schema, optional attachments, and a timeout. Providers must never branch on domain task names.
+- All food-specific instructions, schema selection, and result interpretation belong in `FoodAnalysisUseCase` (or a future use case), never in a provider implementation.
+- Model/provider routing is server-side configuration (e.g. `FOOD_TEXT_MODEL_PURPOSE`) and must never be exposed through the public API or influence the public request/response shape.
 
 ## Secrets and validation
 

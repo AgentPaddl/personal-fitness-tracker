@@ -6,8 +6,9 @@ These instructions apply to everything under `backend/`.
 
 - Azure Functions application targeting Python 3.13, organized as blueprints registered from `function_app.py`.
 - `GET /api/health` still returns `{"status": "ok"}` and must keep doing so.
-- `POST /api/food-analysis` forwards a food description to the Personal AI Gateway through `gateway_client.py` and returns the gateway's structured estimate. It works locally against the gateway's `FakeProvider` path; it does not call any AI provider directly.
-- The current function app uses anonymous HTTP authorization. Do not treat that as sufficient for future fitness, nutrition, or AI endpoints. The food-analysis route is a development-time exception explicitly marked as such; add real authentication before any non-local exposure.
+- `POST /api/food-analysis` forwards a food description to the Personal AI Gateway through `gateway_client.py`, validates against the backend-owned schemas in `schemas.py`, and returns only the mapped public estimate (never the gateway's raw JSON). It works locally against the gateway's `FakeProvider` path; it does not call any AI provider directly.
+- The route fails closed by default: it only serves requests when `APP_ENV=development` is explicitly set (see `config.py`), returning 403 otherwise. This is a temporary development-only allowance until real authentication is implemented, and is layered on top of the gateway's own independent fail-closed auth.
+- `function_app.py` calls `config.validate_config()` at import time so an invalid gateway URL or out-of-bounds timeout fails at startup rather than at first request.
 
 ## Change rules
 

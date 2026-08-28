@@ -11,10 +11,16 @@ cd ai-gateway
 python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-uvicorn app.main:app --reload --port 8000
+APP_ENV=development GATEWAY_DEV_AUTH_BYPASS=true AI_PROVIDER=fake \
+  uvicorn app.main:app --reload --port 8000
 ```
 
-The gateway defaults to `AI_PROVIDER=fake`, so it runs fully locally without any credentials.
+The gateway fails closed by default: it will not start (or will reject all
+`/v1/*` requests) unless `APP_ENV=development` and `GATEWAY_DEV_AUTH_BYPASS`
+are both set explicitly, as shown above. `GET /healthz` remains anonymous
+and available regardless of configuration. See `.env.example` for all
+settings, including the server-side `FOOD_TEXT_MODEL_PURPOSE` model-routing
+key (never exposed through the public API).
 
 ## Tests
 

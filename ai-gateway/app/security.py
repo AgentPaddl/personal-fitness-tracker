@@ -10,22 +10,20 @@ from __future__ import annotations
 from fastapi import Request
 
 from app.config import get_settings
+from app.errors import AuthenticationRequiredError
 
 
 async def require_authenticated_caller(request: Request) -> None:
     """FastAPI dependency guarding non-public gateway routes.
 
-    DEVELOPMENT-ONLY BEHAVIOR: when ``GATEWAY_DEV_AUTH_BYPASS`` is true (the
-    default), every caller is treated as authenticated. This must be
-    disabled and replaced with real authentication before the gateway is
-    reachable outside a trusted local environment.
+    DEVELOPMENT-ONLY BEHAVIOR: every caller is treated as authenticated only
+    when both ``APP_ENV=development`` and ``GATEWAY_DEV_AUTH_BYPASS=true``
+    are explicitly set. Any other configuration fails closed with a 401,
+    including the default configuration, until real authentication is
+    implemented.
     """
 
     settings = get_settings()
-    if settings.gateway_dev_auth_bypass:
+    if settings.app_env == "development" and settings.gateway_dev_auth_bypass:
         return
-    # No production authentication mechanism exists yet; fail closed.
-    raise NotImplementedError(
-        "Production authentication is not implemented. "
-        "Set GATEWAY_DEV_AUTH_BYPASS=true for local development only."
-    )
+    raise AuthenticationRequiredError()

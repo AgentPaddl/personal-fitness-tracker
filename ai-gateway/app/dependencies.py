@@ -27,4 +27,5 @@ def get_food_analysis_use_case() -> FoodAnalysisUseCase:
     return FoodAnalysisUseCase(
         provider=get_provider(),
         timeout_seconds=settings.ai_provider_timeout_seconds,
+        model_purpose=settings.food_text_model_purpose,
     )

@@ -1,7 +1,9 @@
 -r requirements.txt
 pytest>=8,<9
 
-# Only required to run tests/test_end_to_end.py, which imports the gateway's
-# FastAPI app in-process (via httpx ASGI transport) to exercise the real
-# backend -> gateway -> FakeProvider path without any network server.
+# Only required to run tests/test_gateway_integration.py and
+# tests/test_gateway_smoke.py, which run the gateway's FastAPI app
+# in-process / as a subprocess to exercise the real
+# backend -> gateway -> FakeProvider path without any external network.
 -r ../ai-gateway/requirements.txt
+uvicorn==0.52.4
