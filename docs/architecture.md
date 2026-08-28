@@ -138,10 +138,12 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 - Unit tests mock the SDK client boundary and require no credentials; an opt-in integration/smoke test (`RUN_COPILOT_INTEGRATION_TESTS=1`) exercises the real CLI and is never run in normal CI/local test runs. `trsdn/github_copilot_openai_api_wrapper` is not part of this plan.
 - Remaining for production: Azure Container Apps packaging, a chosen production auth mechanism (server-to-server token vs. another documented option), secret storage, and network isolation for the CLI process.
 
-### Phase 4 — food analysis workflow
+### Phase 4 — food analysis workflow (text analysis implemented)
 
-- Implement text analysis first, then image analysis, using structured nutrition-estimate schemas.
-- Add user review/confirmation before appropriate persistence.
+- Implemented the iOS text food-analysis flow: `NutritionView` lets the user type a natural-language description, calls the backend's `POST /api/food-analysis` via a local Swift package (`ios/FoodAnalysisKit`), and presents an editable review sheet (`FoodAnalysisReviewView`) before any persistence.
+- The app only ever talks to our own backend's public JSON contract; it has no knowledge of the Personal AI Gateway, GitHub Copilot, model ids, or provider routing.
+- `FoodEntry` (existing SwiftData model) is created only after explicit user confirmation of the reviewed values; cancelling/dismissing the review never persists anything. No SwiftData schema change was made.
+- Image analysis is not implemented yet; this phase is text-only.
 - Verify privacy controls, failure handling, and observability without sensitive-payload logging.
 
 ### Phase 5 — expansion and provider portability
