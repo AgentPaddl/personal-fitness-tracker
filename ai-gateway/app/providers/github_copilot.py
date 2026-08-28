@@ -127,7 +127,13 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
                 model=model,
                 on_permission_request=PermissionHandler.approve_all,
                 tools=[submit_tool],
-                available_tools=[],
+                # Whitelist only our terminal tool. Passing an empty list here
+                # (instead of omitting the argument) hides *all* tools,
+                # including custom ones - not just built-ins - which leaves
+                # the model with nothing to call and it falls back to a
+                # prose reply. Naming our own tool keeps built-in shell/file
+                # tools disabled while still exposing the one tool we need.
+                available_tools=[_SUBMIT_TOOL_NAME],
                 system_message={"mode": "append", "content": system_content + _SYSTEM_INSTRUCTIONS_SUFFIX}
                 if system_content
                 else {"mode": "append", "content": _SYSTEM_INSTRUCTIONS_SUFFIX},

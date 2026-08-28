@@ -129,6 +129,10 @@ def test_real_local_smoke_backend_to_gateway_to_copilot():
         "GATEWAY_DEV_AUTH_BYPASS": "true",
         "AI_PROVIDER": "copilot",
         "COPILOT_MODEL_ROUTES_JSON": routes_json,
+        # Real Copilot calls take tens of seconds (unlike FakeProvider);
+        # the gateway's default AI_PROVIDER_TIMEOUT_SECONDS=10 is far too
+        # short here and would surface as a false-positive timeout.
+        "AI_PROVIDER_TIMEOUT_SECONDS": "90",
     }
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
@@ -141,7 +145,7 @@ def test_real_local_smoke_backend_to_gateway_to_copilot():
     base_url = f"http://127.0.0.1:{port}"
     try:
         _wait_until_ready(base_url, timeout_seconds=30.0)
-        client = GatewayClient(base_url=base_url, timeout=60.0)
+        client = GatewayClient(base_url=base_url, timeout=100.0)
         try:
             result = client.analyze_food_text("Ein Apfel und eine Scheibe Vollkornbrot mit Butter")
         finally:

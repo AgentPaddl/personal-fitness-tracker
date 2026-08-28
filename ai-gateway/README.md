@@ -59,8 +59,12 @@ JSON object mapping every configured model-routing purpose (e.g.
 id. There is no default mapping and no silent fallback to another model:
 
 ```bash
-export COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5"}'
+export COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini"}'
 ```
+
+Available model ids change over time and depend on your Copilot plan; call
+`client.list_models()` (or check `GET /readyz`) rather than assuming a
+specific id is available.
 
 `GET /readyz` validates that the configured model id is actually returned
 by the CLI's `list_models()` and that the CLI reports an authenticated
@@ -68,11 +72,17 @@ session, without performing a billed generation call.
 
 ### Running the gateway against the real provider
 
+Real Copilot calls typically take tens of seconds — much longer than
+`FakeProvider`. Set `AI_PROVIDER_TIMEOUT_SECONDS` accordingly (the default,
+10s, is tuned for the fake provider and will cause spurious
+`provider_timeout` errors against a real model):
+
 ```bash
 cd ai-gateway
 source .venv/bin/activate
 APP_ENV=development GATEWAY_DEV_AUTH_BYPASS=true AI_PROVIDER=copilot \
-  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5"}' \
+  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini"}' \
+  AI_PROVIDER_TIMEOUT_SECONDS=90 \
   uvicorn app.main:app --port 8000
 ```
 
@@ -104,7 +114,7 @@ one-time login above):
 
 ```bash
 RUN_COPILOT_INTEGRATION_TESTS=1 \
-  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5"}' \
+  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini"}' \
   pytest tests/test_copilot_integration.py -v
 ```
 
