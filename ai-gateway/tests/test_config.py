@@ -100,3 +100,56 @@ def test_copilot_model_routes_never_silently_defaults():
     settings = Settings(ai_provider="copilot", copilot_model_routes_json="")
     with pytest.raises(ValueError):
         settings.copilot_model_routes()
+
+
+def test_copilot_model_routes_rejects_blank_routing_key():
+    settings = Settings(
+        ai_provider="copilot", copilot_model_routes_json='{"": "gpt-5"}'
+    )
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        settings.copilot_model_routes()
+
+
+def test_copilot_model_routes_rejects_whitespace_only_routing_key():
+    settings = Settings(
+        ai_provider="copilot", copilot_model_routes_json='{"   ": "gpt-5"}'
+    )
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        settings.copilot_model_routes()
+
+
+def test_copilot_model_routes_rejects_blank_model_id():
+    settings = Settings(
+        ai_provider="copilot", copilot_model_routes_json='{"food_text_v1": ""}'
+    )
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        settings.copilot_model_routes()
+
+
+def test_copilot_model_routes_rejects_whitespace_only_model_id():
+    settings = Settings(
+        ai_provider="copilot", copilot_model_routes_json='{"food_text_v1": "   "}'
+    )
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        settings.copilot_model_routes()
+
+
+def test_copilot_model_routes_rejects_blank_values_at_settings_validate_time():
+    # The blank-model-id case must also fail closed during full Settings
+    # validation, not only when copilot_model_routes() happens to be called.
+    settings = Settings(
+        app_env="development",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "   "}',
+    )
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        settings.validate()
+
+
+def test_copilot_model_routes_strips_valid_surrounding_whitespace():
+    # Existing valid routing behavior is preserved: surrounding whitespace
+    # around otherwise-valid keys/values is trimmed, not rejected.
+    settings = Settings(
+        ai_provider="copilot", copilot_model_routes_json='{"  food_text_v1  ": "  gpt-5  "}'
+    )
+    assert settings.copilot_model_routes() == {"food_text_v1": "gpt-5"}

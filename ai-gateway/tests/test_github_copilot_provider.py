@@ -51,11 +51,18 @@ def _request(model_purpose: str = "food_text_v1", timeout_seconds: float = 5.0) 
 
 
 class _FakeSession:
-    def __init__(self, tools: list[Any], on_send: Callable[["_FakeSession", float], Any]):
+    def __init__(
+        self,
+        tools: list[Any],
+        on_send: Callable[["_FakeSession", float], Any],
+        disconnect_exc: Exception | None = None,
+    ):
         self.tools = tools
         self._on_send = on_send
+        self._disconnect_exc = disconnect_exc
         self._handler: Callable[[Any], None] | None = None
         self.disconnected = False
+        self.disconnect_attempted = False
 
     def on(self, handler: Callable[[Any], None]) -> Callable[[], None]:
         self._handler = handler
@@ -70,6 +77,9 @@ class _FakeSession:
         await self._on_send(self, timeout)
 
     async def disconnect(self) -> None:
+        self.disconnect_attempted = True
+        if self._disconnect_exc is not None:
+            raise self._disconnect_exc
         self.disconnected = True
 
 
@@ -82,10 +92,12 @@ class _FakeClient:
         *,
         is_authenticated: bool = True,
         model_ids: tuple[str, ...] = ("gpt-5",),
+        disconnect_exc: Exception | None = None,
     ):
         self._on_send = on_send
         self._is_authenticated = is_authenticated
         self._model_ids = model_ids
+        self._disconnect_exc = disconnect_exc
         self.started = False
         self.stopped = False
         self.last_create_session_kwargs: dict[str, Any] | None = None
@@ -99,7 +111,7 @@ class _FakeClient:
 
     async def create_session(self, **kwargs: Any) -> _FakeSession:
         self.last_create_session_kwargs = kwargs
-        session = _FakeSession(kwargs["tools"], self._on_send)
+        session = _FakeSession(kwargs["tools"], self._on_send, disconnect_exc=self._disconnect_exc)
         self.last_session = session
         return session
 
@@ -295,6 +307,38 @@ def test_session_is_disconnected_even_on_failure(monkeypatch):
         asyncio.run(_provider().generate(_request()))
 
     assert client.last_session.disconnected is True
+
+
+def test_disconnect_failure_after_success_still_returns_the_result(monkeypatch):
+    async def on_send(session, timeout):
+        await _call_submit_tool(session, {"food_name": "apple", "calories": 95})
+
+    client = _FakeClient(on_send, disconnect_exc=RuntimeError("disconnect boom"))
+    _install_fake_client(monkeypatch, client)
+
+    # The cleanup failure must not mask the successful result.
+    result = asyncio.run(_provider().generate(_request()))
+
+    assert result.data == {"food_name": "apple", "calories": 95}
+    assert client.last_session.disconnect_attempted is True
+    assert client.last_session.disconnected is False
+
+
+def test_disconnect_failure_does_not_mask_an_already_raised_provider_error(monkeypatch):
+    async def on_send(session, timeout):
+        raise RuntimeError("original failure")
+
+    client = _FakeClient(on_send, disconnect_exc=RuntimeError("disconnect boom too"))
+    _install_fake_client(monkeypatch, client)
+
+    # The original, normalized error must surface, not the disconnect
+    # failure and not a raw SDK exception.
+    with pytest.raises(ProviderUnavailableError) as excinfo:
+        asyncio.run(_provider().generate(_request()))
+
+    assert "disconnect boom too" not in str(excinfo.value)
+    assert "original failure" not in str(excinfo.value)
+    assert client.last_session.disconnect_attempted is True
 
 
 def test_client_is_reused_across_generate_calls(monkeypatch):

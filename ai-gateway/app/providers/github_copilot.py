@@ -21,6 +21,7 @@ solely responsible for authoritative Pydantic validation.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from copilot import CopilotClient
@@ -53,6 +54,8 @@ _SYSTEM_INSTRUCTIONS_SUFFIX = (
     f"'{_SUBMIT_TOOL_NAME}' tool exactly once with the complete result. "
     "Do not write any other reply."
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubCopilotProvider(StructuredGenerationProvider):
@@ -160,7 +163,13 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
 
             return StructuredGenerationResult(data=result_holder["data"])
         finally:
-            await session.disconnect()
+            # A cleanup failure here must never mask the result/error above:
+            # it is caught and logged, not raised, regardless of whether the
+            # try block above succeeded or already raised.
+            try:
+                await session.disconnect()
+            except Exception:
+                logger.warning("Failed to disconnect Copilot session cleanly.", exc_info=True)
 
     async def check_ready(self) -> bool:
         # Metadata-only calls (auth status, model list); never a billed

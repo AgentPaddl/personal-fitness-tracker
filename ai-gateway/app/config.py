@@ -100,7 +100,10 @@ class Settings(BaseSettings):
         """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.
 
         Raises ValueError on any malformed configuration; never falls back
-        to a default/guessed model.
+        to a default/guessed model. Routing keys and model ids are
+        stripped and rejected if empty/whitespace-only, so a blank value
+        can never reach the SDK and let the Copilot CLI silently pick its
+        own default model.
         """
 
         raw = self.copilot_model_routes_json.strip()
@@ -116,7 +119,18 @@ class Settings(BaseSettings):
             isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()
         ):
             raise ValueError("COPILOT_MODEL_ROUTES_JSON must be a JSON object of string to string.")
-        return parsed
+
+        routes: dict[str, str] = {}
+        for key, value in parsed.items():
+            stripped_key = key.strip()
+            stripped_value = value.strip()
+            if not stripped_key or not stripped_value:
+                raise ValueError(
+                    "COPILOT_MODEL_ROUTES_JSON routing keys and model ids must not "
+                    "be empty or whitespace-only."
+                )
+            routes[stripped_key] = stripped_value
+        return routes
 
 
 @lru_cache
