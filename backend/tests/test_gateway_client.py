@@ -16,9 +16,75 @@ def test_analyze_food_text_returns_gateway_json():
     assert result == {"estimate": {"food_name": "apple"}}
 
 
-def test_analyze_food_text_maps_gateway_5xx_to_upstream_error():
+def test_analyze_food_text_preserves_provider_timeout_as_504(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(502, json={"error": {"code": "provider_unavailable"}})
+        return httpx.Response(
+            504, json={"error": {"code": "provider_timeout", "message": "upstream detail"}}
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.code == "gateway_timeout"
+    assert excinfo.value.http_status == 504
+    assert "upstream detail" not in excinfo.value.message
+
+
+def test_analyze_food_text_preserves_provider_rate_limited_as_429():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429, json={"error": {"code": "provider_rate_limited", "message": "upstream detail"}}
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.code == "gateway_rate_limited"
+    assert excinfo.value.http_status == 429
+    assert "upstream detail" not in excinfo.value.message
+
+
+def test_analyze_food_text_preserves_provider_unavailable_as_503():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502, json={"error": {"code": "provider_unavailable", "message": "upstream detail"}}
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.code == "gateway_service_unavailable"
+    assert excinfo.value.http_status == 503
+    assert "upstream detail" not in excinfo.value.message
+
+
+def test_analyze_food_text_normalizes_unknown_upstream_code_to_502():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502, json={"error": {"code": "provider_output_invalid", "message": "upstream detail"}}
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.code == "gateway_upstream_error"
+    assert excinfo.value.http_status == 502
+    assert "upstream detail" not in excinfo.value.message
+
+
+def test_analyze_food_text_normalizes_untrusted_client_error_to_502():
+    # request_invalid is a real gateway code, but it is not one of the
+    # whitelisted status-preserving codes, so it must not leak through.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"error": {"code": "request_invalid"}})
 
     client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
 
@@ -29,16 +95,16 @@ def test_analyze_food_text_maps_gateway_5xx_to_upstream_error():
     assert excinfo.value.http_status == 502
 
 
-def test_analyze_food_text_maps_gateway_4xx_to_rejected_request():
+def test_analyze_food_text_normalizes_malformed_error_body_to_502():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(422, json={"error": {"code": "request_invalid"}})
+        return httpx.Response(500, content=b"not json", headers={"content-type": "text/plain"})
 
     client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
 
     with pytest.raises(GatewayClientError) as excinfo:
         client.analyze_food_text("an apple")
 
-    assert excinfo.value.code == "gateway_rejected_request"
+    assert excinfo.value.code == "gateway_upstream_error"
     assert excinfo.value.http_status == 502
 
 
@@ -79,7 +145,11 @@ def test_analyze_food_text_raises_on_transport_error():
     assert excinfo.value.http_status == 503
 
 
-def test_analyze_food_text_distinguishes_timeout_from_connectivity_failure():
+def test_analyze_food_text_maps_transport_timeout_to_gateway_timeout():
+    # Simulates httpx raising a timeout exception client-side (e.g. the
+    # gateway never responded). This is a mocked exception, not a real
+    # elapsed-time measurement; real timeout behavior against a live
+    # process is covered by ai-gateway/tests/test_smoke_process.py.
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)
 
@@ -90,19 +160,3 @@ def test_analyze_food_text_distinguishes_timeout_from_connectivity_failure():
 
     assert excinfo.value.code == "gateway_timeout"
     assert excinfo.value.http_status == 504
-
-
-def test_analyze_food_text_enforces_real_client_timeout():
-    # A genuinely slow transport must surface as our normalized timeout
-    # error, not hang or raise a raw httpx exception.
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("simulated slow upstream", request=request)
-
-    client = GatewayClient(
-        base_url="http://gateway.test", timeout=0.05, transport=httpx.MockTransport(handler)
-    )
-
-    with pytest.raises(GatewayClientError) as excinfo:
-        client.analyze_food_text("an apple")
-
-    assert excinfo.value.code == "gateway_timeout"

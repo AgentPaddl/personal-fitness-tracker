@@ -16,6 +16,11 @@ import httpx
 import pytest
 
 _GATEWAY_ROOT = Path(__file__).resolve().parents[1]
+_BACKEND_ROOT = _GATEWAY_ROOT.parent / "backend"
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
+from gateway_client import GatewayClient  # noqa: E402  (path set up above)
 
 
 def _free_port() -> int:
@@ -86,3 +91,19 @@ def test_gateway_process_serves_food_analysis_over_real_http(running_gateway_pro
     body = analysis_response.json()
     assert "grilled salmon" in body["estimate"]["food_name"]
     assert "fake" not in str(body).lower()
+
+
+def test_gateway_process_serves_food_analysis_through_real_backend_client(running_gateway_process):
+    # Exercises the actual production code path: backend GatewayClient ->
+    # real TCP socket -> the independent gateway process started above.
+    base_url = running_gateway_process
+    client = GatewayClient(base_url=base_url, timeout=5.0)
+
+    try:
+        result = client.analyze_food_text("grilled salmon")
+    finally:
+        client.close()
+
+    estimate = result["estimate"]
+    assert "grilled salmon" in estimate["food_name"]
+    assert "fake" not in str(result).lower()

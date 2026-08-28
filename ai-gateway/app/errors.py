@@ -66,6 +66,21 @@ class ProviderUnavailableError(GatewayError):
         super().__init__("The AI provider is currently unavailable.")
 
 
+class ServiceNotReadyError(GatewayError):
+    """Raised by /readyz when the configured provider is not ready.
+
+    Distinct from ProviderUnavailableError (502, raised for a request-time
+    provider failure): this is a readiness-specific 503 so callers can
+    distinguish "not ready to serve" from "a request failed".
+    """
+
+    code = "service_not_ready"
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__("The gateway is not ready to serve requests.")
+
+
 class ProviderOutputInvalidError(GatewayError):
     code = "provider_output_invalid"
     http_status = 502

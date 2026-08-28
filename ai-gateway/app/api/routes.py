@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.dependencies import get_food_analysis_use_case, get_provider
-from app.errors import ProviderUnavailableError
+from app.errors import ServiceNotReadyError
 from app.providers.base import StructuredGenerationProvider
 from app.schemas.food_analysis import FoodAnalysisRequest, FoodAnalysisResponse
 from app.security import require_authenticated_caller
@@ -27,14 +27,15 @@ async def healthz() -> dict[str, str]:
 async def readyz(provider: StructuredGenerationProvider = Depends(get_provider)) -> dict[str, str]:
     # Uses the provider's own cheap readiness check (never a billed
     # generation call); a real adapter can later report meaningful
-    # connectivity/auth health here.
+    # connectivity/auth health here. Failure is a readiness-specific 503,
+    # not the request-time 502 used for a failed generation call.
     try:
         ready = await provider.check_ready()
     except Exception:
         ready = False
 
     if not ready:
-        raise ProviderUnavailableError()
+        raise ServiceNotReadyError()
 
     return {"status": "ready"}
 

@@ -162,3 +162,42 @@ def test_food_analysis_normalizes_gateway_timeout(monkeypatch):
 
     assert response.status_code == 504
     assert json.loads(response.get_body())["error"]["code"] == "gateway_timeout"
+
+
+def test_food_analysis_preserves_gateway_rate_limited_as_429(monkeypatch):
+    def fake_analyze(self, food_description):
+        raise GatewayClientError("gateway_rate_limited", 429)
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_text", fake_analyze)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request({"food_description": "an apple"}))
+
+    assert response.status_code == 429
+    assert json.loads(response.get_body())["error"]["code"] == "gateway_rate_limited"
+
+
+def test_food_analysis_preserves_gateway_service_unavailable_as_503(monkeypatch):
+    def fake_analyze(self, food_description):
+        raise GatewayClientError("gateway_service_unavailable", 503)
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_text", fake_analyze)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request({"food_description": "an apple"}))
+
+    assert response.status_code == 503
+    assert json.loads(response.get_body())["error"]["code"] == "gateway_service_unavailable"
+
+
+def test_food_analysis_normalizes_unknown_gateway_error_to_502(monkeypatch):
+    def fake_analyze(self, food_description):
+        raise GatewayClientError("gateway_upstream_error", 502)
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_text", fake_analyze)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request({"food_description": "an apple"}))
+
+    assert response.status_code == 502
+    assert json.loads(response.get_body())["error"]["code"] == "gateway_upstream_error"
