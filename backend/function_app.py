@@ -1,14 +1,8 @@
 import azure.functions as func
-import json
+
+from api.food_analysis import bp as food_analysis_bp
+from api.health import bp as health_bp
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
-
-@app.route(route="health", methods=["GET"])
-def health(req: func.HttpRequest) -> func.HttpResponse:
-    return func.HttpResponse(
-        json.dumps({
-            "status": "ok"
-        }),
-        status_code=200,
-        mimetype="application/json"
-    )
+app.register_functions(health_bp)
+app.register_functions(food_analysis_bp)
