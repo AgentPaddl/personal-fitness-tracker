@@ -24,7 +24,7 @@ struct NutritionView: View {
     @State private var notes = ""
     @State private var selectedEntryToEdit: FoodEntry?
     @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel(
-        tokenProvider: EntraAuthService.configuredProviderOrNil()
+        tokenProvider: EntraAuthServiceFactory.configuredProviderOrNil()
     )
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var isLoadingPickedPhoto = false
