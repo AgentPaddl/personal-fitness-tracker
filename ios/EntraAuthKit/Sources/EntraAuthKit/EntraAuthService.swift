@@ -20,31 +20,75 @@ import Foundation
 public final class EntraAuthService: AccessTokenProviding {
     private let configuration: EntraConfiguration
     private let acquirer: EntraTokenAcquiring
+    private let accountStore: EntraAccountStoring
 
-    public init(configuration: EntraConfiguration, acquirer: EntraTokenAcquiring) {
+    public init(
+        configuration: EntraConfiguration,
+        acquirer: EntraTokenAcquiring,
+        accountStore: EntraAccountStoring = UserDefaultsEntraAccountStore()
+    ) {
         self.configuration = configuration
         self.acquirer = acquirer
+        self.accountStore = accountStore
     }
 
-    /// Silent-first: if MSAL's own cache has a usable account, try a
-    /// silent token first. Only if that reports interaction is required
-    /// (expired refresh token, revoked consent, first use, etc.) does this
-    /// fall back to the interactive Microsoft sign-in UI. A user
-    /// cancelling that interactive sign-in surfaces as
+    /// Account-selection policy (single-user app, never picks an account
+    /// arbitrarily):
+    /// 1. A previously-selected account identifier (`accountStore`) is
+    ///    tried first, resolved deterministically via
+    ///    `acquirer.accountExists(identifier:)`. If it no longer resolves
+    ///    (e.g. removed via Settings), it is cleared and resolution falls
+    ///    through to step 2 rather than either failing outright or
+    ///    blindly going interactive.
+    /// 2. With no selected identifier, `acquirer.resolveCachedAccounts()`
+    ///    decides: zero cached accounts goes straight to interactive;
+    ///    exactly one is selected and remembered; more than one throws
+    ///    `EntraTokenError.multipleAccountsRequireSelection` rather than
+    ///    choosing arbitrarily.
+    /// Any account/cache *lookup* failure (`accountLookupFailed`) from
+    /// either step propagates immediately - it is never treated as "no
+    /// account" and never triggers an interactive login. Only
+    /// `EntraTokenError.interactionRequired` from a silent acquisition
+    /// attempt falls back to interactive. A user cancelling that
+    /// interactive sign-in surfaces as
     /// `FoodAnalysisError.authenticationRequired` to the caller (via
     /// `FoodAnalysisService.applyAuthorization`), never a crash or a
     /// silently-unauthenticated request.
     public func acquireAccessToken() async throws -> String {
-        if let accountIdentifier = try? await acquirer.currentAccountIdentifier() {
-            do {
-                return try await acquirer.acquireTokenSilently(
-                    accountIdentifier: accountIdentifier, scope: configuration.apiScope
-                )
-            } catch EntraTokenError.interactionRequired {
-                // Fall through to interactive below.
+        if let selectedIdentifier = accountStore.loadSelectedAccountIdentifier() {
+            if try await acquirer.accountExists(identifier: selectedIdentifier) {
+                do {
+                    return try await acquirer.acquireTokenSilently(
+                        accountIdentifier: selectedIdentifier, scope: configuration.apiScope
+                    )
+                } catch EntraTokenError.interactionRequired {
+                    return try await acquireInteractively()
+                }
             }
+            // Selected identifier no longer resolves - re-resolve from
+            // the current cache below instead of failing or guessing.
+            accountStore.clearSelectedAccountIdentifier()
         }
-        return try await acquirer.acquireTokenInteractively(scope: configuration.apiScope)
+
+        switch try await acquirer.resolveCachedAccounts() {
+        case .none:
+            return try await acquireInteractively()
+        case .single(let identifier):
+            accountStore.saveSelectedAccountIdentifier(identifier)
+            do {
+                return try await acquirer.acquireTokenSilently(accountIdentifier: identifier, scope: configuration.apiScope)
+            } catch EntraTokenError.interactionRequired {
+                return try await acquireInteractively()
+            }
+        case .multiple:
+            throw EntraTokenError.multipleAccountsRequireSelection
+        }
+    }
+
+    private func acquireInteractively() async throws -> String {
+        let result = try await acquirer.acquireTokenInteractively(scope: configuration.apiScope)
+        accountStore.saveSelectedAccountIdentifier(result.accountIdentifier)
+        return result.accessToken
     }
 }
 

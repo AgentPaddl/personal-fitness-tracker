@@ -31,22 +31,55 @@ public final class MSALEntraTokenAcquirer: EntraTokenAcquiring {
         }
     }
 
-    public func currentAccountIdentifier() async throws -> String? {
-        // Single-user app: MSAL's own keychain-backed cache is the only
-        // place an account identifier ever lives - this app never stores
-        // one itself. If sign-in was ever completed on this device, MSAL
-        // returns exactly one cached account here.
+    public func resolveCachedAccounts() async throws -> EntraAccountResolution {
+        // Genuine cache/keychain read failures must never be reported as
+        // "no accounts" - that would incorrectly trigger an interactive
+        // login instead of surfacing the real underlying problem.
+        let accounts: [MSALAccount]
         do {
-            let accounts = try application.allAccounts()
-            return accounts.first?.identifier
+            accounts = try application.allAccounts()
         } catch {
-            return nil
+            throw EntraTokenError.accountLookupFailed
+        }
+        // `MSALAccount.identifier` is optional in MSAL's API; an account
+        // without one cannot be remembered/resolved by this app and is
+        // dropped rather than force-unwrapped.
+        let identifiers = accounts.compactMap(\.identifier)
+        switch identifiers.count {
+        case 0:
+            return .none
+        case 1:
+            return .single(identifiers[0])
+        default:
+            return .multiple(identifiers)
         }
     }
 
+    public func accountExists(identifier: String) async throws -> Bool {
+        // Implemented via `allAccounts()` rather than `accountForIdentifier`,
+        // since the latter throws indistinguishably for both "not found"
+        // and genuine lookup failures in this MSAL version - `allAccounts()`
+        // lets a real cache error (throws) be told apart from a clean
+        // "not present" answer (a normal, non-throwing `false`).
+        let accounts: [MSALAccount]
+        do {
+            accounts = try application.allAccounts()
+        } catch {
+            throw EntraTokenError.accountLookupFailed
+        }
+        return accounts.contains { $0.identifier == identifier }
+    }
+
     public func acquireTokenSilently(accountIdentifier: String, scope: String) async throws -> String {
-        guard let account = try? application.account(forIdentifier: accountIdentifier) else {
-            throw EntraTokenError.interactionRequired
+        let account: MSALAccount
+        do {
+            account = try application.account(forIdentifier: accountIdentifier)
+        } catch {
+            // Callers only reach this point after already confirming via
+            // `accountExists`/`resolveCachedAccounts` that this identifier
+            // is genuinely present, so a throw here is a real lookup
+            // failure - never silently treated as "needs interaction".
+            throw EntraTokenError.accountLookupFailed
         }
         let parameters = MSALSilentTokenParameters(scopes: [scope], account: account)
         return try await withCheckedThrowingContinuation { continuation in
@@ -61,7 +94,7 @@ public final class MSALEntraTokenAcquirer: EntraTokenAcquiring {
     }
 
     @MainActor
-    public func acquireTokenInteractively(scope: String) async throws -> String {
+    public func acquireTokenInteractively(scope: String) async throws -> EntraInteractiveResult {
         guard let presentationAnchor = Self.currentPresentationAnchor() else {
             // Cannot present the Microsoft sign-in UI at all right now
             // (e.g. no active foreground scene) - fail closed rather than
@@ -72,11 +105,20 @@ public final class MSALEntraTokenAcquirer: EntraTokenAcquiring {
         let parameters = MSALInteractiveTokenParameters(scopes: [scope], webviewParameters: webviewParameters)
         return try await withCheckedThrowingContinuation { continuation in
             application.acquireToken(with: parameters) { result, error in
-                if let result {
-                    continuation.resume(returning: result.accessToken)
-                } else {
+                guard let result else {
                     continuation.resume(throwing: Self.mapError(error))
+                    return
                 }
+                guard let accountIdentifier = result.account.identifier else {
+                    // Unexpected MSAL state (successful sign-in but no
+                    // usable account identifier to remember) - never
+                    // silently proceed without one to store.
+                    continuation.resume(throwing: EntraTokenError.unknown)
+                    return
+                }
+                continuation.resume(
+                    returning: EntraInteractiveResult(accessToken: result.accessToken, accountIdentifier: accountIdentifier)
+                )
             }
         }
     }

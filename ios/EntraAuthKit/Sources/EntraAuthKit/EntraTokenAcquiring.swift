@@ -17,31 +17,110 @@ public enum EntraTokenError: Error, Equatable, Sendable {
     /// Configuration (tenant/client id/scope/redirect URI) is missing or
     /// MSAL rejected it (e.g. malformed redirect URI).
     case configurationInvalid
+    /// MSAL's own account cache/keychain query itself failed (e.g. a
+    /// Keychain read error) - distinct from a genuinely empty cache. Must
+    /// never be silently collapsed into "no account exists", since that
+    /// would incorrectly trigger an interactive login on every transient
+    /// cache failure.
+    case accountLookupFailed
+    /// MSAL's cache has more than one signed-in account and none has been
+    /// selected yet (see `EntraAuthService`'s account-selection policy).
+    /// This app never picks one arbitrarily.
+    case multipleAccountsRequireSelection
     /// Any other MSAL failure, deliberately not detailed further here -
     /// raw MSAL error text/codes must never reach the UI layer.
     case unknown
 }
 
+/// The result of MSAL's cached-account enumeration, before any silent/
+/// interactive token acquisition is attempted. Zero and exactly-one
+/// accounts have an unambiguous next step; more than one requires an
+/// explicit selection this app does not yet make automatically (see
+/// `EntraAuthService.acquireAccessToken()`).
+public enum EntraAccountResolution: Equatable, Sendable {
+    case none
+    case single(String)
+    case multiple([String])
+}
+
+/// Result of a completed interactive sign-in: both the access token and
+/// the account identifier MSAL just created/reused, so the caller can
+/// remember which account to use next time (see `EntraAccountStoring`).
+public struct EntraInteractiveResult: Equatable, Sendable {
+    public let accessToken: String
+    public let accountIdentifier: String
+
+    public init(accessToken: String, accountIdentifier: String) {
+        self.accessToken = accessToken
+        self.accountIdentifier = accountIdentifier
+    }
+}
+
 /// The smallest seam around MSAL needed by `EntraAuthService`, so its
-/// silent-then-interactive orchestration logic can be unit-tested with a
-/// fake instead of exercising real MSAL/network/UI code. The only type
-/// that imports `MSAL` and conforms to this is
+/// account-selection and silent-then-interactive orchestration logic can
+/// be unit-tested with a fake instead of exercising real MSAL/network/UI
+/// code. The only type that imports `MSAL` and conforms to this is
 /// `ios/Trainingsplan/Entra/MSALEntraTokenAcquirer.swift` in the app
 /// target (this package has no MSAL dependency at all).
 public protocol EntraTokenAcquiring: Sendable {
-    /// Identifier of a previously signed-in account usable for silent
-    /// acquisition, if MSAL's own token cache already has one. This app is
-    /// single-user, so "the first cached account" is the only account it
-    /// ever expects; never persisted by this app itself (see
-    /// `EntraAuthService`'s "no manual access-token persistence").
-    func currentAccountIdentifier() async throws -> String?
+    /// Enumerates MSAL's cached accounts. Must throw
+    /// `EntraTokenError.accountLookupFailed` (never return `.none`) if the
+    /// underlying cache/keychain query itself fails - only a genuinely
+    /// empty cache is `.none`.
+    func resolveCachedAccounts() async throws -> EntraAccountResolution
+
+    /// Whether the given previously-selected account identifier still
+    /// resolves in MSAL's cache. `false` only for a genuine "not found";
+    /// throws `EntraTokenError.accountLookupFailed` for any other lookup
+    /// failure - never conflates the two.
+    func accountExists(identifier: String) async throws -> Bool
 
     /// Attempts silent (no UI) token acquisition for the given cached
     /// account and scope. Throws `EntraTokenError.interactionRequired` if
-    /// MSAL reports the cached session can't satisfy this silently.
+    /// MSAL reports the cached session can't satisfy this silently, or
+    /// `EntraTokenError.accountLookupFailed` if resolving the account
+    /// itself failed (as opposed to genuinely not existing).
     func acquireTokenSilently(accountIdentifier: String, scope: String) async throws -> String
 
     /// Presents the interactive Microsoft sign-in UI and returns the
-    /// resulting access token.
-    func acquireTokenInteractively(scope: String) async throws -> String
+    /// resulting access token together with the account identifier to
+    /// remember for subsequent silent requests.
+    func acquireTokenInteractively(scope: String) async throws -> EntraInteractiveResult
+}
+
+/// Non-secret app-state persistence for "which MSAL account this
+/// single-user app should use for silent acquisition" - an opaque MSAL
+/// account identifier (not an access token, not a refresh token, not a
+/// secret). MSAL's own keychain-backed cache remains the only place any
+/// token ever lives; this only remembers *which* cached account to ask
+/// for.
+public protocol EntraAccountStoring: Sendable {
+    func loadSelectedAccountIdentifier() -> String?
+    func saveSelectedAccountIdentifier(_ identifier: String)
+    func clearSelectedAccountIdentifier()
+}
+
+/// `UserDefaults`-backed `EntraAccountStoring` - the smallest existing iOS
+/// persistence mechanism suitable for a non-secret opaque identifier
+/// string. Never used for tokens or any other secret.
+public final class UserDefaultsEntraAccountStore: EntraAccountStoring, @unchecked Sendable {
+    private static let key = "EntraAuthKit.selectedAccountIdentifier"
+
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    public func loadSelectedAccountIdentifier() -> String? {
+        defaults.string(forKey: Self.key)
+    }
+
+    public func saveSelectedAccountIdentifier(_ identifier: String) {
+        defaults.set(identifier, forKey: Self.key)
+    }
+
+    public func clearSelectedAccountIdentifier() {
+        defaults.removeObject(forKey: Self.key)
+    }
 }

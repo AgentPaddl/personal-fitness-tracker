@@ -3,36 +3,41 @@ import XCTest
 
 @testable import EntraAuthKit
 
-/// All tests here use a fake `EntraTokenAcquiring` - no MSAL, no network,
-/// no Microsoft/Azure endpoint is ever contacted.
+/// All tests here use a fake `EntraTokenAcquiring`/`EntraAccountStoring` -
+/// no MSAL, no network, no Microsoft/Azure endpoint is ever contacted.
 final class EntraAuthServiceTests: XCTestCase {
     private let scope = "api://backend-app-id/FoodAnalysis.Access"
 
-    private func makeService(acquirer: FakeTokenAcquirer) -> EntraAuthService {
+    private func makeService(
+        acquirer: FakeTokenAcquirer, accountStore: FakeAccountStore = FakeAccountStore()
+    ) -> EntraAuthService {
         let configuration = EntraConfiguration(
             tenantId: "test-tenant-id",
             clientId: "test-client-id",
             apiScope: scope,
             redirectUri: "msauth.com.example.app://auth"
         )
-        return EntraAuthService(configuration: configuration, acquirer: acquirer)
+        return EntraAuthService(configuration: configuration, acquirer: acquirer, accountStore: accountStore)
     }
 
-    // MARK: - Silent acquisition
+    // MARK: - Exactly one cached account (deterministic silent path)
 
-    func test_acquireAccessToken_returnsSilentTokenWhenCachedAccountExists() async throws {
-        let acquirer = FakeTokenAcquirer(cachedAccountIdentifier: "cached-account", silentResult: .success("silent-token"))
-        let service = makeService(acquirer: acquirer)
+    func test_acquireAccessToken_oneAccount_usesItSilentlyAndRemembersIt() async throws {
+        let acquirer = FakeTokenAcquirer(resolveResult: .success(.single("cached-account")), silentResult: .success("silent-token"))
+        let accountStore = FakeAccountStore()
+        let service = makeService(acquirer: acquirer, accountStore: accountStore)
 
         let token = try await service.acquireAccessToken()
 
         XCTAssertEqual(token, "silent-token")
         XCTAssertEqual(acquirer.silentCallCount, 1)
         XCTAssertEqual(acquirer.interactiveCallCount, 0)
+        XCTAssertEqual(acquirer.lastSilentAccountIdentifier, "cached-account")
+        XCTAssertEqual(accountStore.selectedIdentifier, "cached-account")
     }
 
     func test_acquireAccessToken_requestsScopeFromConfiguration() async throws {
-        let acquirer = FakeTokenAcquirer(cachedAccountIdentifier: "cached-account", silentResult: .success("silent-token"))
+        let acquirer = FakeTokenAcquirer(resolveResult: .success(.single("cached-account")), silentResult: .success("silent-token"))
         let service = makeService(acquirer: acquirer)
 
         _ = try await service.acquireAccessToken()
@@ -40,13 +45,120 @@ final class EntraAuthServiceTests: XCTestCase {
         XCTAssertEqual(acquirer.lastRequestedScope, scope)
     }
 
-    // MARK: - Interactive fallback
+    // MARK: - Zero cached accounts (interactive path)
+
+    func test_acquireAccessToken_zeroAccounts_goesInteractiveDirectly() async throws {
+        let acquirer = FakeTokenAcquirer(
+            resolveResult: .success(.none),
+            interactiveResult: .success(EntraInteractiveResult(accessToken: "first-sign-in-token", accountIdentifier: "new-account"))
+        )
+        let accountStore = FakeAccountStore()
+        let service = makeService(acquirer: acquirer, accountStore: accountStore)
+
+        let token = try await service.acquireAccessToken()
+
+        XCTAssertEqual(token, "first-sign-in-token")
+        XCTAssertEqual(acquirer.silentCallCount, 0)
+        XCTAssertEqual(acquirer.interactiveCallCount, 1)
+        XCTAssertEqual(accountStore.selectedIdentifier, "new-account")
+    }
+
+    // MARK: - Multiple cached accounts without a selection (normalized error)
+
+    func test_acquireAccessToken_multipleAccountsWithoutSelection_failsWithNormalizedError() async {
+        let acquirer = FakeTokenAcquirer(resolveResult: .success(.multiple(["account-a", "account-b"])))
+        let service = makeService(acquirer: acquirer)
+
+        do {
+            _ = try await service.acquireAccessToken()
+            XCTFail("Expected multipleAccountsRequireSelection to throw")
+        } catch let error as EntraTokenError {
+            XCTAssertEqual(error, .multipleAccountsRequireSelection)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
+        }
+        XCTAssertEqual(acquirer.silentCallCount, 0)
+        XCTAssertEqual(acquirer.interactiveCallCount, 0)
+    }
+
+    // MARK: - Account/cache lookup failures propagate, never trigger interactive login
+
+    func test_acquireAccessToken_cacheLookupFailure_propagatesWithoutInteractiveLogin() async {
+        let acquirer = FakeTokenAcquirer(resolveResult: .failure(EntraTokenError.accountLookupFailed))
+        let service = makeService(acquirer: acquirer)
+
+        do {
+            _ = try await service.acquireAccessToken()
+            XCTFail("Expected accountLookupFailed to throw")
+        } catch let error as EntraTokenError {
+            XCTAssertEqual(error, .accountLookupFailed)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
+        }
+        XCTAssertEqual(acquirer.silentCallCount, 0)
+        XCTAssertEqual(acquirer.interactiveCallCount, 0)
+    }
+
+    func test_acquireAccessToken_selectedIdentifierLookupFailure_propagatesWithoutClearingOrInteractiveLogin() async {
+        let accountStore = FakeAccountStore(initialSelectedIdentifier: "stored-account")
+        let acquirer = FakeTokenAcquirer(accountExistsResults: ["stored-account": .failure(EntraTokenError.accountLookupFailed)])
+        let service = makeService(acquirer: acquirer, accountStore: accountStore)
+
+        do {
+            _ = try await service.acquireAccessToken()
+            XCTFail("Expected accountLookupFailed to throw")
+        } catch let error as EntraTokenError {
+            XCTAssertEqual(error, .accountLookupFailed)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
+        }
+        // A genuine lookup error is not "not found" - the stored selection
+        // must not be cleared, and no interactive login must be attempted.
+        XCTAssertEqual(accountStore.selectedIdentifier, "stored-account")
+        XCTAssertEqual(acquirer.interactiveCallCount, 0)
+    }
+
+    // MARK: - Selected account identifier
+
+    func test_acquireAccessToken_selectedIdentifierResolves_usesItDirectlyWithoutReResolvingCache() async throws {
+        let accountStore = FakeAccountStore(initialSelectedIdentifier: "stored-account")
+        let acquirer = FakeTokenAcquirer(
+            accountExistsResults: ["stored-account": .success(true)],
+            silentResult: .success("token-for-stored-account")
+        )
+        let service = makeService(acquirer: acquirer, accountStore: accountStore)
+
+        let token = try await service.acquireAccessToken()
+
+        XCTAssertEqual(token, "token-for-stored-account")
+        XCTAssertEqual(acquirer.lastSilentAccountIdentifier, "stored-account")
+        XCTAssertEqual(acquirer.resolveCachedAccountsCallCount, 0)
+    }
+
+    func test_acquireAccessToken_selectedIdentifierNoLongerResolving_clearsAndReResolvesSafely() async throws {
+        let accountStore = FakeAccountStore(initialSelectedIdentifier: "stale-account")
+        let acquirer = FakeTokenAcquirer(
+            resolveResult: .success(.single("fresh-account")),
+            accountExistsResults: ["stale-account": .success(false)],
+            silentResult: .success("fresh-token")
+        )
+        let service = makeService(acquirer: acquirer, accountStore: accountStore)
+
+        let token = try await service.acquireAccessToken()
+
+        XCTAssertEqual(token, "fresh-token")
+        XCTAssertEqual(acquirer.lastSilentAccountIdentifier, "fresh-account")
+        XCTAssertEqual(accountStore.selectedIdentifier, "fresh-account")
+        XCTAssertGreaterThanOrEqual(accountStore.clearCallCount, 1)
+    }
+
+    // MARK: - Interactive fallback on interactionRequired
 
     func test_acquireAccessToken_fallsBackToInteractiveWhenSilentRequiresInteraction() async throws {
         let acquirer = FakeTokenAcquirer(
-            cachedAccountIdentifier: "cached-account",
+            resolveResult: .success(.single("cached-account")),
             silentResult: .failure(EntraTokenError.interactionRequired),
-            interactiveResult: .success("interactive-token")
+            interactiveResult: .success(EntraInteractiveResult(accessToken: "interactive-token", accountIdentifier: "cached-account"))
         )
         let service = makeService(acquirer: acquirer)
 
@@ -57,35 +169,11 @@ final class EntraAuthServiceTests: XCTestCase {
         XCTAssertEqual(acquirer.interactiveCallCount, 1)
     }
 
-    func test_acquireAccessToken_goesInteractiveDirectlyWithNoCachedAccount() async throws {
-        let acquirer = FakeTokenAcquirer(cachedAccountIdentifier: nil, interactiveResult: .success("first-sign-in-token"))
-        let service = makeService(acquirer: acquirer)
-
-        let token = try await service.acquireAccessToken()
-
-        XCTAssertEqual(token, "first-sign-in-token")
-        XCTAssertEqual(acquirer.silentCallCount, 0)
-        XCTAssertEqual(acquirer.interactiveCallCount, 1)
-    }
-
-    func test_acquireAccessToken_interactiveSuccessAfterInteractionRequired() async throws {
-        let acquirer = FakeTokenAcquirer(
-            cachedAccountIdentifier: "cached-account",
-            silentResult: .failure(EntraTokenError.interactionRequired),
-            interactiveResult: .success("refreshed-token")
-        )
-        let service = makeService(acquirer: acquirer)
-
-        let token = try await service.acquireAccessToken()
-
-        XCTAssertEqual(token, "refreshed-token")
-    }
-
     // MARK: - User cancellation
 
     func test_acquireAccessToken_propagatesUserCancellation() async {
         let acquirer = FakeTokenAcquirer(
-            cachedAccountIdentifier: nil,
+            resolveResult: .success(.none),
             interactiveResult: .failure(EntraTokenError.userCancelled)
         )
         let service = makeService(acquirer: acquirer)
@@ -95,13 +183,15 @@ final class EntraAuthServiceTests: XCTestCase {
             XCTFail("Expected cancellation to throw")
         } catch let error as EntraTokenError {
             XCTAssertEqual(error, .userCancelled)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
         }
     }
 
     // MARK: - Error normalization
 
     func test_acquireAccessToken_propagatesNormalizedNetworkError() async {
-        let acquirer = FakeTokenAcquirer(cachedAccountIdentifier: nil, interactiveResult: .failure(EntraTokenError.noConnection))
+        let acquirer = FakeTokenAcquirer(resolveResult: .success(.none), interactiveResult: .failure(EntraTokenError.noConnection))
         let service = makeService(acquirer: acquirer)
 
         do {
@@ -109,6 +199,8 @@ final class EntraAuthServiceTests: XCTestCase {
             XCTFail("Expected failure to throw")
         } catch let error as EntraTokenError {
             XCTAssertEqual(error, .noConnection)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
         }
     }
 
@@ -119,9 +211,9 @@ final class EntraAuthServiceTests: XCTestCase {
         // unrelated silent failure must never be masked by an unrelated
         // interactive success.
         let acquirer = FakeTokenAcquirer(
-            cachedAccountIdentifier: "cached-account",
+            resolveResult: .success(.single("cached-account")),
             silentResult: .failure(EntraTokenError.unknown),
-            interactiveResult: .success("must-not-be-used")
+            interactiveResult: .success(EntraInteractiveResult(accessToken: "must-not-be-used", accountIdentifier: "cached-account"))
         )
         let service = makeService(acquirer: acquirer)
 
@@ -130,6 +222,8 @@ final class EntraAuthServiceTests: XCTestCase {
             XCTFail("Expected the non-interactionRequired silent failure to propagate")
         } catch let error as EntraTokenError {
             XCTAssertEqual(error, .unknown)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
         }
         XCTAssertEqual(acquirer.interactiveCallCount, 0)
     }
@@ -137,7 +231,7 @@ final class EntraAuthServiceTests: XCTestCase {
     // MARK: - Bearer token attached exactly once / no header on failure
 
     func test_foodAnalysisService_attachesBearerTokenExactlyOnce() async throws {
-        let acquirer = FakeTokenAcquirer(cachedAccountIdentifier: "cached-account", silentResult: .success("the-token"))
+        let acquirer = FakeTokenAcquirer(resolveResult: .success(.single("cached-account")), silentResult: .success("the-token"))
         let entraService = makeService(acquirer: acquirer)
         let session = RecordingURLSession()
         let service = FoodAnalysisService(
@@ -156,7 +250,9 @@ final class EntraAuthServiceTests: XCTestCase {
     }
 
     func test_foodAnalysisService_sendsNoAuthorizationHeaderWhenTokenAcquisitionFails() async throws {
-        let acquirer = FakeTokenAcquirer(cachedAccountIdentifier: nil, interactiveResult: .failure(EntraTokenError.userCancelled))
+        let acquirer = FakeTokenAcquirer(
+            resolveResult: .success(.none), interactiveResult: .failure(EntraTokenError.userCancelled)
+        )
         let entraService = makeService(acquirer: acquirer)
         let session = RecordingURLSession()
         let service = FoodAnalysisService(
@@ -170,6 +266,8 @@ final class EntraAuthServiceTests: XCTestCase {
             XCTFail("Expected authenticationRequired")
         } catch let error as FoodAnalysisError {
             XCTAssertEqual(error, .authenticationRequired)
+        } catch {
+            XCTFail("Expected FoodAnalysisError, got \(error)")
         }
 
         // The request must never have been sent at all once token
@@ -181,31 +279,46 @@ final class EntraAuthServiceTests: XCTestCase {
 // MARK: - Test doubles
 
 private final class FakeTokenAcquirer: EntraTokenAcquiring, @unchecked Sendable {
-    private let cachedAccountIdentifier: String?
+    private let resolveResult: Result<EntraAccountResolution, Error>
+    private let accountExistsResults: [String: Result<Bool, Error>]
     private let silentResult: Result<String, Error>?
-    private let interactiveResult: Result<String, Error>?
+    private let interactiveResult: Result<EntraInteractiveResult, Error>?
 
+    private(set) var resolveCachedAccountsCallCount = 0
     private(set) var silentCallCount = 0
     private(set) var interactiveCallCount = 0
     private(set) var lastRequestedScope: String?
+    private(set) var lastSilentAccountIdentifier: String?
 
     init(
-        cachedAccountIdentifier: String?,
+        resolveResult: Result<EntraAccountResolution, Error> = .success(.none),
+        accountExistsResults: [String: Result<Bool, Error>] = [:],
         silentResult: Result<String, Error>? = nil,
-        interactiveResult: Result<String, Error>? = nil
+        interactiveResult: Result<EntraInteractiveResult, Error>? = nil
     ) {
-        self.cachedAccountIdentifier = cachedAccountIdentifier
+        self.resolveResult = resolveResult
+        self.accountExistsResults = accountExistsResults
         self.silentResult = silentResult
         self.interactiveResult = interactiveResult
     }
 
-    func currentAccountIdentifier() async throws -> String? {
-        cachedAccountIdentifier
+    func resolveCachedAccounts() async throws -> EntraAccountResolution {
+        resolveCachedAccountsCallCount += 1
+        return try resolveResult.get()
+    }
+
+    func accountExists(identifier: String) async throws -> Bool {
+        guard let result = accountExistsResults[identifier] else {
+            XCTFail("accountExists called for unexpected identifier \(identifier)")
+            return false
+        }
+        return try result.get()
     }
 
     func acquireTokenSilently(accountIdentifier: String, scope: String) async throws -> String {
         silentCallCount += 1
         lastRequestedScope = scope
+        lastSilentAccountIdentifier = accountIdentifier
         guard let silentResult else {
             XCTFail("acquireTokenSilently called unexpectedly")
             throw EntraTokenError.unknown
@@ -213,7 +326,7 @@ private final class FakeTokenAcquirer: EntraTokenAcquiring, @unchecked Sendable 
         return try silentResult.get()
     }
 
-    func acquireTokenInteractively(scope: String) async throws -> String {
+    func acquireTokenInteractively(scope: String) async throws -> EntraInteractiveResult {
         interactiveCallCount += 1
         lastRequestedScope = scope
         guard let interactiveResult else {
@@ -221,6 +334,28 @@ private final class FakeTokenAcquirer: EntraTokenAcquiring, @unchecked Sendable 
             throw EntraTokenError.unknown
         }
         return try interactiveResult.get()
+    }
+}
+
+private final class FakeAccountStore: EntraAccountStoring, @unchecked Sendable {
+    private(set) var selectedIdentifier: String?
+    private(set) var clearCallCount = 0
+
+    init(initialSelectedIdentifier: String? = nil) {
+        self.selectedIdentifier = initialSelectedIdentifier
+    }
+
+    func loadSelectedAccountIdentifier() -> String? {
+        selectedIdentifier
+    }
+
+    func saveSelectedAccountIdentifier(_ identifier: String) {
+        selectedIdentifier = identifier
+    }
+
+    func clearSelectedAccountIdentifier() {
+        selectedIdentifier = nil
+        clearCallCount += 1
     }
 }
 
