@@ -272,6 +272,10 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2SF7PV3WCD;
 				ENABLE_PREVIEWS = YES;
+				ENTRA_API_SCOPE = "";
+				ENTRA_CLIENT_ID = "";
+				ENTRA_REDIRECT_URI = "";
+				ENTRA_TENANT_ID = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Trainingsplan-Info.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -305,6 +309,10 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2SF7PV3WCD;
 				ENABLE_PREVIEWS = YES;
+				ENTRA_API_SCOPE = "api://8a31b030-58f4-4897-b76f-11fb33381d14/FoodAnalysis.Access";
+				ENTRA_CLIENT_ID = ed51ac30-3a4c-4bf6-b0e7-151c7c7b3ed8;
+				ENTRA_REDIRECT_URI = "msauth.com.benedikt.Trainingsplan://auth";
+				ENTRA_TENANT_ID = 3106a3eb-9742-46da-ab73-bfdaea9c3d52;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Trainingsplan-Info.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

@@ -42,6 +42,25 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Non-secret Entra ID/MSAL configuration (tenant ID, client ID, API
+	     scope, redirect URI - all public identifiers, never secrets; see
+	     EntraConfiguration.load(bundle:)). Values come from
+	     ENTRA_TENANT_ID/ENTRA_CLIENT_ID/ENTRA_API_SCOPE/ENTRA_REDIRECT_URI
+	     build settings via Xcode's standard $(VAR) Info.plist variable
+	     substitution, so they can differ per build configuration:
+	     intentionally blank in Debug (EntraConfiguration.load(bundle:)
+	     treats a blank string as absent, matching today's local-dev
+	     behavior with no MSAL interaction) and set to the real Entra app
+	     registration values in Release (see docs/architecture.md's Phase 8
+	     entry). Never set to a client secret or any token. -->
+	<key>EntraTenantID</key>
+	<string>$(ENTRA_TENANT_ID)</string>
+	<key>EntraClientID</key>
+	<string>$(ENTRA_CLIENT_ID)</string>
+	<key>EntraAPIScope</key>
+	<string>$(ENTRA_API_SCOPE)</string>
+	<key>EntraRedirectURI</key>
+	<string>$(ENTRA_REDIRECT_URI)</string>
 	<!-- Lets MSAL detect whether Microsoft Authenticator/Company Portal are
 	     installed for brokered SSO; does not grant those apps any access
 	     to this app's data. Documented MSAL iOS requirement independent of
