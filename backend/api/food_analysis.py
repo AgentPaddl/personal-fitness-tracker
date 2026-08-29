@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from config import get_gateway_base_url, get_gateway_timeout_seconds, is_development_mode
 from gateway_client import GatewayClient, GatewayClientError
+from image_validation import image_content_matches_declared_type
 from schemas import (
     MAX_FOOD_DESCRIPTION_LENGTH,
     MAX_IMAGE_BYTES,
@@ -77,7 +78,14 @@ def _handle_image_analysis(req: func.HttpRequest) -> func.HttpResponse:
     if image_file is None:
         return _error_response(400, "image_required", "An 'image' file field is required.")
 
-    image_bytes = image_file.stream.read()
+    # Bounded read: never load more than MAX_IMAGE_BYTES + 1 bytes into
+    # memory here, regardless of how large the uploaded file claims/turns
+    # out to be. This bounds *this* processing step only - by the time this
+    # code runs, the Azure Functions host/worker has already received and
+    # buffered the full HTTP request body (see backend/AGENTS.md for the
+    # precise, non-overclaiming statement of what this check does and does
+    # not guarantee).
+    image_bytes = _read_bounded(image_file.stream, MAX_IMAGE_BYTES)
     if not image_bytes:
         return _error_response(400, "image_empty", "The uploaded image must not be empty.")
     if len(image_bytes) > MAX_IMAGE_BYTES:
@@ -91,6 +99,13 @@ def _handle_image_analysis(req: func.HttpRequest) -> func.HttpResponse:
             415,
             "unsupported_media_type",
             f"Unsupported image type '{mime_type}'. Supported: {sorted(SUPPORTED_IMAGE_MIME_TYPES)}.",
+        )
+
+    if not image_content_matches_declared_type(image_bytes, mime_type):
+        return _error_response(
+            400,
+            "image_content_invalid",
+            "The uploaded file is not a valid, undamaged image of the declared type.",
         )
 
     raw_description = (form.get("food_description") if form else None) or None
@@ -124,6 +139,15 @@ def _respond_with_gateway_result(gateway_response: dict) -> func.HttpResponse:
     return func.HttpResponse(
         public_response.model_dump_json(), status_code=200, mimetype="application/json"
     )
+
+
+def _read_bounded(stream, max_bytes: int) -> bytes:
+    """Reads at most `max_bytes + 1` bytes from `stream`, never the whole
+    (potentially much larger) stream. The `+ 1` lets the caller distinguish
+    "exactly at the limit" from "over the limit" without reading further.
+    """
+
+    return stream.read(max_bytes + 1)
 
 
 def _error_response(status_code: int, code: str, message: str) -> func.HttpResponse:

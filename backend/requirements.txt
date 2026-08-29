@@ -5,3 +5,6 @@
 azure-functions==2.2.0
 httpx==0.28.1
 pydantic==2.13.5
+# Real image-content validation (detect actual JPEG/PNG format, reject
+# corrupt/mismatched-MIME uploads) - not just trusting the declared MIME type.
+Pillow==12.3.0

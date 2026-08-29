@@ -17,8 +17,10 @@ from app.errors import ProviderOutputInvalidError, ProviderTimeoutError, Provide
 from app.providers.base import StructuredGenerationRequest, StructuredGenerationResult, StructuredGenerationProvider
 from app.schemas.food_analysis import FoodAnalysisRequest, ImageAttachment
 from app.use_cases.food_analysis import FoodAnalysisUseCase
+from tests.image_fixtures import make_valid_jpeg_bytes, make_valid_png_bytes
 
-_TINY_IMAGE_BASE64 = base64.b64encode(b"fake jpeg bytes for tests").decode("ascii")
+_TINY_IMAGE_BASE64 = base64.b64encode(make_valid_jpeg_bytes()).decode("ascii")
+_TINY_PNG_BASE64 = base64.b64encode(make_valid_png_bytes()).decode("ascii")
 
 _VALID_DATA = {
     "food_name": "chicken breast",
@@ -146,7 +148,7 @@ def test_execute_routes_text_and_image_to_image_model_purpose():
     )
     request = FoodAnalysisRequest(
         food_description="a bowl of pasta",
-        image=ImageAttachment(media_type="image/png", data_base64=_TINY_IMAGE_BASE64),
+        image=ImageAttachment(media_type="image/png", data_base64=_TINY_PNG_BASE64),
     )
 
     asyncio.run(use_case.execute(request))

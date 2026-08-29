@@ -45,6 +45,7 @@ from app.providers.base import (
     StructuredGenerationRequest,
     StructuredGenerationResult,
 )
+from app.schemas.food_analysis import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_MEDIA_TYPES
 
 _SUBMIT_TOOL_NAME = "submit_structured_result"
 _SUBMIT_TOOL_DESCRIPTION = (
@@ -201,8 +202,9 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
     def _configured_vision_routes_are_supported(self, models: list[Any]) -> bool:
         # Never assumes a model supports images; only trusts the SDK's own
         # reported capability. A route required for image analysis whose
-        # model does not declare vision support fails readiness rather than
-        # silently attempting (and likely failing) a real generation call.
+        # model does not fully satisfy `_vision_route_is_fully_supported`
+        # fails readiness rather than silently attempting (and likely
+        # failing, or silently mis-behaving on) a real generation call.
         if not self._vision_required_purposes:
             return True
         models_by_id = {model.id: model for model in models}
@@ -211,8 +213,7 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
             if model_id is None:
                 continue  # Not configured; ModelUnavailableError already covers request-time use.
             model = models_by_id.get(model_id)
-            supports_vision = bool(getattr(getattr(model, "capabilities", None), "supports", None) and model.capabilities.supports.vision)
-            if not supports_vision:
+            if model is None or not _vision_route_is_fully_supported(model):
                 return False
         return True
 
@@ -220,6 +221,61 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
         if self._client is not None:
             client, self._client = self._client, None
             await client.stop()
+
+
+def _vision_route_is_fully_supported(model: Any) -> bool:
+    """Strict readiness check for a model required to support image input.
+
+    Checks every capability field the gateway actually relies on for image
+    analysis (see ``github-copilot-sdk`` 1.0.11's ``ModelCapabilities`` /
+    ``ModelVisionLimits`` in ``copilot/client.py``), not just the coarse
+    ``supports.vision`` flag:
+
+    - ``capabilities.supports.vision`` must be true.
+    - ``capabilities.limits.vision.supported_media_types`` must be present
+      and include every MIME type the gateway itself accepts for images
+      (``SUPPORTED_IMAGE_MEDIA_TYPES``).
+    - ``capabilities.limits.vision.max_prompt_images`` must be present and
+      at least 1.
+    - ``capabilities.limits.vision.max_prompt_image_size``, if present,
+      must be at least our own ``MAX_IMAGE_BYTES``; if the SDK does not
+      report this field at all, it is treated as "no advertised limit"
+      (not a fail-closed case), since that mirrors how every other
+      optional numeric SDK limit already behaves elsewhere in this
+      codebase (e.g. ``ModelLimits.max_prompt_tokens``).
+
+    Any other missing/ambiguous field (no vision limits object at all, no
+    reported supported media types, no reported max_prompt_images) fails
+    closed - readiness is only ever true when the SDK's own capability
+    data affirmatively confirms every requirement above.
+    """
+
+    capabilities = getattr(model, "capabilities", None)
+    supports = getattr(capabilities, "supports", None) if capabilities is not None else None
+    if not supports or not getattr(supports, "vision", False):
+        return False
+
+    limits = getattr(capabilities, "limits", None)
+    vision_limits = getattr(limits, "vision", None) if limits is not None else None
+    if vision_limits is None:
+        return False
+
+    supported_media_types = getattr(vision_limits, "supported_media_types", None)
+    if supported_media_types is None:
+        return False
+    normalized_media_types = {media_type.lower() for media_type in supported_media_types}
+    if not SUPPORTED_IMAGE_MEDIA_TYPES.issubset(normalized_media_types):
+        return False
+
+    max_prompt_images = getattr(vision_limits, "max_prompt_images", None)
+    if max_prompt_images is None or max_prompt_images < 1:
+        return False
+
+    max_prompt_image_size = getattr(vision_limits, "max_prompt_image_size", None)
+    if max_prompt_image_size is not None and max_prompt_image_size < MAX_IMAGE_BYTES:
+        return False
+
+    return True
 
 
 def _to_sdk_attachments(attachments: list[Attachment]) -> list[dict[str, str]] | None:

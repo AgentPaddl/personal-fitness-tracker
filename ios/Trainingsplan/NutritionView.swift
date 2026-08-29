@@ -158,9 +158,10 @@ struct NutritionView: View {
                             Task { await foodAnalysisViewModel.analyze() }
                         }
                         .disabled(
-                            foodAnalysisViewModel.descriptionText
+                            (foodAnalysisViewModel.descriptionText
                                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                && foodAnalysisViewModel.selectedImage == nil
+                                && foodAnalysisViewModel.selectedImage == nil)
+                                || isLoadingPickedPhoto
                         )
                     }
 

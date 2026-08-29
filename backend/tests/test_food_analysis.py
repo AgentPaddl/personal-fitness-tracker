@@ -5,8 +5,11 @@ import pytest
 
 from api.food_analysis import food_analysis
 from gateway_client import GatewayClient, GatewayClientError
+from tests.image_fixtures import make_truncated_jpeg_bytes, make_valid_jpeg_bytes, make_valid_png_bytes
 
 _BOUNDARY = "test-boundary-123"
+_VALID_JPEG_BYTES = make_valid_jpeg_bytes()
+_VALID_PNG_BYTES = make_valid_png_bytes()
 
 
 def _request(body: dict | bytes | None) -> func.HttpRequest:
@@ -21,11 +24,13 @@ def _request(body: dict | bytes | None) -> func.HttpRequest:
 
 def _multipart_request(
     *,
-    image_bytes: bytes | None = b"\xff\xd8\xff\xe0fake jpeg bytes",
+    image_bytes: bytes | None = None,
     mime_type: str = "image/jpeg",
     food_description: str | None = None,
     include_image_field: bool = True,
 ) -> func.HttpRequest:
+    if image_bytes is None:
+        image_bytes = _VALID_JPEG_BYTES
     parts = []
     if include_image_field:
         parts.append(
@@ -267,7 +272,7 @@ def test_food_analysis_image_only_success(monkeypatch):
     assert json.loads(response.get_body()) == _gateway_result()
     assert captured["mime_type"] == "image/jpeg"
     assert captured["food_description"] is None
-    assert captured["image_bytes"] == b"\xff\xd8\xff\xe0fake jpeg bytes"
+    assert captured["image_bytes"] == _VALID_JPEG_BYTES
 
 
 def test_food_analysis_image_with_text(monkeypatch):
@@ -314,6 +319,87 @@ def test_food_analysis_rejects_oversized_image():
 
     assert response.status_code == 413
     assert json.loads(response.get_body())["error"]["code"] == "image_too_large"
+
+
+def test_food_analysis_rejects_arbitrary_bytes_labeled_as_jpeg():
+    response = food_analysis(_multipart_request(image_bytes=b"not an image, just plain bytes......."))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_rejects_png_declared_as_jpeg():
+    response = food_analysis(_multipart_request(image_bytes=_VALID_PNG_BYTES, mime_type="image/jpeg"))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_rejects_jpeg_declared_as_png():
+    response = food_analysis(_multipart_request(image_bytes=_VALID_JPEG_BYTES, mime_type="image/png"))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_rejects_truncated_corrupt_jpeg():
+    response = food_analysis(_multipart_request(image_bytes=make_truncated_jpeg_bytes()))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_rejects_truncated_corrupt_png():
+    response = food_analysis(
+        _multipart_request(image_bytes=make_truncated_jpeg_bytes()[:5] + b"\x00" * 15, mime_type="image/png")
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_valid_png_is_accepted(monkeypatch):
+    def fake_analyze_image(self, image_bytes, mime_type, food_description=None):
+        return {
+            "estimate": {
+                "food_name": "pasta",
+                "calories": 400.0,
+                "protein_grams": 10.0,
+                "carbohydrate_grams": 60.0,
+                "fat_grams": 8.0,
+                "confidence": 0.5,
+                "warnings": [],
+            }
+        }
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_image", fake_analyze_image)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_multipart_request(image_bytes=_VALID_PNG_BYTES, mime_type="image/png"))
+
+    assert response.status_code == 200
+
+
+def test_read_bounded_never_reads_more_than_the_limit_plus_one():
+    from api.food_analysis import _read_bounded
+
+    class _SpyStream:
+        def __init__(self, data: bytes):
+            self._data = data
+            self.last_requested_size: int | None = None
+
+        def read(self, size: int | None = None) -> bytes:
+            self.last_requested_size = size
+            assert size is not None, "must never call read() unbounded"
+            return self._data[:size]
+
+    huge_data = b"x" * (10 * 1024 * 1024)
+    stream = _SpyStream(huge_data)
+
+    result = _read_bounded(stream, max_bytes=3 * 1024 * 1024)
+
+    assert stream.last_requested_size == 3 * 1024 * 1024 + 1
+    assert len(result) == 3 * 1024 * 1024 + 1
 
 
 def test_food_analysis_rejects_malformed_multipart_body():

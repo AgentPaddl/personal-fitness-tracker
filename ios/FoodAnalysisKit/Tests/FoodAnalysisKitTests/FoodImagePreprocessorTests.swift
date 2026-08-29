@@ -10,7 +10,7 @@ import XCTest
 /// metadata so preprocessing's metadata-stripping behavior is verifiable.
 private enum TestImageFactory {
     static func makeImageData(
-        width: Int, height: Int, format: UTType = .jpeg, includeGPSMetadata: Bool = false
+        width: Int, height: Int, format: UTType = .jpeg, includeGPSMetadata: Bool = false, orientation: Int? = nil
     ) -> Data {
         guard
             let context = CGContext(
@@ -43,6 +43,9 @@ private enum TestImageFactory {
                 kCGImagePropertyGPSLongitude: 13.4,
                 kCGImagePropertyGPSLongitudeRef: "E",
             ]
+        }
+        if let orientation {
+            options[kCGImagePropertyOrientation] = orientation
         }
         CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
         guard CGImageDestinationFinalize(destination) else {
@@ -137,6 +140,102 @@ final class FoodImagePreprocessorTests: XCTestCase {
             return XCTFail("Expected a failure")
         }
         XCTAssertEqual(error, .decodeFailed)
+    }
+
+    // MARK: - EXIF orientation
+
+    func testEXIFOrientationIsAppliedBeforeResizingProducingUprightOutput() throws {
+        // Stored as landscape 300x150 but tagged orientation=6 ("rotate 90°
+        // CW to display upright"), i.e. the correctly-oriented display size
+        // is portrait 150x300. A baked-in, orientation-corrected output
+        // must reflect the *displayed* (portrait) dimensions, not the raw
+        // stored (landscape) ones.
+        let original = TestImageFactory.makeImageData(width: 300, height: 150, orientation: 6)
+
+        let result = FoodImagePreprocessor.preprocess(imageData: original)
+
+        guard case .success(let preprocessed) = result else {
+            return XCTFail("Expected successful preprocessing")
+        }
+        let dims = try dimensions(of: preprocessed.data)
+        XCTAssertEqual(dims.width, 150)
+        XCTAssertEqual(dims.height, 300)
+    }
+
+    func testOutputHasNoResidualOrientationTag() throws {
+        // Orientation is baked into the pixel data, so the output should
+        // not carry forward a separate orientation tag requiring another
+        // consumer to re-apply it.
+        let original = TestImageFactory.makeImageData(width: 300, height: 150, orientation: 6)
+
+        let result = FoodImagePreprocessor.preprocess(imageData: original)
+
+        guard case .success(let preprocessed) = result else {
+            return XCTFail("Expected successful preprocessing")
+        }
+        let properties = try metadataProperties(of: preprocessed.data)
+        let outputOrientation = properties[kCGImagePropertyOrientation as String] as? Int ?? 1
+        XCTAssertEqual(outputOrientation, 1)
+    }
+
+    // MARK: - Guaranteed size limit
+
+    func testFailsWithSizeLimitExceededWhenLimitIsUnreachable() {
+        let original = TestImageFactory.makeImageData(width: 1000, height: 1000)
+
+        // No JPEG of a non-trivial photo can plausibly fit in 10 bytes;
+        // every deterministic quality/dimension step must be exhausted and
+        // preprocessing must fail explicitly, never silently exceeding the
+        // caller's limit.
+        let result = FoodImagePreprocessor.preprocess(imageData: original, maxUploadBytes: 10)
+
+        guard case .failure(let error) = result else {
+            return XCTFail("Expected a failure")
+        }
+        XCTAssertEqual(error, .sizeLimitExceeded)
+    }
+
+    func testOutputNeverExceedsConfiguredUploadLimit() throws {
+        let original = TestImageFactory.makeImageData(width: 3000, height: 3000)
+
+        let result = FoodImagePreprocessor.preprocess(imageData: original, maxUploadBytes: 50_000)
+
+        guard case .success(let preprocessed) = result else {
+            return XCTFail("Expected successful preprocessing")
+        }
+        XCTAssertLessThanOrEqual(preprocessed.data.count, 50_000)
+    }
+
+    func testOutputNeverExceedsMaxDimensionEvenWhenQualityStepsAloneCannotFit() throws {
+        // A very tight byte budget forces the dimension-reduction fallback
+        // (quality steps alone cannot fit a 4000x4000 source into 20 KB).
+        let original = TestImageFactory.makeImageData(width: 4000, height: 4000)
+
+        let result = FoodImagePreprocessor.preprocess(imageData: original, maxUploadBytes: 20_000)
+
+        guard case .success(let preprocessed) = result else {
+            return XCTFail("Expected successful preprocessing")
+        }
+        let dims = try dimensions(of: preprocessed.data)
+        XCTAssertLessThanOrEqual(max(dims.width, dims.height), 1280)
+        XCTAssertLessThanOrEqual(preprocessed.data.count, 20_000)
+    }
+
+    func testValidJPEGOutputRemainsDecodable() throws {
+        let original = TestImageFactory.makeImageData(width: 500, height: 500)
+
+        let result = FoodImagePreprocessor.preprocess(imageData: original)
+
+        guard case .success(let preprocessed) = result else {
+            return XCTFail("Expected successful preprocessing")
+        }
+        guard let source = CGImageSourceCreateWithData(preprocessed.data as CFData, nil),
+            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
+            return XCTFail("Output JPEG must remain decodable")
+        }
+        XCTAssertGreaterThan(cgImage.width, 0)
+        XCTAssertGreaterThan(cgImage.height, 0)
     }
 
     // MARK: - Helpers

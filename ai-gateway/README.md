@@ -66,9 +66,13 @@ Available model ids change over time and depend on your Copilot plan; call
 `client.list_models()` (or check `GET /readyz`) rather than assuming a
 specific id is available. Image analysis (`food_image_v1`) requires a
 **vision-capable** model; `/readyz` fails if the configured model does not
-report vision support via the SDK's own `list_models()` capability data
-(`model.capabilities.supports.vision`) - it never silently proceeds with a
-non-vision model. As of 2026-08-29, `gpt-5-mini` is verified vision-capable.
+report, via the SDK's own `list_models()` capability data: vision support,
+`supported_media_types` covering both `image/jpeg` and `image/png`,
+`max_prompt_images >= 1`, and (if reported at all) a `max_prompt_image_size`
+at least as large as this gateway's own 3 MiB image limit. Any missing or
+ambiguous capability field fails closed rather than assuming compatibility
+- it never silently proceeds with, or routes to, a different model. As of
+2026-08-29, `gpt-5-mini` is verified to satisfy all of these.
 
 `GET /readyz` validates that the configured model id is actually returned
 by the CLI's `list_models()` and that the CLI reports an authenticated
@@ -94,7 +98,7 @@ APP_ENV=development GATEWAY_DEV_AUTH_BYPASS=true AI_PROVIDER=copilot \
 
 `POST /v1/food-analysis` accepts `food_description`, `image`, or both (at
 least one is required). `image` is `{"media_type": "image/jpeg" |
-"image/png", "data_base64": "..."}` - an inline base64 blob, capped at 5 MB
+"image/png", "data_base64": "..."}` - an inline base64 blob, capped at 3 MiB
 decoded and validated as actually-decodable base64. This is the gateway's
 own internal contract (the backend's *public* API instead accepts
 `multipart/form-data`; see `backend/AGENTS.md`).

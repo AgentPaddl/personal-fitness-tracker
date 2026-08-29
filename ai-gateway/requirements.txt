@@ -4,3 +4,7 @@ pydantic-settings==2.15.0
 uvicorn==0.52.4
 # Official GitHub Copilot SDK for Python (bundles the Copilot CLI runtime).
 github-copilot-sdk==1.0.11
+# Real image-content validation (detect actual JPEG/PNG format, reject
+# corrupt/mismatched-MIME payloads) - defense-in-depth behind the backend's
+# own validation.
+Pillow==12.3.0

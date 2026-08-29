@@ -95,12 +95,14 @@ class _FakeClient:
         is_authenticated: bool = True,
         model_ids: tuple[str, ...] = ("gpt-5",),
         vision_model_ids: frozenset[str] = frozenset(),
+        model_capabilities: dict[str, SimpleNamespace] | None = None,
         disconnect_exc: Exception | None = None,
     ):
         self._on_send = on_send
         self._is_authenticated = is_authenticated
         self._model_ids = model_ids
         self._vision_model_ids = vision_model_ids
+        self._model_capabilities = model_capabilities or {}
         self._disconnect_exc = disconnect_exc
         self.started = False
         self.stopped = False
@@ -124,12 +126,37 @@ class _FakeClient:
 
     async def list_models(self) -> list[SimpleNamespace]:
         return [
-            SimpleNamespace(
-                id=model_id,
-                capabilities=SimpleNamespace(supports=SimpleNamespace(vision=model_id in self._vision_model_ids)),
-            )
+            SimpleNamespace(id=model_id, capabilities=self._capabilities_for(model_id))
             for model_id in self._model_ids
         ]
+
+    def _capabilities_for(self, model_id: str) -> SimpleNamespace:
+        override = self._model_capabilities.get(model_id)
+        if override is not None:
+            return override
+        if model_id not in self._vision_model_ids:
+            return SimpleNamespace(supports=SimpleNamespace(vision=False), limits=SimpleNamespace(vision=None))
+        # Default "fully compatible" vision capability for tests that only
+        # toggle vision_model_ids without specifying finer-grained limits.
+        return full_vision_capabilities()
+
+
+def full_vision_capabilities(
+    *,
+    supported_media_types: list[str] | None = ("image/jpeg", "image/png"),
+    max_prompt_images: int | None = 4,
+    max_prompt_image_size: int | None = 10 * 1024 * 1024,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        supports=SimpleNamespace(vision=True),
+        limits=SimpleNamespace(
+            vision=SimpleNamespace(
+                supported_media_types=list(supported_media_types) if supported_media_types is not None else None,
+                max_prompt_images=max_prompt_images,
+                max_prompt_image_size=max_prompt_image_size,
+            )
+        ),
+    )
 
 
 def _install_fake_client(monkeypatch, client: _FakeClient) -> None:
@@ -496,5 +523,97 @@ def test_check_ready_true_when_required_vision_model_supports_vision(monkeypatch
         model_routes={"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"},
         vision_required_purposes=frozenset({"food_image_v1"}),
     )
+
+    assert asyncio.run(provider.check_ready()) is True
+
+
+def _provider_with_capability(capability: SimpleNamespace) -> tuple[GitHubCopilotProvider, _FakeClient]:
+    client = _FakeClient(
+        lambda session, timeout: None,
+        model_ids=("gpt-5-mini",),
+        model_capabilities={"gpt-5-mini": capability},
+    )
+    provider = GitHubCopilotProvider(
+        model_routes={"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"},
+        vision_required_purposes=frozenset({"food_image_v1"}),
+    )
+    return provider, client
+
+
+def test_check_ready_false_when_model_has_no_vision_support(monkeypatch):
+    capability = full_vision_capabilities()
+    capability.supports.vision = False
+    provider, client = _provider_with_capability(capability)
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_false_when_jpeg_unsupported(monkeypatch):
+    provider, client = _provider_with_capability(full_vision_capabilities(supported_media_types=["image/png"]))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_false_when_png_unsupported(monkeypatch):
+    provider, client = _provider_with_capability(full_vision_capabilities(supported_media_types=["image/jpeg"]))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_false_when_zero_prompt_images(monkeypatch):
+    provider, client = _provider_with_capability(full_vision_capabilities(max_prompt_images=0))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_false_when_max_prompt_images_missing(monkeypatch):
+    provider, client = _provider_with_capability(full_vision_capabilities(max_prompt_images=None))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_false_when_provider_max_image_size_below_our_limit(monkeypatch):
+    from app.schemas.food_analysis import MAX_IMAGE_BYTES
+
+    provider, client = _provider_with_capability(
+        full_vision_capabilities(max_prompt_image_size=MAX_IMAGE_BYTES - 1)
+    )
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_true_when_provider_max_image_size_unspecified(monkeypatch):
+    # None means "no advertised limit", not "fail closed" - see
+    # _vision_route_is_fully_supported's docstring.
+    provider, client = _provider_with_capability(full_vision_capabilities(max_prompt_image_size=None))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is True
+
+
+def test_check_ready_false_when_no_supported_media_types_reported(monkeypatch):
+    provider, client = _provider_with_capability(full_vision_capabilities(supported_media_types=None))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_true_when_fully_compatible(monkeypatch):
+    from app.schemas.food_analysis import MAX_IMAGE_BYTES
+
+    provider, client = _provider_with_capability(
+        full_vision_capabilities(
+            supported_media_types=["image/jpeg", "image/png", "image/webp"],
+            max_prompt_images=4,
+            max_prompt_image_size=MAX_IMAGE_BYTES + 1,
+        )
+    )
+    _install_fake_client(monkeypatch, client)
 
     assert asyncio.run(provider.check_ready()) is True

@@ -19,8 +19,10 @@ SUPPORTED_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png"})
 
 #: Conservative cap on the raw uploaded file. The iOS client resizes and
 #: compresses before upload, so a compliant client's photo is always far
-#: below this.
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
+#: below this. Matches the gateway's own `MAX_IMAGE_BYTES` (chosen to fit
+#: within the currently-configured vision model's advertised
+#: `max_prompt_image_size` - see `ai-gateway/app/schemas/food_analysis.py`).
+MAX_IMAGE_BYTES = 3 * 1024 * 1024
 
 #: Maximum length for the optional text field accompanying an image upload,
 #: matching the text-only contract's limit.
