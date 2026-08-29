@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import FoodAnalysisKit
 
 struct NutritionView: View {
     @Environment(\.modelContext) private var modelContext
@@ -19,6 +20,7 @@ struct NutritionView: View {
     @State private var fat = ""
     @State private var notes = ""
     @State private var selectedEntryToEdit: FoodEntry?
+    @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel()
 
     var body: some View {
         NavigationStack {
@@ -93,6 +95,42 @@ struct NutritionView: View {
                     }
                 }
 
+                Section("KI-Analyse (Text)") {
+                    Text("Beschreibe dein Essen in natürlicher Sprache. Das Ergebnis ist eine Schätzung, die du vor dem Speichern prüfen und anpassen kannst.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "z. B. Ein Apfel und eine Scheibe Vollkornbrot mit Butter",
+                        text: $foodAnalysisViewModel.descriptionText,
+                        axis: .vertical
+                    )
+                    .lineLimit(1...4)
+                    .disabled(foodAnalysisViewModel.isAnalyzing)
+
+                    if foodAnalysisViewModel.isAnalyzing {
+                        HStack {
+                            ProgressView()
+                            Text("Analysiere…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button("Analysieren") {
+                            Task { await foodAnalysisViewModel.analyze() }
+                        }
+                        .disabled(
+                            foodAnalysisViewModel.descriptionText
+                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                    }
+
+                    if let errorMessage = foodAnalysisViewModel.errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 Section("Eintrag hinzufügen") {
                     TextField("Bezeichnung", text: $name)
 
@@ -129,6 +167,11 @@ struct NutritionView: View {
             }
             .sheet(item: $selectedEntryToEdit) { entry in
                 EditFoodEntryView(entry: entry)
+            }
+            .sheet(item: $foodAnalysisViewModel.reviewDraft) { draft in
+                FoodAnalysisReviewView(draft: draft) {
+                    foodAnalysisViewModel.descriptionText = ""
+                }
             }
         }
     }

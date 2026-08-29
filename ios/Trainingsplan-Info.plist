@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Narrow, local-development-only exception: allows plain HTTP to
+		     literal IP-address hosts (e.g. the developer's Mac on the LAN)
+		     and .local mDNS hostnames only. Does NOT set
+		     NSAllowsArbitraryLoads and does NOT relax ATS for ordinary
+		     internet domains; HTTPS is still required for those. See
+		     ios/AGENTS.md for exact scope/rationale. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- iOS's separate Local Network privacy permission (distinct from the
+	     ATS exception above): required for a physical device to reach the
+	     developer's Mac on the LAN at all. Triggers a one-time system
+	     permission prompt; only used for API_BASE_URL, never for anything
+	     else. See ios/AGENTS.md for exact scope/rationale. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Wird nur verwendet, um sich während der Entwicklung mit dem Backend auf deinem Mac im lokalen Netzwerk zu verbinden.</string>
+</dict>
+</plist>
