@@ -11,15 +11,15 @@ DEFAULT_GATEWAY_TIMEOUT_SECONDS = 10.0
 _MIN_TIMEOUT_SECONDS = 0.1
 _MAX_TIMEOUT_SECONDS = 120.0
 
-#: Production minimum for backend→gateway timeout. The gateway's own
-#: production floor is 30s (real Copilot calls take tens of seconds);
-#: the backend must allow strictly more headroom than that so a
-#: slow-but-successful gateway call is never cut off first.
-_MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 40.0
+#: Production minimum for backend→gateway timeout. Must stay at/above the
+#: gateway's own production ceiling (99s, provider timeout) so a
+#: slow-but-successful gateway call is never cut off first. 100s preserves:
+#: 99s (gateway→provider max) < 100s (backend→gateway min).
+_MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 100.0
 
 #: Production maximum for backend→gateway timeout. Must stay below iOS's
 #: configured request timeout (110s). Default production value is 100s,
-#: maximum is 109s to preserve: 99s (gateway→provider) < 100s (backend→gateway) < 110s (iOS).
+#: maximum is 109s to preserve: 99s (gateway→provider) < 100-109s (backend→gateway) < 110s (iOS).
 _MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 109.0
 
 #: Production default backend→gateway timeout (recommended value; can be
@@ -117,7 +117,8 @@ def validate_config() -> None:
         if timeout < _MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS:
             raise ConfigError(
                 f"AI_GATEWAY_TIMEOUT_SECONDS must be at least {_MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS} "
-                "seconds when APP_ENV=production."
+                "seconds when APP_ENV=production to preserve the timeout hierarchy: "
+                "provider (99s max) < backend (100-109s) < iOS (110s)."
             )
 
         if timeout > _MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS:

@@ -316,6 +316,18 @@ def test_production_accepts_provider_timeout_at_recommended_value():
     settings.validate()  # must not raise: recommended value is valid
 
 
+def test_production_accepts_provider_timeout_at_hierarchy_maximum():
+    settings = Settings(
+        app_env="production",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        gateway_service_token="correct-token",
+        copilot_github_token="test-github-token",
+        ai_provider_timeout_seconds=99.0,
+    )
+    settings.validate()  # must not raise: 99s is the hierarchy ceiling (still below backend's 100s floor)
+
+
 def test_production_rejects_provider_timeout_exceeding_hierarchy_maximum():
     # Gateway max is 99s to preserve: 99s (provider) < 100s (backend) < 110s (iOS)
     settings = Settings(

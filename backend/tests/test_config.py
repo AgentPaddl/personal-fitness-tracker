@@ -69,17 +69,34 @@ def test_validate_config_rejects_production_timeout_below_floor(monkeypatch):
 def test_validate_config_passes_with_a_valid_production_configuration(monkeypatch):
     monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "test-service-token")
     monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://gateway.internal.example")
-    monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "100")
 
     config.validate_config()  # must not raise
 
 
-def test_validate_config_accepts_production_timeout_at_recommended_value(monkeypatch):
+def test_validate_config_rejects_production_timeout_below_hierarchy_minimum(monkeypatch):
+    # 99s would tie/undercut the gateway's own 99s provider-timeout ceiling.
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "test-service-token")
+    monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://gateway.internal.example")
+    monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "99")
+    with pytest.raises(config.ConfigError, match="AI_GATEWAY_TIMEOUT_SECONDS.*100.*hierarchy"):
+        config.validate_config()
+
+
+def test_validate_config_accepts_production_timeout_at_hierarchy_minimum(monkeypatch):
     monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "test-service-token")
     monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://gateway.internal.example")
     monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "100")
 
-    config.validate_config()  # must not raise: 100s is the recommended production value
+    config.validate_config()  # must not raise: 100s is the hierarchy floor and recommended value
+
+
+def test_validate_config_accepts_production_timeout_at_hierarchy_maximum(monkeypatch):
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "test-service-token")
+    monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://gateway.internal.example")
+    monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "109")
+
+    config.validate_config()  # must not raise: 109s is the hierarchy ceiling (still below iOS's 110s)
 
 
 def test_validate_config_rejects_production_timeout_exceeding_hierarchy_maximum(monkeypatch):
