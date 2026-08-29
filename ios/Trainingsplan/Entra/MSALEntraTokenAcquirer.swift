@@ -1,5 +1,13 @@
 import EntraAuthKit
-import MSAL
+// MSAL predates Swift's concurrency checking and its public types (e.g.
+// MSALPublicClientApplication) are not marked Sendable, even though MSAL's
+// own documented completion-block APIs are usable from any thread. This
+// is the Swift-compiler-suggested way to interoperate with such a
+// not-yet-audited module without asserting anything false about our own
+// code's concurrency safety (see `@preconcurrency` docs) - it is not a
+// substitute for actually auditing MSAL, which is out of this repo's
+// control. Revisit if/when MSAL ships Sendable annotations upstream.
+@preconcurrency import MSAL
 import UIKit
 
 /// The only file in this app that imports `MSAL` directly. Wraps a single
@@ -41,18 +49,11 @@ public final class MSALEntraTokenAcquirer: EntraTokenAcquiring {
         } catch {
             throw EntraTokenError.accountLookupFailed
         }
-        // `MSALAccount.identifier` is optional in MSAL's API; an account
-        // without one cannot be remembered/resolved by this app and is
-        // dropped rather than force-unwrapped.
-        let identifiers = accounts.compactMap(\.identifier)
-        switch identifiers.count {
-        case 0:
-            return .none
-        case 1:
-            return .single(identifiers[0])
-        default:
-            return .multiple(identifiers)
-        }
+        // The full collection is evaluated before any account is
+        // discarded - `EntraCachedAccountNormalization` fails closed
+        // (never silently drops an identifier-less account) rather than
+        // risking an arbitrary/incorrect account choice.
+        return try EntraCachedAccountNormalization.resolution(forCachedAccountIdentifiers: accounts.map(\.identifier))
     }
 
     public func accountExists(identifier: String) async throws -> Bool {

@@ -27,6 +27,12 @@ public enum EntraTokenError: Error, Equatable, Sendable {
     /// selected yet (see `EntraAuthService`'s account-selection policy).
     /// This app never picks one arbitrarily.
     case multipleAccountsRequireSelection
+    /// At least one cached MSAL account exists but lacks the identifier
+    /// this app's account-selection strategy requires to remember/resolve
+    /// it deterministically. Never silently dropped - dropping it could
+    /// otherwise turn two cached accounts into what looks like one, or a
+    /// single identifier-less account into what looks like none.
+    case unsupportedCachedAccountState
     /// Any other MSAL failure, deliberately not detailed further here -
     /// raw MSAL error text/codes must never reach the UI layer.
     case unknown
@@ -41,6 +47,36 @@ public enum EntraAccountResolution: Equatable, Sendable {
     case none
     case single(String)
     case multiple([String])
+}
+
+/// Pure, MSAL-independent normalization from raw cached-account
+/// identifiers (as reported by MSAL's `allAccounts()`, one optional
+/// `String` per account - `MSALAccount.identifier` is itself optional) to
+/// a deterministic `EntraAccountResolution`.
+///
+/// The full collection is evaluated before any account is discarded: an
+/// identifier-less account is never silently dropped, since that could
+/// otherwise turn two cached accounts into what looks like a single
+/// account, or a lone identifier-less account into what looks like no
+/// account at all - both would violate the "never choose an account
+/// arbitrarily" policy. If any cached account lacks a usable identifier,
+/// normalization fails closed for the whole result rather than picking
+/// among the remaining ones.
+public enum EntraCachedAccountNormalization {
+    public static func resolution(forCachedAccountIdentifiers identifiers: [String?]) throws -> EntraAccountResolution {
+        guard !identifiers.isEmpty else { return .none }
+
+        var resolved: [String] = []
+        resolved.reserveCapacity(identifiers.count)
+        for identifier in identifiers {
+            guard let identifier, !identifier.isEmpty else {
+                throw EntraTokenError.unsupportedCachedAccountState
+            }
+            resolved.append(identifier)
+        }
+
+        return resolved.count == 1 ? .single(resolved[0]) : .multiple(resolved)
+    }
 }
 
 /// Result of a completed interactive sign-in: both the access token and

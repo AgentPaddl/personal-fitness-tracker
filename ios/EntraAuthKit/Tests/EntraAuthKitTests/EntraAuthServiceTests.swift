@@ -99,6 +99,25 @@ final class EntraAuthServiceTests: XCTestCase {
         XCTAssertEqual(acquirer.interactiveCallCount, 0)
     }
 
+    func test_acquireAccessToken_unsupportedCachedAccountState_propagatesWithoutInteractiveLogin() async {
+        // A cached account without a usable identifier must fail closed,
+        // never be silently treated as "no account" (which would
+        // incorrectly permit an interactive login).
+        let acquirer = FakeTokenAcquirer(resolveResult: .failure(EntraTokenError.unsupportedCachedAccountState))
+        let service = makeService(acquirer: acquirer)
+
+        do {
+            _ = try await service.acquireAccessToken()
+            XCTFail("Expected unsupportedCachedAccountState to throw")
+        } catch let error as EntraTokenError {
+            XCTAssertEqual(error, .unsupportedCachedAccountState)
+        } catch {
+            XCTFail("Expected EntraTokenError, got \(error)")
+        }
+        XCTAssertEqual(acquirer.silentCallCount, 0)
+        XCTAssertEqual(acquirer.interactiveCallCount, 0)
+    }
+
     func test_acquireAccessToken_selectedIdentifierLookupFailure_propagatesWithoutClearingOrInteractiveLogin() async {
         let accountStore = FakeAccountStore(initialSelectedIdentifier: "stored-account")
         let acquirer = FakeTokenAcquirer(accountExistsResults: ["stored-account": .failure(EntraTokenError.accountLookupFailed)])
