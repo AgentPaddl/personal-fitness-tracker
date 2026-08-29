@@ -588,13 +588,35 @@ def test_check_ready_false_when_provider_max_image_size_below_our_limit(monkeypa
     assert asyncio.run(provider.check_ready()) is False
 
 
-def test_check_ready_true_when_provider_max_image_size_unspecified(monkeypatch):
-    # None means "no advertised limit", not "fail closed" - see
-    # _vision_route_is_fully_supported's docstring.
-    provider, client = _provider_with_capability(full_vision_capabilities(max_prompt_image_size=None))
+def test_check_ready_true_when_provider_max_image_size_exactly_at_our_limit(monkeypatch):
+    from app.schemas.food_analysis import MAX_IMAGE_BYTES
+
+    provider, client = _provider_with_capability(
+        full_vision_capabilities(max_prompt_image_size=MAX_IMAGE_BYTES)
+    )
     _install_fake_client(monkeypatch, client)
 
     assert asyncio.run(provider.check_ready()) is True
+
+
+def test_check_ready_true_when_provider_max_image_size_above_our_limit(monkeypatch):
+    from app.schemas.food_analysis import MAX_IMAGE_BYTES
+
+    provider, client = _provider_with_capability(
+        full_vision_capabilities(max_prompt_image_size=MAX_IMAGE_BYTES + 1)
+    )
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is True
+
+
+def test_check_ready_false_when_provider_max_image_size_unspecified(monkeypatch):
+    # SDK 1.0.11 does not document "missing means unlimited"; a missing
+    # value is unknown/incompatible, not permissive - fails closed.
+    provider, client = _provider_with_capability(full_vision_capabilities(max_prompt_image_size=None))
+    _install_fake_client(monkeypatch, client)
+
+    assert asyncio.run(provider.check_ready()) is False
 
 
 def test_check_ready_false_when_no_supported_media_types_reported(monkeypatch):

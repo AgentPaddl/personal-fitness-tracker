@@ -237,12 +237,11 @@ def _vision_route_is_fully_supported(model: Any) -> bool:
       (``SUPPORTED_IMAGE_MEDIA_TYPES``).
     - ``capabilities.limits.vision.max_prompt_images`` must be present and
       at least 1.
-    - ``capabilities.limits.vision.max_prompt_image_size``, if present,
-      must be at least our own ``MAX_IMAGE_BYTES``; if the SDK does not
-      report this field at all, it is treated as "no advertised limit"
-      (not a fail-closed case), since that mirrors how every other
-      optional numeric SDK limit already behaves elsewhere in this
-      codebase (e.g. ``ModelLimits.max_prompt_tokens``).
+    - ``capabilities.limits.vision.max_prompt_image_size`` must be present
+      and at least our own ``MAX_IMAGE_BYTES``. SDK 1.0.11 does not
+      document a "missing means unlimited" semantic for this field, so a
+      missing value is treated as unknown/incompatible, not permissive -
+      readiness fails closed rather than assuming compatibility.
 
     Any other missing/ambiguous field (no vision limits object at all, no
     reported supported media types, no reported max_prompt_images) fails
@@ -272,7 +271,7 @@ def _vision_route_is_fully_supported(model: Any) -> bool:
         return False
 
     max_prompt_image_size = getattr(vision_limits, "max_prompt_image_size", None)
-    if max_prompt_image_size is not None and max_prompt_image_size < MAX_IMAGE_BYTES:
+    if max_prompt_image_size is None or max_prompt_image_size < MAX_IMAGE_BYTES:
         return False
 
     return True

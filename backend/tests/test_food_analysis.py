@@ -5,7 +5,13 @@ import pytest
 
 from api.food_analysis import food_analysis
 from gateway_client import GatewayClient, GatewayClientError
-from tests.image_fixtures import make_truncated_jpeg_bytes, make_valid_jpeg_bytes, make_valid_png_bytes
+from tests.image_fixtures import (
+    make_tail_truncated_jpeg_bytes,
+    make_tail_truncated_png_bytes,
+    make_truncated_jpeg_bytes,
+    make_valid_jpeg_bytes,
+    make_valid_png_bytes,
+)
 
 _BOUNDARY = "test-boundary-123"
 _VALID_JPEG_BYTES = make_valid_jpeg_bytes()
@@ -352,6 +358,26 @@ def test_food_analysis_rejects_truncated_corrupt_jpeg():
 def test_food_analysis_rejects_truncated_corrupt_png():
     response = food_analysis(
         _multipart_request(image_bytes=make_truncated_jpeg_bytes()[:5] + b"\x00" * 15, mime_type="image/png")
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_rejects_jpeg_tail_truncated_by_tens_of_bytes():
+    # Structurally valid headers (would pass Image.verify() alone), but
+    # missing scan data/EOI near the end - only caught by a full decode.
+    response = food_analysis(_multipart_request(image_bytes=make_tail_truncated_jpeg_bytes()))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_content_invalid"
+
+
+def test_food_analysis_rejects_png_tail_truncated_by_a_few_bytes():
+    # Missing only a few trailing bytes of the IEND chunk; pixel data is
+    # intact, so this is only caught by an explicit completeness check.
+    response = food_analysis(
+        _multipart_request(image_bytes=make_tail_truncated_png_bytes(), mime_type="image/png")
     )
 
     assert response.status_code == 400

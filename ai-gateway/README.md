@@ -68,11 +68,15 @@ specific id is available. Image analysis (`food_image_v1`) requires a
 **vision-capable** model; `/readyz` fails if the configured model does not
 report, via the SDK's own `list_models()` capability data: vision support,
 `supported_media_types` covering both `image/jpeg` and `image/png`,
-`max_prompt_images >= 1`, and (if reported at all) a `max_prompt_image_size`
-at least as large as this gateway's own 3 MiB image limit. Any missing or
-ambiguous capability field fails closed rather than assuming compatibility
-- it never silently proceeds with, or routes to, a different model. As of
-2026-08-29, `gpt-5-mini` is verified to satisfy all of these.
+`max_prompt_images >= 1`, and an explicit, numeric `max_prompt_image_size`
+at least as large as this gateway's own 3 MiB image limit. SDK 1.0.11 does
+not document a "missing means unlimited" semantic for `max_prompt_image_size`
+(or any other capability field checked here) - a missing/`None` value is
+treated as unknown/incompatible, not permissive, and any missing or
+ambiguous capability field fails closed rather than assuming compatibility.
+It never silently proceeds with, or routes to, a different model. As of
+2026-08-29, `gpt-5-mini` is verified to satisfy all of these (its reported
+`max_prompt_image_size` is exactly 3145728 bytes = 3 MiB).
 
 `GET /readyz` validates that the configured model id is actually returned
 by the CLI's `list_models()` and that the CLI reports an authenticated

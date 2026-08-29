@@ -3,7 +3,13 @@ from fastapi.testclient import TestClient
 from app.dependencies import get_food_analysis_use_case
 from app.errors import ProviderOutputInvalidError, ProviderTimeoutError, ProviderUnavailableError
 from app.main import create_app
-from tests.image_fixtures import make_truncated_jpeg_bytes, make_valid_jpeg_bytes, make_valid_png_bytes
+from tests.image_fixtures import (
+    make_tail_truncated_jpeg_bytes,
+    make_tail_truncated_png_bytes,
+    make_truncated_jpeg_bytes,
+    make_valid_jpeg_bytes,
+    make_valid_png_bytes,
+)
 
 import base64
 
@@ -221,6 +227,32 @@ def test_food_analysis_rejects_truncated_corrupt_jpeg(client):
     response = client.post(
         "/v1/food-analysis",
         json={"image": {"media_type": "image/jpeg", "data_base64": truncated_base64}},
+    )
+
+    assert response.status_code == 422
+
+
+def test_food_analysis_rejects_jpeg_tail_truncated_by_tens_of_bytes(client):
+    # Structurally valid headers (would pass Image.verify() alone), but
+    # missing scan data/EOI near the end - only caught by a full decode.
+    truncated_base64 = base64.b64encode(make_tail_truncated_jpeg_bytes()).decode("ascii")
+
+    response = client.post(
+        "/v1/food-analysis",
+        json={"image": {"media_type": "image/jpeg", "data_base64": truncated_base64}},
+    )
+
+    assert response.status_code == 422
+
+
+def test_food_analysis_rejects_png_tail_truncated_by_a_few_bytes(client):
+    # Missing only a few trailing bytes of the IEND chunk; pixel data is
+    # intact, so this is only caught by an explicit completeness check.
+    truncated_base64 = base64.b64encode(make_tail_truncated_png_bytes()).decode("ascii")
+
+    response = client.post(
+        "/v1/food-analysis",
+        json={"image": {"media_type": "image/png", "data_base64": truncated_base64}},
     )
 
     assert response.status_code == 422
