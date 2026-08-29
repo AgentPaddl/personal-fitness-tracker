@@ -23,10 +23,13 @@ struct NutritionView: View {
     @State private var fat = ""
     @State private var notes = ""
     @State private var selectedEntryToEdit: FoodEntry?
-    @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel()
+    @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel(
+        tokenProvider: EntraAuthService.configuredProviderOrNil()
+    )
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var isLoadingPickedPhoto = false
     @State private var isCameraSheetPresented = false
+    @State private var showsLongRunningAnalysisHint = false
     private let isCameraHardwareAvailable = UIImagePickerController.isSourceTypeAvailable(.camera)
 
     var body: some View {
@@ -165,11 +168,21 @@ struct NutritionView: View {
                     if foodAnalysisViewModel.isAnalyzing {
                         HStack {
                             ProgressView()
-                            Text("Analysiere…")
+                            Text(showsLongRunningAnalysisHint ? "Das Essen wird analysiert …" : "Analysiere…")
                                 .foregroundStyle(.secondary)
+                        }
+                        .task {
+                            // Neutral, non-percentage hint for a real Copilot
+                            // call (typically tens of seconds) - avoids
+                            // implying false progress.
+                            try? await Task.sleep(nanoseconds: 5_000_000_000)
+                            if foodAnalysisViewModel.isAnalyzing {
+                                showsLongRunningAnalysisHint = true
+                            }
                         }
                     } else {
                         Button("Analysieren") {
+                            showsLongRunningAnalysisHint = false
                             Task { await foodAnalysisViewModel.analyze() }
                         }
                         .disabled(
@@ -184,6 +197,13 @@ struct NutritionView: View {
                         Text(errorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
+
+                        if foodAnalysisViewModel.lastError?.isRetryEligible == true {
+                            Button("Erneut versuchen") {
+                                Task { await foodAnalysisViewModel.analyze() }
+                            }
+                            .disabled(foodAnalysisViewModel.isAnalyzing)
+                        }
                     }
                 }
 

@@ -12,7 +12,8 @@ import asyncio
 
 from pydantic import ValidationError
 
-from app.errors import GatewayError, ProviderOutputInvalidError, ProviderTimeoutError, ProviderUnavailableError
+from app.errors import GatewayError, ProviderOutputInvalidError, ProviderTimeoutError, ProviderUnavailableError, ServiceSaturatedError
+from app.concurrency import ConcurrencyLimiter
 from app.providers.base import Attachment, GenerationMessage, StructuredGenerationRequest, StructuredGenerationProvider
 from app.schemas.food_analysis import FoodAnalysisEstimate, FoodAnalysisRequest, FoodAnalysisResponse
 
@@ -43,13 +44,25 @@ class FoodAnalysisUseCase:
         timeout_seconds: float,
         model_purpose: str,
         image_model_purpose: str = "food_image_v1",
+        concurrency_limiter: ConcurrencyLimiter | None = None,
     ):
         self._provider = provider
         self._timeout_seconds = timeout_seconds
         self._model_purpose = model_purpose
         self._image_model_purpose = image_model_purpose
+        self._concurrency_limiter = concurrency_limiter
 
     async def execute(self, request: FoodAnalysisRequest) -> FoodAnalysisResponse:
+        if self._concurrency_limiter is not None:
+            if not await self._concurrency_limiter.try_acquire():
+                raise ServiceSaturatedError()
+            try:
+                return await self._execute_unlimited(request)
+            finally:
+                await self._concurrency_limiter.release()
+        return await self._execute_unlimited(request)
+
+    async def _execute_unlimited(self, request: FoodAnalysisRequest) -> FoodAnalysisResponse:
         has_image = request.image is not None
         generation_request = StructuredGenerationRequest(
             model_purpose=self._image_model_purpose if has_image else self._model_purpose,

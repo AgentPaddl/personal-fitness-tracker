@@ -26,26 +26,36 @@ _UPSTREAM_CODE_TO_BACKEND: dict[str, tuple[str, int]] = {
     "provider_timeout": ("gateway_timeout", 504),
     "provider_rate_limited": ("gateway_rate_limited", 429),
     "provider_unavailable": ("gateway_service_unavailable", 503),
+    "service_saturated": ("gateway_saturated", 503),
 }
 
 _BACKEND_MESSAGES: dict[str, str] = {
     "gateway_timeout": "The AI gateway did not respond in time.",
     "gateway_rate_limited": "The AI provider is currently rate limited. Try again later.",
     "gateway_service_unavailable": "The AI gateway or provider is currently unavailable.",
+    "gateway_saturated": "The AI gateway is at its concurrent request limit. Try again shortly.",
     "gateway_upstream_error": "The AI gateway reported an error.",
     "gateway_unreachable": "The AI gateway is unreachable.",
     "gateway_invalid_response": "The AI gateway returned an invalid response.",
 }
 
+#: Sanitized bounds for a Retry-After value we are willing to forward.
+#: Never trusts an arbitrary/huge/negative value from the gateway.
+_MIN_RETRY_AFTER_SECONDS = 1
+_MAX_RETRY_AFTER_SECONDS = 60
+
 
 class GatewayClientError(Exception):
     """Normalized error raised when the gateway cannot fulfil a request."""
 
-    def __init__(self, code: str, http_status: int, message: str | None = None):
+    def __init__(
+        self, code: str, http_status: int, message: str | None = None, retry_after_seconds: int | None = None
+    ):
         super().__init__(message or _BACKEND_MESSAGES.get(code, "Gateway request failed."))
         self.code = code
         self.http_status = http_status
         self.message = message or _BACKEND_MESSAGES.get(code, "Gateway request failed.")
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _safe_parse_upstream_error_code(response: httpx.Response) -> str | None:
@@ -69,6 +79,25 @@ def _safe_parse_upstream_error_code(response: httpx.Response) -> str | None:
     return code if isinstance(code, str) else None
 
 
+def _safe_parse_retry_after(response: httpx.Response) -> int | None:
+    """Best-effort, never-raising, bounded extraction of a Retry-After
+    value. Never trusts an out-of-bounds/malformed value - the caller must
+    never invent its own provider-specific timing, but forwarding an
+    upstream value unbounded would be just as untrustworthy.
+    """
+
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = int(raw)
+    except ValueError:
+        return None
+    if not (_MIN_RETRY_AFTER_SECONDS <= seconds <= _MAX_RETRY_AFTER_SECONDS):
+        return None
+    return seconds
+
+
 class GatewayClient:
     def __init__(
         self,
@@ -76,10 +105,19 @@ class GatewayClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
         client: httpx.Client | None = None,
+        service_token: str | None = None,
+        request_id: str | None = None,
     ):
         # ``client`` allows tests to inject a fully-configured httpx.Client
         # (e.g. Starlette's TestClient) that talks to the gateway in-process.
         self._client = client or httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
+        self._headers: dict[str, str] = {}
+        if service_token:
+            # Proves to the gateway this call came from the backend, not an
+            # arbitrary caller - the gateway is never a public API.
+            self._headers["X-Service-Token"] = service_token
+        if request_id:
+            self._headers["X-Request-Id"] = request_id
 
     def analyze_food_text(self, food_description: str) -> dict[str, Any]:
         return self._post_and_handle({"food_description": food_description})
@@ -100,7 +138,7 @@ class GatewayClient:
 
     def _post_and_handle(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = self._client.post("/v1/food-analysis", json=payload)
+            response = self._client.post("/v1/food-analysis", json=payload, headers=self._headers)
         except httpx.TimeoutException as exc:
             raise GatewayClientError("gateway_timeout", 504) from exc
         except httpx.RequestError as exc:
@@ -111,7 +149,9 @@ class GatewayClient:
             backend_code, backend_status = _UPSTREAM_CODE_TO_BACKEND.get(
                 upstream_code, ("gateway_upstream_error", 502)
             )
-            raise GatewayClientError(backend_code, backend_status)
+            raise GatewayClientError(
+                backend_code, backend_status, retry_after_seconds=_safe_parse_retry_after(response)
+            )
 
         try:
             data = response.json()

@@ -41,9 +41,10 @@ These instructions apply to everything under `ios/`.
 
 - Configured via `FoodAnalysisKit.APIConfiguration.resolveBackendBaseURL()`, which returns a `Result` and never silently substitutes a fallback host for an explicitly-set but invalid/insecure/malformed value.
 - **Simulator**: leave `API_BASE_URL` unset to use the recognized local-development default `http://127.0.0.1:7071/api` (the Simulator shares the Mac's network namespace, so loopback reaches `func start` directly). This default only compiles in for Simulator builds (`#if targetEnvironment(simulator)`); a device build with no override fails closed with a clear configuration error instead of silently trying `127.0.0.1` (which would just be the device itself).
-- **Physical device**: set `API_BASE_URL` explicitly on the app's Xcode scheme (Product > Scheme > Edit Scheme... > Run > Arguments > Environment Variables) to the Mac's reachable LAN address, e.g. `http://192.168.1.23:7071`. Plain `http://` is only accepted for loopback and private-LAN hosts (`10.x`, `172.16-31.x`, `192.168.x`); anything else must use `https://`.
-- **Production-like/public endpoints**: must use `https://`.
+- **Physical device (Debug builds only)**: set `API_BASE_URL` explicitly on the app's Xcode scheme (Product > Scheme > Edit Scheme... > Run > Arguments > Environment Variables) to the Mac's reachable LAN address, e.g. `http://192.168.1.23:7071`. Plain `http://` is only accepted for loopback and private-LAN hosts (`10.x`, `172.16-31.x`, `192.168.x`) **in Debug builds** (`#if DEBUG`); anything else, or any Release build regardless of host, must use `https://`.
+- **Production/Release builds**: must use `https://` unconditionally - the LAN-IP HTTP development exception is compiled out of Release builds entirely (`allowsInsecureLocalDevelopmentHost` is `false` outside `#if DEBUG`), so a leftover development URL can never silently reach production.
 - **Path**: only no path, `/`, `/api`, or `/api/` are accepted (all normalized to `/api`); any other path (e.g. `/staging`), a query string, or a fragment is rejected outright rather than silently appended to or truncated.
+- **Authentication token**: the iOS app does not send a static backend secret. It uses a short-lived Microsoft Entra ID access token via `AccessTokenProviding` and sends it as `Authorization: Bearer <token>` in `FoodAnalysisService`. The real implementation is the app-layer `EntraAuthService` placeholder (`ios/Trainingsplan/EntraAuthService.swift`), which reads non-secret public config values (tenant ID, client ID, scope, redirect URI) from Info.plist. Until the real MSAL integration is configured and live, the app intentionally supplies `nil`/no provider and sends no `Authorization` header, preserving the existing local-development behavior exactly. A production build must not contain a client secret or a static backend API key; it relies on Entra ID + Azure App Service Authentication (Easy Auth) instead.
 
 ## Physical-device requirements (three distinct things)
 
@@ -54,6 +55,13 @@ Getting a physical iPhone to reach the local backend requires all three of the f
 3. **`API_BASE_URL`** pointing to the Mac's actual reachable LAN address (see previous section) - `127.0.0.1`/`localhost` only ever works from the Simulator (it shares the Mac's loopback); a physical device talking to `127.0.0.1` is talking to itself, not your Mac.
 
 All three are development-only conveniences; production/non-local endpoints remain HTTPS-only and are unaffected by any of them.
+
+## Timeout hierarchy and long-running UX
+
+- `FoodAnalysisService.timeoutInterval` defaults to 110s - above the recommended production backend (100s) and gateway (90s) timeouts (see `backend/AGENTS.md`'s table), so this outermost layer never aborts before an inner layer's own normalized timeout error can return.
+- While `isAnalyzing`, `NutritionView` shows the existing spinner with "Analysiere…"; after 5 seconds it switches to a neutral "Das Essen wird analysiert …" without any fake percentage progress, since real Copilot calls typically take tens of seconds.
+- No request cancellation is implemented (the task explicitly allows omitting it if it can't be added safely without inconsistent state; a same-request duplicate-submission guard already exists via `isAnalyzing` and is preserved).
+- On a retry-eligible failure (`FoodAnalysisError.isRetryEligible`: connectivity, backend-unavailable, rate-limited, timeout, or generic analysis failure - not input/configuration problems), an explicit "Erneut versuchen" button appears next to the error text and re-calls `analyze()`; there is no automatic/silent retry of an AI request.
 
 ## Validation
 

@@ -177,11 +177,56 @@ pytest
 
 Configuration names are documented in `.env.example`. Copy that file to an untracked `.env` only on the server/development machine and supply real values there. No credentials belong in this repository.
 
+## Timeout hierarchy
+
+`AI_PROVIDER_TIMEOUT_SECONDS` (gateway) must stay strictly below the backend's `AI_GATEWAY_TIMEOUT_SECONDS`, which must stay strictly below the iOS client's request timeout - otherwise an outer layer aborts before this gateway's own normalized timeout error can ever be returned. Recommended production values: gateway 90s < backend 100s < iOS 110s. See `backend/AGENTS.md` for the full table.
+
+## Concurrency limit
+
+`AI_PROVIDER_MAX_CONCURRENCY` (default 2) caps simultaneous Copilot CLI sessions via a fail-fast in-memory counter (`app/concurrency.py`) - never a queue. A request beyond the limit gets an immediate `503 service_saturated` rather than waiting or being buffered.
+
+## Production deployment (Azure Container Apps)
+
+A `Dockerfile` is provided, targeting Azure Container Apps. It has **not**
+been built or deployed in this repository (no Docker available in the
+authoring environment) - treat it as a documented starting point that
+needs verification before real use, not a proven artifact.
+
+- **Runtime**: Python 3.13, matching local development.
+- **Copilot CLI**: fetched at *build* time (`python -m copilot download-runtime`
+  in the `Dockerfile`) so the running container has no first-request
+  download dependency.
+- **Authentication with Copilot**: the interactive `copilot`/`/login`
+  device-code flow used for local development has no headless equivalent.
+  A deployed container **must** use `COPILOT_GITHUB_TOKEN` (a
+  non-interactive, server-to-server GitHub token with the "Copilot
+  Requests" permission), injected as a Container Apps secret/environment
+  variable - never baked into the image.
+- **Persistent storage**: none required. `COPILOT_GITHUB_TOKEN`-based auth
+  needs no session persisted across restarts; the CLI's own runtime
+  state/logs live under `$HOME` in the container's default ephemeral,
+  writable filesystem.
+- **Startup/readiness**: the app fails closed at import time
+  (`app.config.Settings.validate()`) on any invalid/missing required
+  production configuration (`GATEWAY_SERVICE_TOKEN`, a valid
+  `COPILOT_MODEL_ROUTES_JSON`, etc.). `GET /readyz` additionally verifies
+  real Copilot auth and vision-capable model routing without a billed call.
+- **Graceful shutdown**: the FastAPI lifespan hook (`app/main.py`) closes
+  the long-lived `CopilotClient`/CLI process on shutdown.
+- **Memory**: budget at least 512Mi; image requests hold a decoded payload
+  up to `MAX_IMAGE_BYTES` (3 MiB) plus normal Pillow/model-call overhead,
+  multiplied by `AI_PROVIDER_MAX_CONCURRENCY` in the worst case.
+- **Network isolation**: the gateway is never a public, client-facing API.
+  Restrict Container Apps ingress to the backend only (internal ingress /
+  a private endpoint / VNet integration) - `GATEWAY_SERVICE_TOKEN` is
+  defense-in-depth on top of that network boundary, not a substitute for it.
+
 ## Remaining work for production (Azure)
 
-This phase only prepares the code to run the real Copilot SDK provider
-locally. Not yet decided/implemented: the production authentication
-mechanism (device flow vs. server-to-server installation token vs. another
-documented option), container packaging for Azure Container Apps, secret
-storage (e.g. Key Vault/managed identity), and network isolation for the
-Copilot CLI process in a deployed environment.
+This phase prepares the code and container image to run the real Copilot
+SDK provider in production, but does not perform a real deployment. Not
+yet done: actually building/pushing the container image, provisioning the
+Container Apps environment, configuring secrets (Key Vault/managed
+identity vs. plain Container Apps secrets), configuring restricted
+ingress/networking, and a real end-to-end smoke test against a deployed
+instance.

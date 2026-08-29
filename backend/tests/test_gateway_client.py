@@ -209,3 +209,54 @@ def test_analyze_food_image_normalizes_gateway_error():
 
     assert excinfo.value.code == "gateway_timeout"
     assert excinfo.value.http_status == 504
+
+
+def test_analyze_food_text_maps_service_saturated_to_gateway_saturated_503():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"code": "service_saturated", "message": "upstream detail"}},
+            headers={"Retry-After": "2"},
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.code == "gateway_saturated"
+    assert excinfo.value.http_status == 503
+    assert excinfo.value.retry_after_seconds == 2
+    assert "upstream detail" not in excinfo.value.message
+
+
+def test_analyze_food_text_drops_out_of_bounds_retry_after():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"code": "service_saturated"}},
+            headers={"Retry-After": "9999"},
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.retry_after_seconds is None
+
+
+def test_analyze_food_text_drops_malformed_retry_after():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"code": "service_saturated"}},
+            headers={"Retry-After": "not-a-number"},
+        )
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_text("an apple")
+
+    assert excinfo.value.retry_after_seconds is None

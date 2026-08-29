@@ -167,4 +167,40 @@ final class APIConfigurationTests: XCTestCase {
             return XCTFail("Expected .unsupportedPath, got \(result)")
         }
     }
+
+    // MARK: - Production (Release-build) hardening
+
+    func testLocalHTTPHostIsAcceptedWhenLocalDevelopmentHostAllowed() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "http://192.168.1.23:7071",
+            allowsImplicitSimulatorDefault: false,
+            allowsInsecureLocalDevelopmentHost: true
+        )
+
+        XCTAssertEqual(try? result.get(), URL(string: "http://192.168.1.23:7071/api"))
+    }
+
+    func testLocalHTTPHostIsRejectedWhenLocalDevelopmentHostDisallowed() {
+        // Simulates a Release/production build: the LAN-IP HTTP exception
+        // must never apply, regardless of how "local-looking" the host is.
+        let result = APIConfiguration.resolve(
+            rawOverride: "http://192.168.1.23:7071",
+            allowsImplicitSimulatorDefault: false,
+            allowsInsecureLocalDevelopmentHost: false
+        )
+
+        guard case .failure(.insecureSchemeForNonLocalHost) = result else {
+            return XCTFail("Expected .insecureSchemeForNonLocalHost, got \(result)")
+        }
+    }
+
+    func testHTTPSIsAlwaysAcceptedRegardlessOfLocalDevelopmentHostFlag() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com",
+            allowsImplicitSimulatorDefault: false,
+            allowsInsecureLocalDevelopmentHost: false
+        )
+
+        XCTAssertEqual(try? result.get(), URL(string: "https://api.example.com/api"))
+    }
 }

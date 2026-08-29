@@ -14,6 +14,10 @@ class GatewayError(Exception):
 
     code = "gateway_error"
     http_status = 500
+    #: Small, sanitized hint (seconds) for a caller-facing Retry-After
+    #: header. Never provider-specific timing - only ever a small fixed
+    #: value we control ourselves.
+    retry_after_seconds: int | None = None
 
     def __init__(self, message: str = "An unexpected gateway error occurred."):
         super().__init__(message)
@@ -107,6 +111,21 @@ class ProviderOutputInvalidError(GatewayError):
 
     def __init__(self) -> None:
         super().__init__("The AI provider returned output that failed validation.")
+
+
+class ServiceSaturatedError(GatewayError):
+    """Raised when the configured concurrency limit is already in use.
+
+    Fails fast rather than queuing unbounded work in memory: the caller
+    should retry later, not be made to wait indefinitely.
+    """
+
+    code = "service_saturated"
+    http_status = 503
+    retry_after_seconds = 2
+
+    def __init__(self) -> None:
+        super().__init__("The gateway is at its concurrent request limit. Try again shortly.")
 
 
 class InternalGatewayError(GatewayError):

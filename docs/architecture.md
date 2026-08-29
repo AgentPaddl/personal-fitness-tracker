@@ -2,15 +2,15 @@
 
 ## Purpose and current status
 
-This repository contains a private, non-commercial personal fitness and nutrition tracker. The current product consists of an iOS app and a minimal Azure Functions backend. The Personal AI Gateway described below is the target V2 architecture and is **planned, not yet implemented**.
+This repository contains a private, non-commercial personal fitness and nutrition tracker. The current product is an iOS app, an Azure Functions backend, and a Personal AI Gateway that together implement a working end-to-end food-analysis feature (text and image) against the real GitHub Copilot SDK. Production deployment (an actual Azure rollout) has **not** been performed; Phase 6 (below) prepares the application-level configuration/hardening for it without doing the deployment itself.
 
 ## Current monorepo layout
 
 | Path | Current responsibility | Status |
 | --- | --- | --- |
-| `ios/` | SwiftUI client and local SwiftData persistence | Working application |
-| `backend/` | Azure Functions Python 3.13 application API | Working `GET /api/health` endpoint only |
-| `ai-gateway/` | Future provider-independent server-side AI boundary | Placeholder; no AI runtime implemented |
+| `ios/` | SwiftUI client and local SwiftData persistence | Working application, incl. text/photo/camera food analysis |
+| `backend/` | Azure Functions Python 3.13 application API | Working `GET /api/health`, `GET /api/readiness`, `POST /api/food-analysis` (text + image) |
+| `ai-gateway/` | Provider-independent server-side AI boundary | Working FastAPI app with the real `GitHubCopilotProvider`; not yet deployed to Azure |
 | `docs/` | Architecture and migration documentation | Active documentation |
 | `.github/` | Repository-wide agent/Copilot guidance | Active guidance |
 
@@ -138,24 +138,55 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 - Unit tests mock the SDK client boundary and require no credentials; an opt-in integration/smoke test (`RUN_COPILOT_INTEGRATION_TESTS=1`) exercises the real CLI and is never run in normal CI/local test runs. `trsdn/github_copilot_openai_api_wrapper` is not part of this plan.
 - Remaining for production: Azure Container Apps packaging, a chosen production auth mechanism (server-to-server token vs. another documented option), secret storage, and network isolation for the CLI process.
 
-### Phase 4 — food analysis workflow (text and image analysis; image on feature branch, not yet merged)
+### Phase 4 — food analysis workflow (text and image analysis; both merged to `main`)
 
 - Implemented the iOS text food-analysis flow: `NutritionView` lets the user type a natural-language description, calls the backend's `POST /api/food-analysis` via a local Swift package (`ios/FoodAnalysisKit`), and presents an editable review sheet (`FoodAnalysisReviewView`) before any persistence.
 - The app only ever talks to our own backend's public JSON contract; it has no knowledge of the Personal AI Gateway, GitHub Copilot, model ids, or provider routing.
 - `FoodEntry` (existing SwiftData model) is created only after explicit user confirmation of the reviewed values; cancelling/dismissing the review never persists anything. No SwiftData schema change was made.
-- **Image analysis (`feature/v2-ios-food-image-analysis`, not yet merged):** extends the same flow with photo input, reusing the identical review/persistence UI and the same structured estimate contract.
-  - iOS: `PhotosPicker`-based selection (camera capture intentionally deferred - see `ios/AGENTS.md`), client-side preprocessing (`FoodImagePreprocessor`: resize to a max 1280px side, re-encode as JPEG at quality 0.7, which also strips EXIF/GPS since the source's properties are never copied to the re-encoded output), then upload via `FoodAnalysisService.analyzeImage`.
+- **Image analysis (merged):** extends the same flow with photo input, reusing the identical review/persistence UI and the same structured estimate contract.
+  - iOS: `PhotosPicker` or camera capture (`UIImagePickerController` bridge) selection, client-side preprocessing (`FoodImagePreprocessor`: EXIF-orientation-corrected resize to a max 1280px side via ImageIO's thumbnail API, deterministic quality/dimension fallback to fit a 3 MiB limit, re-encoded as JPEG, which also strips EXIF/GPS since the source's properties are never copied to the re-encoded output), then upload via `FoodAnalysisService.analyzeImage`.
   - Backend: `POST /api/food-analysis` now also accepts `multipart/form-data` (`image` file field, required; optional `food_description` text field), validated for MIME type (`image/jpeg`, `image/png` only), non-empty payload, and a 3 MiB size cap (chosen to fit the configured vision model's advertised max prompt image size), then forwarded to the gateway as an inline base64 payload over the existing internal JSON contract.
   - Gateway: `FoodAnalysisRequest` now accepts `food_description`, `image`, or both (at least one required); `FoodAnalysisUseCase` builds a generic `Attachment` and routes image requests to a separate, vision-specific model purpose (`FOOD_IMAGE_MODEL_PURPOSE`, default `food_image_v1`) rather than the text purpose, so an image call is never silently sent to a non-vision model.
   - `GitHubCopilotProvider` translates the generic attachment into the SDK's inline `BlobAttachment` (base64, no temporary files) and rejects unsupported attachment kinds/empty payloads before ever creating a session. `check_ready()` additionally verifies, via the SDK's own `list_models()` capability data, that any route required for image analysis actually supports vision (`gpt-5-mini` verified vision-capable via a real Copilot session on 2026-08-29).
   - The output schema, bounds, and review/persistence flow are unchanged from text analysis; no new SwiftData model or migration was introduced.
 - Verify privacy controls, failure handling, and observability without sensitive-payload logging.
 
-### Phase 5 — expansion and provider portability
+### Phase 5 — expansion and provider portability (future, not started)
 
 - Add activity/training assistance and other personal AI services as separate domain contracts.
 - Add or switch providers through adapters and server-side routing without iOS provider changes.
 - Revisit schemas, privacy controls, and data migrations incrementally with each use case.
+
+### Phase 6 — production hardening (`feature/v2-production-hardening`, not yet merged; no real Azure deployment performed)
+
+Adds no new AI capability; hardens the existing text/image food-analysis system for reliable ongoing personal use.
+
+- **Authentication**: the accepted production design is Microsoft Entra ID via MSAL on the iOS native client, then Azure App Service Authentication / Easy Auth on the public backend. The backend does not accept a static shared secret from the app; it only trusts Azure-injected Easy Auth identity headers when `EASY_AUTH_ENABLED=true` and `APP_ENV != development`. A separate server-to-server secret still remains for backend -> gateway (`GATEWAY_SERVICE_TOKEN`, `X-Service-Token`), because the gateway is never a public client-facing API. No GitHub/Copilot credential ever exists in the iOS app or is committed to git.
+- **iOS auth**: a real production app must acquire a short-lived Entra access token via MSAL or a supported equivalent, send it as `Authorization: Bearer <token>`, and rely on the backend's App Service Authentication to validate it before the app reaches backend business logic. Until an MSAL integration is configured, the app intentionally keeps a placeholder `EntraAuthService` with no secret material and does not attempt an app-side static API key.
+- **Gateway deployment**: a `Dockerfile` (Python 3.13, Copilot CLI runtime pre-fetched at build time, `COPILOT_GITHUB_TOKEN`-based auth since the interactive `/login` flow has no headless equivalent) targets Azure Container Apps but has not been built/deployed here (no Docker available in the authoring environment) - see `ai-gateway/README.md`'s deployment section for the full runtime/memory/networking requirements.
+- **Networking**: production `AI_GATEWAY_BASE_URL` must be an explicit, non-`localhost`, `https://` URL (`backend/config.py` fails closed otherwise). Intended topology: `iPhone native client -> Microsoft Entra ID via MSAL -> Azure Functions with App Service Authentication / Easy Auth -> private/restricted gateway -> Copilot CLI runtime (never exposed)`. Only the backend is a public endpoint.
+- **Timeout hierarchy**: gateway `AI_PROVIDER_TIMEOUT_SECONDS` (90s recommended) < backend `AI_GATEWAY_TIMEOUT_SECONDS` (100s) < iOS `FoodAnalysisService.timeoutInterval` (110s, raised from 30s) - see `backend/AGENTS.md`'s table.
+- **Retry UX**: no automatic/silent retries of an AI request. An explicit "Erneut versuchen" button appears only for retry-eligible failures (connectivity, backend-unavailable, rate-limited, timeout); input/configuration failures are not offered a retry action, since retrying the identical request would just fail the same way.
+- **Long-running UX**: the existing spinner is preserved; after 5s it switches to a neutral "Das Essen wird analysiert …" with no fake percentage progress.
+- **Observability**: a request-correlation ID (`X-Request-Id`) is minted by the backend (or reused if the caller already sent one), forwarded to the gateway, echoed in response headers, and included in every error envelope's `request_id` field. Structured, content-free logging (path/use-case/status/latency/error-category) at both layers - never the food description, image bytes, raw model response, or credentials.
+- **Readiness**: `GET /api/readiness` (new, distinct from `GET /api/health`) checks the gateway is actually reachable; `GET /healthz`/`GET /readyz` (gateway) semantics are unchanged (health = process alive, readiness = real Copilot auth/vision-capable model routing verified without a billed call).
+- **Concurrency**: `AI_PROVIDER_MAX_CONCURRENCY` (default 2) is a fail-fast in-memory limiter (`app/concurrency.py`), never an unbounded queue - a request beyond the limit gets an immediate `503 service_saturated`.
+- **Preserved unchanged**: the 3 MiB image limit, JPEG/PNG content validation (full decode + decompression-bomb handling), client-side metadata stripping, `food_text_v1`/`food_image_v1` routing, provider domain-neutrality, `submit_structured_result`-only tool exposure, the exactly-once persistence flow, and all existing SwiftData models/schemas (no changes).
+
+#### Personal production checklist
+
+- [ ] Gateway container built and deployed (Azure Container Apps or equivalent)
+- [ ] Backend (Azure Functions) deployed
+- [ ] Azure App Service Authentication / Easy Auth enabled on the public backend, with Entra ID trust configured and `EASY_AUTH_ENABLED=true`
+- [ ] `GATEWAY_SERVICE_TOKEN` configured identically on both backend and gateway
+- [ ] Production `AI_GATEWAY_BASE_URL` (explicit HTTPS, non-localhost) configured on the backend
+- [ ] Gateway ingress restricted to the backend only (no public gateway exposure)
+- [ ] `COPILOT_GITHUB_TOKEN` (server-to-server) configured as a gateway secret
+- [ ] `COPILOT_MODEL_ROUTES_JSON` configured for both `food_text_v1` and `food_image_v1`, verified vision-capable via `GET /readyz`
+- [ ] Backend `GET /api/health` and `GET /api/readiness` both return healthy/ready against the deployed gateway
+- [ ] Gateway `GET /healthz` and `GET /readyz` both return healthy/ready
+- [ ] iOS production build configured with the deployed HTTPS backend URL and a real Entra ID access-token provider (MSAL or equivalent) that sends `Authorization: Bearer <token>`
+- [ ] Real iPhone smoke test against the deployed stack (text and image, save flow) completed
 
 ## Change and validation policy
 

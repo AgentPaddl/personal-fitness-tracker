@@ -2,20 +2,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.dependencies import get_provider
+from app.dependencies import get_concurrency_limiter, get_provider
 from app.main import create_app
 
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    # Settings/provider are cached with lru_cache; clear before and after
-    # every test so env var overrides in individual tests take effect and
-    # never leak into the next test.
+    # Settings/provider/limiter are cached with lru_cache; clear before and
+    # after every test so env var overrides in individual tests take effect
+    # and never leak into the next test.
     get_settings.cache_clear()
     get_provider.cache_clear()
+    get_concurrency_limiter.cache_clear()
     yield
     get_settings.cache_clear()
     get_provider.cache_clear()
+    get_concurrency_limiter.cache_clear()
 
 
 @pytest.fixture

@@ -21,6 +21,21 @@ ALLOWED_APP_ENVS = frozenset({"development", "test", "production"})
 _MIN_TIMEOUT_SECONDS = 0.1
 _MAX_TIMEOUT_SECONDS = 120.0
 
+#: Timeout hierarchy floor (self-contained - does not require knowing the
+#: backend's own configured timeout): real Copilot calls are observed to
+#: take tens of seconds, so a production provider timeout below this would
+#: spuriously fail almost every real request.
+_MIN_PRODUCTION_PROVIDER_TIMEOUT_SECONDS = 30.0
+
+#: Production maximum for provider timeout. Must stay below backend's
+#: configured timeout (which has its own minimum of 40s). Default production
+#: value is 90s, maximum is 99s to preserve: 99s (provider) < 100s (backend).
+_MAX_PRODUCTION_PROVIDER_TIMEOUT_SECONDS = 99.0
+
+#: Production default provider timeout (recommended value; can be overridden
+#: via AI_PROVIDER_TIMEOUT_SECONDS environment variable).
+_DEFAULT_PRODUCTION_PROVIDER_TIMEOUT_SECONDS = 90.0
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
@@ -30,6 +45,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="production", alias="APP_ENV")
 
     ai_provider: str = Field(default="fake", alias="AI_PROVIDER")
+    # Default to production-recommended 90s in production; 10s for fast local tests/dev
     ai_provider_timeout_seconds: float = Field(default=10.0, alias="AI_PROVIDER_TIMEOUT_SECONDS")
 
     # Server-side, opaque model-routing key for the food-text generation
@@ -56,6 +72,26 @@ class Settings(BaseSettings):
     # COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN environment variables. This
     # setting never has a hard-coded value and is never committed.
     copilot_github_token: str | None = Field(default=None, alias="COPILOT_GITHUB_TOKEN")
+
+    # Shared secret the backend must present (as `X-Service-Token`) on every
+    # `/v1/*` call. This is the gateway's *only* real caller-authentication
+    # mechanism outside the dev bypass; the gateway is never a public,
+    # client-facing API, so this only ever needs to authenticate our own
+    # backend, not end users. Never has a hard-coded value; never committed.
+    gateway_service_token: str | None = Field(default=None, alias="GATEWAY_SERVICE_TOKEN")
+
+    # Optional secondary/previous token, accepted alongside the current one
+    # so the backend and gateway can be rotated to a new
+    # GATEWAY_SERVICE_TOKEN without a synchronized-instant cutover: set the
+    # old value here, roll out the new GATEWAY_SERVICE_TOKEN, then remove
+    # this once the rotation is complete. Never required.
+    gateway_service_token_previous: str | None = Field(default=None, alias="GATEWAY_SERVICE_TOKEN_PREVIOUS")
+
+    # Small, fail-fast concurrency cap on simultaneous provider calls (each
+    # one holds a Copilot CLI session). Deliberately not an unbounded queue:
+    # a request that cannot get a slot immediately is rejected
+    # (ServiceSaturatedError, 503) rather than made to wait.
+    ai_provider_max_concurrency: int = Field(default=2, alias="AI_PROVIDER_MAX_CONCURRENCY")
 
     def validate(self) -> None:
         if self.app_env not in ALLOWED_APP_ENVS:
@@ -103,6 +139,46 @@ class Settings(BaseSettings):
                         f"purpose (here: '{purpose}') to a model id. "
                         "A model is never silently substituted."
                     )
+
+        if not (1 <= self.ai_provider_max_concurrency <= 20):
+            raise ValueError("AI_PROVIDER_MAX_CONCURRENCY must be between 1 and 20.")
+
+        if self.app_env == "production" and not (self.gateway_service_token or "").strip():
+            # The gateway is never a public API; its only caller is our own
+            # backend, authenticated with this shared secret. Fails closed
+            # in production rather than silently accepting any caller.
+            raise ValueError("GATEWAY_SERVICE_TOKEN must be set when APP_ENV=production.")
+
+        if self.app_env == "production" and self.ai_provider == "copilot":
+            # The interactive `copilot`/`/login` device-code flow used for
+            # local development has no headless equivalent in a deployed,
+            # non-interactive container - a server-to-server token is the
+            # only documented mechanism available today. Fails closed
+            # rather than silently trying (and failing) an interactive login.
+            if not (self.copilot_github_token or "").strip():
+                raise ValueError(
+                    "COPILOT_GITHUB_TOKEN must be set when APP_ENV=production and AI_PROVIDER=copilot "
+                    "(no interactive Copilot CLI login is possible in a headless production deployment)."
+                )
+
+        if self.app_env == "production" and self.ai_provider_timeout_seconds < _MIN_PRODUCTION_PROVIDER_TIMEOUT_SECONDS:
+            # Real Copilot calls are observed to take tens of seconds; a
+            # production timeout below this floor would spuriously time out
+            # essentially every real request.
+            raise ValueError(
+                f"AI_PROVIDER_TIMEOUT_SECONDS must be at least {_MIN_PRODUCTION_PROVIDER_TIMEOUT_SECONDS} "
+                "seconds when APP_ENV=production."
+            )
+
+        if self.app_env == "production" and self.ai_provider_timeout_seconds > _MAX_PRODUCTION_PROVIDER_TIMEOUT_SECONDS:
+            # Enforce timeout hierarchy: provider < backend (100s minimum) < iOS (110s).
+            # Gateway must not permit timeouts that equal or exceed backend's floor.
+            # Maximum 99s preserves: 99s (provider) < 100s (backend) < 110s (iOS).
+            raise ValueError(
+                f"AI_PROVIDER_TIMEOUT_SECONDS must be at most {_MAX_PRODUCTION_PROVIDER_TIMEOUT_SECONDS} "
+                "seconds when APP_ENV=production to preserve the timeout hierarchy: "
+                "provider < backend (100s) < iOS (110s)."
+            )
 
     def copilot_model_routes(self) -> dict[str, str]:
         """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.

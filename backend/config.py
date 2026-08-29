@@ -11,9 +11,29 @@ DEFAULT_GATEWAY_TIMEOUT_SECONDS = 10.0
 _MIN_TIMEOUT_SECONDS = 0.1
 _MAX_TIMEOUT_SECONDS = 120.0
 
+#: Production minimum for backend→gateway timeout. Must stay at/above the
+#: gateway's own production ceiling (99s, provider timeout) so a
+#: slow-but-successful gateway call is never cut off first. 100s preserves:
+#: 99s (gateway→provider max) < 100s (backend→gateway min).
+_MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 100.0
+
+#: Production maximum for backend→gateway timeout. Must stay below iOS's
+#: configured request timeout (110s). Default production value is 100s,
+#: maximum is 109s to preserve: 99s (gateway→provider) < 100-109s (backend→gateway) < 110s (iOS).
+_MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 109.0
+
+#: Production default backend→gateway timeout (recommended value; can be
+#: overridden via AI_GATEWAY_TIMEOUT_SECONDS environment variable).
+_DEFAULT_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 100.0
+
 #: Fail-closed by default: only "development" unlocks the food-analysis
 #: route, which has no production authentication yet.
 ALLOWED_APP_ENVS = frozenset({"development", "test", "production"})
+
+#: Hosts that are only ever reachable from the developer's own machine/LAN.
+#: A production deployment must never point at one of these - it would
+#: mean the backend can't actually reach a real, separately-hosted gateway.
+_LOCAL_ONLY_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 class ConfigError(ValueError):
@@ -28,12 +48,37 @@ def is_development_mode() -> bool:
     return get_app_env() == "development"
 
 
+def is_production_mode() -> bool:
+    return get_app_env() == "production"
+
+
 def get_gateway_base_url() -> str:
     return os.environ.get("AI_GATEWAY_BASE_URL", DEFAULT_GATEWAY_BASE_URL)
 
 
 def get_gateway_timeout_seconds() -> float:
     return float(os.environ.get("AI_GATEWAY_TIMEOUT_SECONDS", DEFAULT_GATEWAY_TIMEOUT_SECONDS))
+
+
+def is_easy_auth_enabled() -> bool:
+    """Server-side-only flag, set manually once Easy Auth is actually
+    configured and enforcing ("Require authentication") on the deployed
+    Function App - never inferred from anything a caller sends. See
+    `security.py` and `backend/AGENTS.md`'s Entra setup checklist.
+    """
+
+    return os.environ.get("EASY_AUTH_ENABLED", "false").strip().lower() == "true"
+
+
+def get_gateway_service_token() -> str | None:
+    """Current shared secret forwarded to the gateway as `X-Service-Token`.
+
+    Proves to the gateway that a call came from this backend, not an
+    arbitrary caller - the gateway itself is never a public API. Never has
+    a hard-coded value; never committed.
+    """
+
+    return os.environ.get("GATEWAY_SERVICE_TOKEN") or None
 
 
 def validate_config() -> None:
@@ -53,3 +98,32 @@ def validate_config() -> None:
         raise ConfigError(
             f"AI_GATEWAY_TIMEOUT_SECONDS must be between {_MIN_TIMEOUT_SECONDS} and {_MAX_TIMEOUT_SECONDS}."
         )
+
+    if app_env == "production":
+        # Every production requirement below fails closed: a missing value
+        # is a startup error, never a silently-permissive default.
+        if not get_gateway_service_token():
+            raise ConfigError("GATEWAY_SERVICE_TOKEN must be set when APP_ENV=production.")
+        if (parsed.hostname or "").lower() in _LOCAL_ONLY_HOSTNAMES:
+            raise ConfigError(
+                "AI_GATEWAY_BASE_URL must not be a localhost address when APP_ENV=production; "
+                "the production gateway must be an explicitly configured, separately-hosted URL."
+            )
+        if parsed.scheme != "https":
+            raise ConfigError(
+                "AI_GATEWAY_BASE_URL must use https when APP_ENV=production "
+                "(private networking/HTTPS only - see backend/AGENTS.md)."
+            )
+        if timeout < _MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS:
+            raise ConfigError(
+                f"AI_GATEWAY_TIMEOUT_SECONDS must be at least {_MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS} "
+                "seconds when APP_ENV=production to preserve the timeout hierarchy: "
+                "provider (99s max) < backend (100-109s) < iOS (110s)."
+            )
+
+        if timeout > _MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS:
+            raise ConfigError(
+                f"AI_GATEWAY_TIMEOUT_SECONDS must be at most {_MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS} "
+                "seconds when APP_ENV=production to preserve the timeout hierarchy: "
+                "provider (99s max) < backend (100-109s) < iOS (110s)."
+            )
