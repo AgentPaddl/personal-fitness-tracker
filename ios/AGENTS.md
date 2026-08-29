@@ -30,15 +30,21 @@ These instructions apply to everything under `ios/`.
 
 ## Backend base URL configuration (fail-closed)
 
-- Configured via `FoodAnalysisKit.APIConfiguration.resolveBackendBaseURL()`, which returns a `Result` and never silently substitutes a fallback host for an explicitly-set but invalid/insecure value.
+- Configured via `FoodAnalysisKit.APIConfiguration.resolveBackendBaseURL()`, which returns a `Result` and never silently substitutes a fallback host for an explicitly-set but invalid/insecure/malformed value.
 - **Simulator**: leave `API_BASE_URL` unset to use the recognized local-development default `http://127.0.0.1:7071/api` (the Simulator shares the Mac's network namespace, so loopback reaches `func start` directly). This default only compiles in for Simulator builds (`#if targetEnvironment(simulator)`); a device build with no override fails closed with a clear configuration error instead of silently trying `127.0.0.1` (which would just be the device itself).
 - **Physical device**: set `API_BASE_URL` explicitly on the app's Xcode scheme (Product > Scheme > Edit Scheme... > Run > Arguments > Environment Variables) to the Mac's reachable LAN address, e.g. `http://192.168.1.23:7071`. Plain `http://` is only accepted for loopback and private-LAN hosts (`10.x`, `172.16-31.x`, `192.168.x`); anything else must use `https://`.
 - **Production-like/public endpoints**: must use `https://`.
+- **Path**: only no path, `/`, `/api`, or `/api/` are accepted (all normalized to `/api`); any other path (e.g. `/staging`), a query string, or a fragment is rejected outright rather than silently appended to or truncated.
 
-## Local network / ATS configuration
+## Physical-device requirements (three distinct things)
 
-- `ios/Trainingsplan-Info.plist` (merged into the generated Info.plist via the `INFOPLIST_FILE` build setting, kept outside the synchronized `Trainingsplan/` source folder to avoid a duplicate-resource build conflict) sets exactly one narrow key: `NSAppTransportSecurity.NSAllowsLocalNetworking = true`. This allows plain HTTP only to literal IP-address hosts and `.local` mDNS hostnames (needed for the physical-device LAN scenario above); it does **not** set `NSAllowsArbitraryLoads` and does not relax ATS for ordinary internet domains, which still require HTTPS.
-- `127.0.0.1`/`localhost` only ever works from the Simulator (it shares the Mac's loopback); a physical device talking to `127.0.0.1` is talking to itself, not your Mac.
+Getting a physical iPhone to reach the local backend requires all three of the following; they are independent and easy to conflate:
+
+1. **ATS local-network allowance** (`ios/Trainingsplan-Info.plist`, merged into the generated Info.plist via the `INFOPLIST_FILE` build setting, kept outside the synchronized `Trainingsplan/` source folder to avoid a duplicate-resource build conflict): `NSAppTransportSecurity.NSAllowsLocalNetworking = true`. This is what lets iOS's App Transport Security allow plain HTTP to literal IP-address hosts and `.local` mDNS hostnames at all. It does **not** set `NSAllowsArbitraryLoads` and does not relax ATS for ordinary internet domains, which still require HTTPS.
+2. **iOS Local Network privacy permission**: a separate, user-facing OS permission (distinct from ATS) required for the app to discover/connect to devices on the local network at all; iOS shows a one-time system prompt the first time the app attempts this. Declared via the top-level `NSLocalNetworkUsageDescription` key in `ios/Trainingsplan-Info.plist`, with a concise German description that this is only used to reach the development backend on the user's Mac. Without this key, a physical-device connection to a LAN IP fails/is blocked regardless of the ATS setting above.
+3. **`API_BASE_URL`** pointing to the Mac's actual reachable LAN address (see previous section) - `127.0.0.1`/`localhost` only ever works from the Simulator (it shares the Mac's loopback); a physical device talking to `127.0.0.1` is talking to itself, not your Mac.
+
+All three are development-only conveniences; production/non-local endpoints remain HTTPS-only and are unaffected by any of them.
 
 ## Validation
 

@@ -105,4 +105,66 @@ final class APIConfigurationTests: XCTestCase {
 
         XCTAssertEqual(try? result.get(), URL(string: "https://api.example.com/api"))
     }
+
+    func testPathNormalizationAcceptsRootPath() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com/",
+            allowsImplicitSimulatorDefault: true
+        )
+
+        XCTAssertEqual(try? result.get(), URL(string: "https://api.example.com/api"))
+    }
+
+    func testPathNormalizationAcceptsTrailingSlashOnAPIPath() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com/api/",
+            allowsImplicitSimulatorDefault: true
+        )
+
+        XCTAssertEqual(try? result.get(), URL(string: "https://api.example.com/api"))
+    }
+
+    func testArbitraryPathIsRejected() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com/staging",
+            allowsImplicitSimulatorDefault: true
+        )
+
+        guard case .failure(.unsupportedPath) = result else {
+            return XCTFail("Expected .unsupportedPath, got \(result)")
+        }
+    }
+
+    func testAPIPathWithExtraSegmentIsRejected() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com/api/food-analysis",
+            allowsImplicitSimulatorDefault: true
+        )
+
+        guard case .failure(.unsupportedPath) = result else {
+            return XCTFail("Expected .unsupportedPath, got \(result)")
+        }
+    }
+
+    func testQueryParametersAreRejected() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com/api?debug=1",
+            allowsImplicitSimulatorDefault: true
+        )
+
+        guard case .failure(.unsupportedPath) = result else {
+            return XCTFail("Expected .unsupportedPath, got \(result)")
+        }
+    }
+
+    func testFragmentsAreRejected() {
+        let result = APIConfiguration.resolve(
+            rawOverride: "https://api.example.com/api#section",
+            allowsImplicitSimulatorDefault: true
+        )
+
+        guard case .failure(.unsupportedPath) = result else {
+            return XCTFail("Expected .unsupportedPath, got \(result)")
+        }
+    }
 }

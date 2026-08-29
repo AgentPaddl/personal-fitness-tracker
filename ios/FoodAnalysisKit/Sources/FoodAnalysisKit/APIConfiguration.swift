@@ -13,6 +13,10 @@ public enum APIConfigurationError: Error, Equatable, Sendable {
     /// Plain HTTP was used for a host that isn't a recognized
     /// local-development address; HTTPS is required for anything else.
     case insecureSchemeForNonLocalHost(host: String)
+    /// The path is neither empty/`/` nor `/api`, or the URL has a query
+    /// string or fragment. Only the exact Azure Functions API route
+    /// prefix is accepted - never an arbitrary path.
+    case unsupportedPath(String)
 }
 
 /// Resolves the Fitness API backend's base URL for the food-analysis flow.
@@ -79,7 +83,7 @@ public enum APIConfiguration {
             return .failure(.insecureSchemeForNonLocalHost(host: host))
         }
 
-        return .success(normalizeAPIBasePath(of: url))
+        return normalizeAPIBasePath(of: url)
     }
 
     /// Loopback (Simulator) and common private-LAN ranges (a physical
@@ -98,12 +102,27 @@ public enum APIConfiguration {
         return false
     }
 
-    /// Ensures the URL ends with the Azure Functions `/api` route prefix
-    /// without duplicating it if already present.
-    private static func normalizeAPIBasePath(of url: URL) -> URL {
-        if url.lastPathComponent == "api" {
-            return url
+    /// Accepts only no path, `/`, `/api`, or `/api/` (all normalized to
+    /// `/api`), and rejects any query string or fragment. This is
+    /// deliberately strict - an arbitrary path like `/staging` is not a
+    /// typo-tolerant convenience, it's a different, unintended endpoint.
+    private static func normalizeAPIBasePath(of url: URL) -> Result<URL, APIConfigurationError> {
+        guard url.query == nil, url.fragment == nil else {
+            return .failure(.unsupportedPath(url.absoluteString))
         }
-        return url.appendingPathComponent("api")
+
+        let trimmedPath = url.path.hasSuffix("/") && url.path != "/" ? String(url.path.dropLast()) : url.path
+        guard trimmedPath.isEmpty || trimmedPath == "/" || trimmedPath == "/api" else {
+            return .failure(.unsupportedPath(url.absoluteString))
+        }
+
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return .failure(.unsupportedPath(url.absoluteString))
+        }
+        components.path = "/api"
+        guard let normalized = components.url else {
+            return .failure(.unsupportedPath(url.absoluteString))
+        }
+        return .success(normalized)
     }
 }

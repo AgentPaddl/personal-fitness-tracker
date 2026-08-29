@@ -2,6 +2,7 @@ import XCTest
 
 @testable import FoodAnalysisKit
 
+@MainActor
 private final class StubService: FoodAnalysisServicing {
     var result: Result<FoodAnalysisResponseDTO.Estimate, Error>
     private(set) var callCount = 0
@@ -17,7 +18,10 @@ private final class StubService: FoodAnalysisServicing {
 }
 
 /// Lets a test control exactly when the in-flight network call completes,
-/// to deterministically exercise the duplicate-submission guard.
+/// to deterministically exercise the duplicate-submission guard. Isolated
+/// to `MainActor` (like its only caller) so its mutable state safely
+/// satisfies the `FoodAnalysisServicing: Sendable` requirement.
+@MainActor
 private final class GatedService: FoodAnalysisServicing {
     private(set) var callCount = 0
     private var continuation: CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>?

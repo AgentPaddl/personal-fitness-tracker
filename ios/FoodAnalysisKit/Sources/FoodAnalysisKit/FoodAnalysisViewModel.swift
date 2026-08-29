@@ -94,6 +94,8 @@ public final class FoodAnalysisViewModel: ObservableObject {
             return "Die konfigurierte Backend-Adresse verwendet ein nicht unterstütztes Protokoll."
         case .insecureSchemeForNonLocalHost:
             return "Unverschlüsseltes HTTP ist nur für die lokale Entwicklung erlaubt. Bitte HTTPS verwenden."
+        case .unsupportedPath:
+            return "Die konfigurierte Backend-Adresse enthält einen nicht unterstützten Pfad."
         }
     }
 }
