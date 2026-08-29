@@ -53,21 +53,26 @@ def image_content_matches_declared_type(data: bytes, declared_mime_type: str) ->
     if expected_format is None:
         return False
 
-    try:
-        with Image.open(io.BytesIO(data)) as image:
-            image.verify()
-    except _PILLOW_INVALID_IMAGE_EXCEPTIONS:
-        return False
-
-    # image.verify() leaves the file object unusable for further access,
-    # and critically does not itself force a full pixel decode - it only
-    # checks that the file structure is well-formed, so a file truncated
-    # only near its tail (e.g. missing JPEG scan data/EOI marker) can still
-    # pass it. Re-open and call load() to force an actual full decode,
-    # which is what catches that case.
+    # The whole Pillow validation sequence - including the very first
+    # Image.open()/verify() - runs inside one warnings scope: Pillow can
+    # emit DecompressionBombWarning as early as the initial open, not only
+    # during load(), so scoping it only around the later reopen would let
+    # that warning escape to logs for an untrusted request even though the
+    # image is ultimately rejected either way.
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
+
+            with Image.open(io.BytesIO(data)) as image:
+                image.verify()
+
+            # image.verify() leaves the file object unusable for further
+            # access, and critically does not itself force a full pixel
+            # decode - it only checks that the file structure is
+            # well-formed, so a file truncated only near its tail (e.g.
+            # missing JPEG scan data/EOI marker) can still pass it.
+            # Re-open and call load() to force an actual full decode,
+            # which is what catches that case.
             with Image.open(io.BytesIO(data)) as image:
                 detected_format = image.format
                 image.load()
