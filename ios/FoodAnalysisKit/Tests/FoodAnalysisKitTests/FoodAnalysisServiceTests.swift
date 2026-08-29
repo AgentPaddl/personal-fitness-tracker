@@ -92,6 +92,18 @@ final class FoodAnalysisServiceTests: XCTestCase {
         await assertThrowsFoodAnalysisError(try await service.analyze(description: "x"), .backendUnavailable)
     }
 
+    func testGatewayUnreachableErrorIsMapped() async {
+        let errorJSON = #"{"error": {"code": "gateway_unreachable", "message": "unreachable"}}"#
+            .data(using: .utf8)!
+        let mock = MockPerformer { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+            return (errorJSON, response)
+        }
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+
+        await assertThrowsFoodAnalysisError(try await service.analyze(description: "x"), .backendUnavailable)
+    }
+
     func testDevelopmentModeGateIsMappedToUnauthorized() async {
         // Backend returns 403 "not_implemented" outside APP_ENV=development.
         let mock = MockPerformer { request in

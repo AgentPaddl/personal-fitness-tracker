@@ -80,4 +80,78 @@ final class FoodAnalysisReviewDraftTests: XCTestCase {
 
         XCTAssertNil(draft.validated())
     }
+
+    func testValidatedRejectsNegativeCalories() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.calories = "-50"
+
+        XCTAssertNil(draft.validated())
+    }
+
+    func testValidatedRejectsNegativeMacro() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.protein = "-1"
+
+        XCTAssertNil(draft.validated())
+    }
+
+    func testValidatedRejectsNaN() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.fat = "nan"
+
+        XCTAssertNil(draft.validated())
+    }
+
+    func testValidatedRejectsInfinity() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.carbs = "inf"
+
+        XCTAssertNil(draft.validated())
+    }
+
+    func testValidatedRejectsCaloriesAboveUpperBound() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.calories = "10001"
+
+        XCTAssertNil(draft.validated())
+    }
+
+    func testValidatedRejectsMacroAboveUpperBound() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.fat = "1000.1"
+
+        XCTAssertNil(draft.validated())
+    }
+
+    func testValidatedAcceptsBoundaryValues() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.calories = "10000"
+        draft.protein = "1000"
+        draft.carbs = "0"
+        draft.fat = "0"
+
+        let input = draft.validated()
+
+        XCTAssertEqual(input?.calories, 10000)
+        XCTAssertEqual(input?.proteinGrams, 1000)
+        XCTAssertEqual(input?.carbsGrams, 0)
+        XCTAssertEqual(input?.fatGrams, 0)
+    }
+
+    /// Documents the explicit calories rounding rule: the calories field is
+    /// parsed as a decimal (comma or dot) and rounded to the nearest whole
+    /// number, matching the rounding already applied when the draft is
+    /// first created from an estimate.
+    func testValidatedRoundsCaloriesToNearestWholeNumber() {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+
+        draft.calories = "95.4"
+        XCTAssertEqual(draft.validated()?.calories, 95)
+
+        draft.calories = "95.6"
+        XCTAssertEqual(draft.validated()?.calories, 96)
+
+        draft.calories = "95,5"
+        XCTAssertEqual(draft.validated()?.calories, 96)
+    }
 }

@@ -45,26 +45,49 @@ public struct ValidatedFoodEntryInput: Equatable, Sendable {
 }
 
 extension FoodAnalysisReviewDraft {
+    /// Numeric bounds mirrored from the backend's own contract
+    /// (`backend/schemas.py::FoodAnalysisPublicEstimate`), applied here as
+    /// defense-in-depth. A `ClosedRange` comparison against NaN is always
+    /// `false`, so this also rejects non-finite values (NaN/±infinity)
+    /// without a separate `isFinite` check.
+    private enum Bounds {
+        static let calories = 0.0...10_000.0
+        static let macroGrams = 0.0...1_000.0
+    }
+
     /// Validates the current (possibly user-edited) values.
     ///
-    /// Returns `nil` if any field is missing or unparsable, mirroring the
-    /// existing app's manual food-entry validation rules (see
-    /// `NutritionView`/`EditFoodEntryView`), including accepting a comma as
-    /// a decimal separator.
+    /// Returns `nil` if any field is missing, unparsable, negative,
+    /// non-finite, or out of bounds, mirroring the existing app's manual
+    /// food-entry validation rules (see `NutritionView`/`EditFoodEntryView`),
+    /// including accepting a comma as a decimal separator.
+    ///
+    /// Calories rounding rule: the calories field is parsed as a decimal
+    /// (like the other fields) and rounded to the nearest whole number,
+    /// consistent with the rounding already applied when the estimate is
+    /// first shown for review (see `init(estimate:)`). For example, both
+    /// `"95.4"` and `"95.6"` are accepted and become `95` and `96`
+    /// respectively.
     public func validated() -> ValidatedFoodEntryInput? {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard
-            !trimmedName.isEmpty,
-            let calories = Int(calories.trimmingCharacters(in: .whitespacesAndNewlines)),
-            let protein = Self.parseDecimal(protein),
-            let carbs = Self.parseDecimal(carbs),
-            let fat = Self.parseDecimal(fat)
-        else {
+        guard !trimmedName.isEmpty else { return nil }
+
+        guard let caloriesValue = Self.parseDecimal(calories), Bounds.calories.contains(caloriesValue) else {
             return nil
         }
+        guard let protein = Self.parseDecimal(protein), Bounds.macroGrams.contains(protein) else {
+            return nil
+        }
+        guard let carbs = Self.parseDecimal(carbs), Bounds.macroGrams.contains(carbs) else {
+            return nil
+        }
+        guard let fat = Self.parseDecimal(fat), Bounds.macroGrams.contains(fat) else {
+            return nil
+        }
+
         return ValidatedFoodEntryInput(
             name: trimmedName,
-            calories: calories,
+            calories: Int(caloriesValue.rounded()),
             proteinGrams: protein,
             carbsGrams: carbs,
             fatGrams: fat

@@ -14,6 +14,10 @@ struct FoodAnalysisReviewView: View {
     @State var draft: FoodAnalysisReviewDraft
     var onSaved: (() -> Void)?
 
+    @State private var isSaving = false
+    @State private var saveErrorMessage: String?
+    @State private var persistenceCoordinator = FoodEntryPersistenceCoordinator()
+
     var body: some View {
         NavigationStack {
             Form {
@@ -28,18 +32,23 @@ struct FoodAnalysisReviewView: View {
 
                 Section("Ergebnis prüfen") {
                     TextField("Bezeichnung", text: $draft.name)
+                        .disabled(isSaving)
 
                     TextField("Kalorien", text: $draft.calories)
                         .keyboardType(.numberPad)
+                        .disabled(isSaving)
 
                     TextField("Protein in g", text: $draft.protein)
                         .keyboardType(.decimalPad)
+                        .disabled(isSaving)
 
                     TextField("Kohlenhydrate in g", text: $draft.carbs)
                         .keyboardType(.decimalPad)
+                        .disabled(isSaving)
 
                     TextField("Fett in g", text: $draft.fat)
                         .keyboardType(.decimalPad)
+                        .disabled(isSaving)
                 }
 
                 if draft.confidence < 1 || !draft.warnings.isEmpty {
@@ -55,6 +64,14 @@ struct FoodAnalysisReviewView: View {
                         }
                     }
                 }
+
+                if let saveErrorMessage {
+                    Section {
+                        Text(saveErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
             }
             .navigationTitle("KI-Schätzung")
             .navigationBarTitleDisplayMode(.inline)
@@ -63,13 +80,18 @@ struct FoodAnalysisReviewView: View {
                     Button("Abbrechen") {
                         dismiss()
                     }
+                    .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Übernehmen") {
-                        save()
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Übernehmen") {
+                            save()
+                        }
+                        .disabled(draft.validated() == nil)
                     }
-                    .disabled(draft.validated() == nil)
                 }
             }
         }
@@ -77,6 +99,9 @@ struct FoodAnalysisReviewView: View {
 
     private func save() {
         guard let input = draft.validated() else { return }
+
+        isSaving = true
+        saveErrorMessage = nil
 
         let entry = FoodEntry(
             date: Date(),
@@ -87,14 +112,24 @@ struct FoodAnalysisReviewView: View {
             fatGrams: input.fatGrams
         )
 
-        modelContext.insert(entry)
+        let result = persistenceCoordinator.save(
+            insert: { modelContext.insert(entry) },
+            persist: { try modelContext.save() },
+            rollback: { modelContext.delete(entry) }
+        )
 
-        do {
-            try modelContext.save()
+        isSaving = false
+
+        switch result {
+        case .saved:
             onSaved?()
             dismiss()
-        } catch {
-            print("Fehler beim Speichern der KI-Schätzung:", error)
+        case .failed:
+            saveErrorMessage = "Der Eintrag konnte nicht gespeichert werden. Bitte versuche es erneut."
+        case .skipped:
+            // Already saved once from this review, or a save is already
+            // in flight (rapid duplicate tap); nothing further to do.
+            break
         }
     }
 }
