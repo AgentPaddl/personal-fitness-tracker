@@ -88,7 +88,7 @@ def test_food_analysis_rejects_description_over_length_bound():
     assert json.loads(response.get_body())["error"]["code"] == "invalid_request"
 
 
-def test_food_analysis_denied_outside_development_mode_without_api_key(monkeypatch):
+def test_food_analysis_denied_outside_development_mode_without_easy_auth(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
 
     response = food_analysis(_request({"food_description": "an apple"}))
@@ -97,15 +97,42 @@ def test_food_analysis_denied_outside_development_mode_without_api_key(monkeypat
     assert json.loads(response.get_body())["error"]["code"] == "authentication_required"
 
 
-def test_food_analysis_allowed_outside_development_mode_with_valid_api_key(monkeypatch):
+def test_food_analysis_denied_with_spoofed_principal_header_when_easy_auth_disabled(monkeypatch):
+    # EASY_AUTH_ENABLED is a server-side-only flag; a caller must never be
+    # able to grant itself trust just by sending Easy Auth's identity
+    # header while the flag itself is off (or not yet configured).
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("BACKEND_API_KEY", "correct-key")
 
-    request = _request({"food_description": "an apple"}, headers={"X-API-Key": "correct-key"})
+    request = _request(
+        {"food_description": "an apple"}, headers={"X-MS-CLIENT-PRINCIPAL-ID": "spoofed-user-id"}
+    )
     response = food_analysis(request)
 
-    # A BACKEND_API_KEY-authenticated request should never be blocked purely
-    # by APP_ENV=production; it will still fail downstream (gateway
+    assert response.status_code == 401
+    assert json.loads(response.get_body())["error"]["code"] == "authentication_required"
+
+
+def test_food_analysis_denied_outside_development_mode_with_easy_auth_enabled_but_no_header(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("EASY_AUTH_ENABLED", "true")
+
+    response = food_analysis(_request({"food_description": "an apple"}))
+
+    assert response.status_code == 401
+    assert json.loads(response.get_body())["error"]["code"] == "authentication_required"
+
+
+def test_food_analysis_allowed_outside_development_mode_with_easy_auth_principal_header(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("EASY_AUTH_ENABLED", "true")
+
+    request = _request(
+        {"food_description": "an apple"}, headers={"X-MS-CLIENT-PRINCIPAL-ID": "real-user-id"}
+    )
+    response = food_analysis(request)
+
+    # An Easy-Auth-authenticated request should never be blocked purely by
+    # APP_ENV=production; it will still fail downstream (gateway
     # unreachable in this unit test), but never with 401/403.
     assert response.status_code != 401
     assert response.status_code != 403
@@ -469,7 +496,7 @@ def test_food_analysis_image_maps_gateway_error(monkeypatch):
     assert json.loads(response.get_body())["error"]["code"] == "gateway_unreachable"
 
 
-def test_food_analysis_image_denied_outside_development_mode_without_api_key(monkeypatch):
+def test_food_analysis_image_denied_outside_development_mode_without_easy_auth(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
 
     response = food_analysis(_multipart_request())

@@ -28,11 +28,14 @@ public final class FoodAnalysisViewModel: ObservableObject {
     /// Real usage: resolves the backend base URL from the environment/
     /// build target. If resolution fails (fail-closed configuration), no
     /// network call is ever attempted; `analyze()` immediately surfaces
-    /// `errorMessage` instead.
-    public convenience init() {
+    /// `errorMessage` instead. `tokenProvider` is `nil` unless the app
+    /// layer supplies a configured `AccessTokenProviding` (Entra ID) -
+    /// preserves today's unauthenticated local-development behavior
+    /// exactly when it is not configured.
+    public convenience init(tokenProvider: AccessTokenProviding? = nil) {
         switch APIConfiguration.resolveBackendBaseURL() {
         case .success(let url):
-            self.init(service: FoodAnalysisService(baseURL: url, apiKey: APIConfiguration.resolveBackendAPIKey()))
+            self.init(service: FoodAnalysisService(baseURL: url, tokenProvider: tokenProvider))
         case .failure(let error):
             self.init(configurationError: error)
         }
@@ -129,6 +132,8 @@ public final class FoodAnalysisViewModel: ObservableObject {
             return "Dieses Bildformat wird nicht unterstützt. Bitte verwende ein JPEG- oder PNG-Foto."
         case .imageTooLarge:
             return "Das Foto ist zu groß. Bitte wähle ein kleineres Foto."
+        case .authenticationRequired:
+            return "Anmeldung erforderlich. Bitte versuche es erneut."
         }
     }
 

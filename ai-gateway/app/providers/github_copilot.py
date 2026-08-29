@@ -180,8 +180,11 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
             # try block above succeeded or already raised.
             try:
                 await session.disconnect()
-            except Exception:
-                logger.warning("Failed to disconnect Copilot session cleanly.", exc_info=True)
+            except Exception as exc:
+                # Sanitized: logs only the exception's type, never its raw
+                # message/stack trace, which could otherwise reveal
+                # provider/runtime details (paths, internal state, etc.).
+                logger.warning("Failed to disconnect Copilot session cleanly (%s).", type(exc).__name__)
 
     async def check_ready(self) -> bool:
         # Metadata-only calls (auth status, model list); never a billed

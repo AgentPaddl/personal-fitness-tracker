@@ -40,6 +40,8 @@ def test_v1_route_rejects_missing_service_token(monkeypatch):
     monkeypatch.setenv(
         "COPILOT_MODEL_ROUTES_JSON", '{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}'
     )
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("AI_PROVIDER_TIMEOUT_SECONDS", "90")
 
     from app.config import get_settings
     from app.dependencies import get_provider
@@ -62,6 +64,8 @@ def test_v1_route_rejects_wrong_service_token(monkeypatch):
     monkeypatch.setenv(
         "COPILOT_MODEL_ROUTES_JSON", '{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}'
     )
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("AI_PROVIDER_TIMEOUT_SECONDS", "90")
 
     from app.config import get_settings
     from app.dependencies import get_provider
@@ -86,6 +90,8 @@ def test_v1_route_accepts_correct_service_token(monkeypatch):
     monkeypatch.setenv(
         "COPILOT_MODEL_ROUTES_JSON", '{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}'
     )
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("AI_PROVIDER_TIMEOUT_SECONDS", "90")
 
     from app.config import get_settings
     from app.dependencies import get_provider
@@ -117,6 +123,7 @@ def test_production_requires_gateway_service_token():
         app_env="production",
         ai_provider="copilot",
         copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        copilot_github_token="test-github-token",
         gateway_service_token=None,
     )
     with pytest.raises(ValueError, match="GATEWAY_SERVICE_TOKEN"):
@@ -233,3 +240,224 @@ def test_concurrency_limiter_allows_sequential_requests():
         await use_case.execute(request)  # must not raise: the first slot was released
 
     asyncio.run(_run())
+
+
+# --- Copilot production-auth requirement -----------------------------------
+
+
+def test_production_requires_copilot_github_token_when_provider_is_copilot():
+    settings = Settings(
+        app_env="production",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        gateway_service_token="correct-token",
+        ai_provider_timeout_seconds=90.0,
+        copilot_github_token=None,
+    )
+    with pytest.raises(ValueError, match="COPILOT_GITHUB_TOKEN"):
+        settings.validate()
+
+
+def test_production_with_fake_provider_is_rejected_regardless_of_copilot_token():
+    # AI_PROVIDER=fake is never allowed in production at all (no production
+    # provider implementation exists yet); this is a distinct, pre-existing
+    # check from the Copilot-github-token requirement and takes precedence.
+    settings = Settings(
+        app_env="production",
+        ai_provider="fake",
+        gateway_service_token="correct-token",
+        ai_provider_timeout_seconds=90.0,
+        copilot_github_token=None,
+    )
+    with pytest.raises(ValueError, match="AI_PROVIDER=fake"):
+        settings.validate()
+
+
+# --- Production timeout floor -----------------------------------------------
+
+
+def test_production_rejects_provider_timeout_below_floor():
+    settings = Settings(
+        app_env="production",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        gateway_service_token="correct-token",
+        copilot_github_token="test-github-token",
+        ai_provider_timeout_seconds=10.0,
+    )
+    with pytest.raises(ValueError, match="AI_PROVIDER_TIMEOUT_SECONDS"):
+        settings.validate()
+
+
+def test_production_accepts_provider_timeout_at_floor():
+    settings = Settings(
+        app_env="production",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        gateway_service_token="correct-token",
+        copilot_github_token="test-github-token",
+        ai_provider_timeout_seconds=30.0,
+    )
+    settings.validate()  # must not raise: exactly at the floor is acceptable
+
+
+# --- Gateway service-token rotation ------------------------------------------
+
+
+def _production_env(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AI_PROVIDER", "copilot")
+    monkeypatch.setenv(
+        "COPILOT_MODEL_ROUTES_JSON", '{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}'
+    )
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("AI_PROVIDER_TIMEOUT_SECONDS", "90")
+
+
+def test_rotation_accepts_current_token(monkeypatch):
+    _production_env(monkeypatch)
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "current-token")
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN_PREVIOUS", "previous-token")
+
+    from app.config import get_settings
+    from app.dependencies import get_provider
+
+    get_settings.cache_clear()
+    get_provider.cache_clear()
+
+    app = create_app()
+
+    class _StubUseCase:
+        async def execute(self, request):
+            from app.schemas.food_analysis import FoodAnalysisEstimate, FoodAnalysisResponse
+
+            return FoodAnalysisResponse(estimate=FoodAnalysisEstimate.model_validate(_VALID_DATA))
+
+    app.dependency_overrides[get_food_analysis_use_case] = lambda: _StubUseCase()
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/v1/food-analysis",
+        json={"food_description": "apple"},
+        headers={"X-Service-Token": "current-token"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_rotation_accepts_previous_token_during_rotation(monkeypatch):
+    _production_env(monkeypatch)
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "current-token")
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN_PREVIOUS", "previous-token")
+
+    from app.config import get_settings
+    from app.dependencies import get_provider
+
+    get_settings.cache_clear()
+    get_provider.cache_clear()
+
+    app = create_app()
+
+    class _StubUseCase:
+        async def execute(self, request):
+            from app.schemas.food_analysis import FoodAnalysisEstimate, FoodAnalysisResponse
+
+            return FoodAnalysisResponse(estimate=FoodAnalysisEstimate.model_validate(_VALID_DATA))
+
+    app.dependency_overrides[get_food_analysis_use_case] = lambda: _StubUseCase()
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/v1/food-analysis",
+        json={"food_description": "apple"},
+        headers={"X-Service-Token": "previous-token"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_rotation_rejects_unknown_token(monkeypatch):
+    _production_env(monkeypatch)
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "current-token")
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN_PREVIOUS", "previous-token")
+
+    from app.config import get_settings
+    from app.dependencies import get_provider
+
+    get_settings.cache_clear()
+    get_provider.cache_clear()
+
+    response = TestClient(create_app(), raise_server_exceptions=False).post(
+        "/v1/food-analysis",
+        json={"food_description": "apple"},
+        headers={"X-Service-Token": "some-unrelated-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "authentication_required"
+
+
+def test_rotation_without_previous_token_configured_rejects_old_token(monkeypatch):
+    _production_env(monkeypatch)
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "current-token")
+    monkeypatch.delenv("GATEWAY_SERVICE_TOKEN_PREVIOUS", raising=False)
+
+    from app.config import get_settings
+    from app.dependencies import get_provider
+
+    get_settings.cache_clear()
+    get_provider.cache_clear()
+
+    response = TestClient(create_app(), raise_server_exceptions=False).post(
+        "/v1/food-analysis",
+        json={"food_description": "apple"},
+        headers={"X-Service-Token": "previous-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "authentication_required"
+
+
+# --- Request-id sanitization -------------------------------------------------
+
+
+def test_malicious_request_id_is_replaced_with_generated_uuid(client):
+    response = client.post(
+        "/v1/food-analysis",
+        json={"food_description": "apple"},
+        headers={"X-Request-Id": "not/safe; rm -rf /\n" + "x" * 200},
+    )
+
+    returned_id = response.headers["X-Request-Id"]
+    assert returned_id != "not/safe; rm -rf /\n" + "x" * 200
+    import re
+
+    assert re.match(r"^[A-Za-z0-9-]{1,64}$", returned_id)
+
+
+def test_well_formed_request_id_is_echoed_unchanged(client):
+    response = client.post(
+        "/v1/food-analysis",
+        json={"food_description": "apple"},
+        headers={"X-Request-Id": "well-formed-id-123"},
+    )
+
+    assert response.headers["X-Request-Id"] == "well-formed-id-123"
+
+
+# --- service_saturated Retry-After header -----------------------------------
+
+
+def test_saturated_response_includes_retry_after_header(dev_env):
+    app = create_app()
+
+    class _SaturatedUseCase:
+        async def execute(self, request):
+            raise ServiceSaturatedError()
+
+    app.dependency_overrides[get_food_analysis_use_case] = lambda: _SaturatedUseCase()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/v1/food-analysis", json={"food_description": "apple"})
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "2"
+    assert response.json()["error"]["code"] == "service_saturated"

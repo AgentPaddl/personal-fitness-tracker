@@ -14,6 +14,10 @@ class GatewayError(Exception):
 
     code = "gateway_error"
     http_status = 500
+    #: Small, sanitized hint (seconds) for a caller-facing Retry-After
+    #: header. Never provider-specific timing - only ever a small fixed
+    #: value we control ourselves.
+    retry_after_seconds: int | None = None
 
     def __init__(self, message: str = "An unexpected gateway error occurred."):
         super().__init__(message)
@@ -118,6 +122,7 @@ class ServiceSaturatedError(GatewayError):
 
     code = "service_saturated"
     http_status = 503
+    retry_after_seconds = 2
 
     def __init__(self) -> None:
         super().__init__("The gateway is at its concurrent request limit. Try again shortly.")

@@ -12,7 +12,7 @@ final class FoodAnalysisErrorRetryEligibilityTests: XCTestCase {
     func testInputAndConfigurationErrorsAreNotRetryEligible() {
         for error: FoodAnalysisError in [
             .unauthorized, .invalidResponse, .imageProcessingFailed, .imageMissingOrEmpty,
-            .unsupportedImageType, .imageTooLarge,
+            .unsupportedImageType, .imageTooLarge, .authenticationRequired,
         ] {
             XCTAssertFalse(error.isRetryEligible, "\(error) should not be retry-eligible")
         }

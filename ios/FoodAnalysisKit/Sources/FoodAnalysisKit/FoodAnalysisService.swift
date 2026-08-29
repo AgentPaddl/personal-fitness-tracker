@@ -7,6 +7,20 @@ public protocol URLRequestPerforming: Sendable {
 
 extension URLSession: URLRequestPerforming {}
 
+/// Provider-neutral seam for acquiring a short-lived access token to send
+/// as `Authorization: Bearer <token>` on every backend request. The real
+/// implementation (Entra ID via MSAL) lives in the app target
+/// (`ios/Trainingsplan/EntraAuthService.swift`) - this package has no
+/// dependency on MSAL or any provider-specific auth library.
+///
+/// `nil` (no provider configured) is a valid, supported state: no
+/// `Authorization` header is ever sent, matching today's local-development
+/// behavior exactly. A configured provider that fails to produce a token
+/// must throw rather than silently proceed unauthenticated.
+public protocol AccessTokenProviding: Sendable {
+    func acquireAccessToken() async throws -> String
+}
+
 /// Public contract for the text food-analysis networking call.
 public protocol FoodAnalysisServicing: Sendable {
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate
@@ -28,7 +42,7 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
     private let baseURL: URL
     private let session: URLRequestPerforming
     private let timeoutInterval: TimeInterval
-    private let apiKey: String?
+    private let tokenProvider: AccessTokenProviding?
 
     /// `timeoutInterval` default (110s) sits above the documented timeout
     /// hierarchy's outer bound - see `ios/AGENTS.md` - so this layer never
@@ -38,19 +52,19 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         baseURL: URL,
         session: URLRequestPerforming = URLSession.shared,
         timeoutInterval: TimeInterval = 110,
-        apiKey: String? = nil
+        tokenProvider: AccessTokenProviding? = nil
     ) {
         self.baseURL = baseURL
         self.session = session
         self.timeoutInterval = timeoutInterval
-        self.apiKey = apiKey
+        self.tokenProvider = tokenProvider
     }
 
     public func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
         var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAPIKey(to: &request)
+        try await applyAuthorization(to: &request)
         request.timeoutInterval = timeoutInterval
         request.httpBody = try JSONEncoder().encode(FoodAnalysisRequestDTO(foodDescription: description))
 
@@ -64,7 +78,7 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        applyAPIKey(to: &request)
+        try await applyAuthorization(to: &request)
         request.timeoutInterval = timeoutInterval
         request.httpBody = Self.multipartBody(
             boundary: boundary, imageData: data, mimeType: mimeType, description: description
@@ -73,10 +87,16 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         return try await perform(request)
     }
 
-    private func applyAPIKey(to request: inout URLRequest) {
-        if let apiKey, !apiKey.isEmpty {
-            request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+    private func applyAuthorization(to request: inout URLRequest) async throws {
+        guard let tokenProvider else { return }
+        let token: String
+        do {
+            token = try await tokenProvider.acquireAccessToken()
+        } catch {
+            throw FoodAnalysisError.authenticationRequired
         }
+        guard !token.isEmpty else { throw FoodAnalysisError.authenticationRequired }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
 
     private func perform(_ request: URLRequest) async throws -> FoodAnalysisResponseDTO.Estimate {

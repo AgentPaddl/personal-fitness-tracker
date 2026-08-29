@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes import health_router, v1_router
 from app.dependencies import get_provider
 from app.errors import GatewayError, InternalGatewayError, RequestValidationFailedError
+from app.request_id import sanitize_request_id
 
 logger = logging.getLogger("app.request")
 
@@ -46,7 +46,7 @@ def create_app() -> FastAPI:
         # Reuses the backend's correlation ID if forwarded, otherwise mints
         # one. Never logs request/response bodies (food descriptions,
         # images, model output) - only structural metadata.
-        request_id = request.headers.get(_REQUEST_ID_HEADER) or str(uuid.uuid4())
+        request_id = sanitize_request_id(request.headers.get(_REQUEST_ID_HEADER))
         request.state.request_id = request_id
         start = time.perf_counter()
         try:
@@ -74,9 +74,11 @@ def create_app() -> FastAPI:
         # Normalized, public-safe error shape; never leaks provider details.
         # Includes the correlation ID only - never internal error detail.
         request_id = getattr(request.state, "request_id", None)
+        headers = {"Retry-After": str(exc.retry_after_seconds)} if exc.retry_after_seconds else None
         return JSONResponse(
             status_code=exc.http_status,
             content={"error": {"code": exc.code, "message": exc.message, "request_id": request_id}},
+            headers=headers,
         )
 
     @app.exception_handler(RequestValidationError)

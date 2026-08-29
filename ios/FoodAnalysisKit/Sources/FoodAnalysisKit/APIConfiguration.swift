@@ -68,19 +68,6 @@ public enum APIConfiguration {
         )
     }
 
-    /// Resolves the optional backend API key (`X-API-Key`), sent alongside
-    /// every request once the backend requires production authentication.
-    /// `nil` is valid - the backend's own development-mode bypass does not
-    /// require a key; a production backend fails closed server-side if the
-    /// header is absent, so this never needs its own fail-closed behavior
-    /// here.
-    public static func resolveBackendAPIKey(
-        rawValue: String? = ProcessInfo.processInfo.environment["API_KEY"]
-    ) -> String? {
-        let trimmed = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     /// Testable core: takes the "are we allowed to default to the local
     /// Simulator address" and "are we allowed the local-HTTP development
     /// exception" decisions as plain parameters instead of compile-time

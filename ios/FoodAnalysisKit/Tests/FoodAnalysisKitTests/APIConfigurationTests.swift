@@ -203,18 +203,4 @@ final class APIConfigurationTests: XCTestCase {
 
         XCTAssertEqual(try? result.get(), URL(string: "https://api.example.com/api"))
     }
-
-    // MARK: - Backend API key resolution
-
-    func testResolveBackendAPIKeyReturnsNilWhenUnset() {
-        XCTAssertNil(APIConfiguration.resolveBackendAPIKey(rawValue: nil))
-    }
-
-    func testResolveBackendAPIKeyReturnsNilWhenBlank() {
-        XCTAssertNil(APIConfiguration.resolveBackendAPIKey(rawValue: "   "))
-    }
-
-    func testResolveBackendAPIKeyTrimsWhitespace() {
-        XCTAssertEqual(APIConfiguration.resolveBackendAPIKey(rawValue: "  secret-key  "), "secret-key")
-    }
 }

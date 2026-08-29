@@ -1,33 +1,47 @@
 """Backend-facing authentication: iOS -> backend.
 
-This authenticates "this is our own iOS app", not individual end users -
-there is exactly one user of this private, personal app. It intentionally
-is not a general-purpose auth system (no accounts, no token issuance).
+Production authentication relies on Azure Functions / App Service
+Authentication ("Easy Auth") with Microsoft Entra ID, configured entirely
+outside this repository (see backend/AGENTS.md's Entra setup checklist).
+When Easy Auth's "Require authentication" is enabled, Azure itself rejects
+an unauthenticated caller *before* our code ever runs, and only then
+injects trusted identity headers (e.g. `X-MS-CLIENT-PRINCIPAL-ID`).
+
+A previous static shared-secret (`BACKEND_API_KEY`/`X-API-Key`) design was
+rejected in review and has been removed entirely - do not reintroduce it.
 """
 
 from __future__ import annotations
 
-import hmac
+from typing import Mapping
 
-from config import get_backend_api_key, is_development_mode
+from config import is_development_mode, is_easy_auth_enabled
+
+#: Injected by Azure App Service/Functions only when Easy Auth is enabled
+#: and the caller was already authenticated by Azure itself.
+_EASY_AUTH_PRINCIPAL_ID_HEADER = "X-MS-CLIENT-PRINCIPAL-ID"
 
 
-def caller_is_authenticated(provided_api_key: str | None) -> bool:
+def caller_is_authenticated(headers: Mapping[str, str]) -> bool:
     """True if the request may proceed.
 
     DEVELOPMENT-ONLY BYPASS: every caller is authenticated when
-    ``APP_ENV=development`` (the existing local-dev convenience). In any
-    other environment, the caller must present a valid ``X-API-Key``
-    header matching ``BACKEND_API_KEY`` (compared in constant time); a
-    missing configured key (fails closed at startup for
-    ``APP_ENV=production`` - see ``config.validate_config``) or a
-    missing/mismatched header both deny the request.
+    ``APP_ENV=development`` (the existing local-dev convenience).
+
+    In any other environment, the request is trusted only if
+    ``is_easy_auth_enabled()`` - a server-side-only flag set manually once
+    Easy Auth is actually configured and enforcing in Azure - is true, and
+    the request carries Easy Auth's own identity header. That header is
+    never trusted while ``is_easy_auth_enabled()`` is false: a caller
+    cannot grant itself trust just by sending it, since whether it is ever
+    consulted is controlled entirely server-side. Until Easy Auth is
+    configured in Azure, production fails closed with no valid caller.
     """
 
     if is_development_mode():
         return True
 
-    configured = get_backend_api_key()
-    if not configured or not provided_api_key:
+    if not is_easy_auth_enabled():
         return False
-    return hmac.compare_digest(provided_api_key, configured)
+
+    return bool(headers.get(_EASY_AUTH_PRINCIPAL_ID_HEADER))

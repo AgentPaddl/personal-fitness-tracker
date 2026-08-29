@@ -10,6 +10,16 @@ private struct MockPerformer: URLRequestPerforming {
     }
 }
 
+private struct StubTokenProvider: AccessTokenProviding {
+    var token: String = ""
+    var error: Error?
+
+    func acquireAccessToken() async throws -> String {
+        if let error { throw error }
+        return token
+    }
+}
+
 private func assertThrowsFoodAnalysisError(
     _ expression: @autoclosure () async throws -> FoodAnalysisResponseDTO.Estimate,
     _ expected: FoodAnalysisError,
@@ -54,36 +64,50 @@ final class FoodAnalysisServiceTests: XCTestCase {
         XCTAssertEqual(estimate.calories, 95)
     }
 
-    func testAPIKeyIsSentWhenConfigured() async throws {
+    func testAuthorizationHeaderIsSentWhenTokenProviderConfigured() async throws {
         let responseJSON = """
             {"estimate": {"food_name": "Apfel", "calories": 95, "protein_grams": 0.5,
             "carbohydrate_grams": 25, "fat_grams": 0.3, "confidence": 0.9, "warnings": []}}
             """.data(using: .utf8)!
 
         let mock = MockPerformer { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "X-API-Key"), "test-api-key")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-access-token")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (responseJSON, response)
         }
 
-        let service = FoodAnalysisService(baseURL: baseURL, session: mock, apiKey: "test-api-key")
+        let service = FoodAnalysisService(
+            baseURL: baseURL, session: mock, tokenProvider: StubTokenProvider(token: "test-access-token")
+        )
         _ = try await service.analyze(description: "Ein Apfel")
     }
 
-    func testNoAPIKeyHeaderWhenNotConfigured() async throws {
+    func testNoAuthorizationHeaderWhenNoTokenProviderConfigured() async throws {
         let responseJSON = """
             {"estimate": {"food_name": "Apfel", "calories": 95, "protein_grams": 0.5,
             "carbohydrate_grams": 25, "fat_grams": 0.3, "confidence": 0.9, "warnings": []}}
             """.data(using: .utf8)!
 
         let mock = MockPerformer { request in
-            XCTAssertNil(request.value(forHTTPHeaderField: "X-API-Key"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (responseJSON, response)
         }
 
         let service = FoodAnalysisService(baseURL: baseURL, session: mock)
         _ = try await service.analyze(description: "Ein Apfel")
+    }
+
+    func testTokenAcquisitionFailureIsMappedToAuthenticationRequired() async {
+        let mock = MockPerformer { _ in
+            XCTFail("The network layer must never be reached when token acquisition fails")
+            throw URLError(.unknown)
+        }
+        let service = FoodAnalysisService(
+            baseURL: baseURL, session: mock, tokenProvider: StubTokenProvider(error: URLError(.userAuthenticationRequired))
+        )
+
+        await assertThrowsFoodAnalysisError(try await service.analyze(description: "x"), .authenticationRequired)
     }
 
     func testTimeoutIsMappedToTimeoutError() async {

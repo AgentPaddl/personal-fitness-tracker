@@ -24,22 +24,22 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 
 @bp.route(route="readiness", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def readiness(req: func.HttpRequest) -> func.HttpResponse:
-    """Distinct from /api/health: readiness = the dependency required to
-    serve a real request (the gateway) is actually reachable right now.
-
-    Calls the gateway's own anonymous `/healthz` (never a billed
-    generation call) with a short timeout. Never reveals the gateway's URL
-    or any other internal configuration in the response body.
+    """Distinct from /api/health: readiness = the gateway can actually
+    serve a real request right now - including its own Copilot auth and
+    vision-capable model-routing checks (its `/readyz`, not just process
+    liveness via `/healthz`). Still never a billed generation call. Never
+    reveals the gateway's URL, provider, or model identifiers in the
+    response body.
     """
 
     try:
-        response = httpx.get(f"{get_gateway_base_url()}/healthz", timeout=3.0)
-        gateway_reachable = response.status_code == 200
+        response = httpx.get(f"{get_gateway_base_url()}/readyz", timeout=3.0)
+        gateway_ready = response.status_code == 200
     except httpx.HTTPError:
-        gateway_reachable = False
+        gateway_ready = False
 
-    if not gateway_reachable:
-        logger.warning("readiness check failed: gateway unreachable")
+    if not gateway_ready:
+        logger.warning("readiness check failed: gateway not ready")
         return func.HttpResponse(
             json.dumps({"status": "not_ready"}),
             status_code=503,

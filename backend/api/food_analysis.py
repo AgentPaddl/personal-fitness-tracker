@@ -1,7 +1,6 @@
 import json
 import logging
 import time
-import uuid
 
 import azure.functions as func
 from pydantic import ValidationError
@@ -9,6 +8,7 @@ from pydantic import ValidationError
 from config import get_gateway_base_url, get_gateway_service_token, get_gateway_timeout_seconds
 from gateway_client import GatewayClient, GatewayClientError
 from image_validation import image_content_matches_declared_type
+from request_id import sanitize_request_id
 from schemas import (
     MAX_FOOD_DESCRIPTION_LENGTH,
     MAX_IMAGE_BYTES,
@@ -27,13 +27,13 @@ _REQUEST_ID_HEADER = "X-Request-Id"
 
 @bp.route(route="food-analysis", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def food_analysis(req: func.HttpRequest) -> func.HttpResponse:
-    request_id = req.headers.get(_REQUEST_ID_HEADER) or str(uuid.uuid4())
+    request_id = sanitize_request_id(req.headers.get(_REQUEST_ID_HEADER))
     start = time.perf_counter()
 
-    if not caller_is_authenticated(req.headers.get("X-API-Key")):
+    if not caller_is_authenticated(req.headers):
         return _log_and_respond(
             request_id, start, "unknown",
-            _error_response(401, "authentication_required", "A valid API key is required.", request_id),
+            _error_response(401, "authentication_required", "Authentication is required.", request_id),
         )
 
     content_type = (req.headers.get("Content-Type") or "").lower()
@@ -82,7 +82,7 @@ def _handle_text_analysis(req: func.HttpRequest, request_id: str) -> func.HttpRe
         gateway_response = client.analyze_food_text(public_request.food_description)
     except GatewayClientError as exc:
         logger.warning("gateway request failed request_id=%s code=%s", request_id, exc.code)
-        return _error_response(exc.http_status, exc.code, exc.message, request_id)
+        return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds)
     finally:
         client.close()
 
@@ -152,7 +152,7 @@ def _handle_image_analysis(req: func.HttpRequest, request_id: str) -> func.HttpR
         gateway_response = client.analyze_food_image(image_bytes, mime_type, food_description=food_description)
     except GatewayClientError as exc:
         logger.warning("gateway request failed request_id=%s code=%s", request_id, exc.code)
-        return _error_response(exc.http_status, exc.code, exc.message, request_id)
+        return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds)
     finally:
         client.close()
     # Release the (potentially several-MB) decoded image buffer as soon as
@@ -195,9 +195,17 @@ def _read_bounded(stream, max_bytes: int) -> bytes:
     return stream.read(max_bytes + 1)
 
 
-def _error_response(status_code: int, code: str, message: str, request_id: str) -> func.HttpResponse:
-    return func.HttpResponse(
-        json.dumps({"error": {"code": code, "message": message, "request_id": request_id}}),
+def _error_response(
+    status_code: int, code: str, message: str, request_id: str, retry_after_seconds: int | None = None
+) -> func.HttpResponse:
+    body: dict = {"error": {"code": code, "message": message, "request_id": request_id}}
+    if retry_after_seconds is not None:
+        body["error"]["retry_after_seconds"] = retry_after_seconds
+    response = func.HttpResponse(
+        json.dumps(body),
         status_code=status_code,
         mimetype="application/json",
     )
+    if retry_after_seconds is not None:
+        response.headers["Retry-After"] = str(retry_after_seconds)
+    return response

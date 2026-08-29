@@ -161,10 +161,10 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 
 Adds no new AI capability; hardens the existing text/image food-analysis system for reliable ongoing personal use.
 
-- **Authentication**: chose a static shared-secret (API key) design over Azure Easy Auth/AAD - the smallest mechanism that still fails closed, given this is a single personal user with their own private backend, not a multi-tenant service needing real identity/sign-in. Two independent secrets: `BACKEND_API_KEY` (iOS -> backend, `X-API-Key`) and `GATEWAY_SERVICE_TOKEN` (backend -> gateway, `X-Service-Token`, since the gateway must never be a public API). Both fail closed at startup when `APP_ENV=production` and missing. No GitHub/Copilot credential ever exists in the iOS app or is committed to git.
-- **Known iOS gap**: environment-variable-based secret configuration (matching the existing `API_BASE_URL` mechanism) only works for Xcode-launched (Debug/physical-device-development) runs. A genuinely installed production build has no equivalent mechanism yet - secrets must never go into Info.plist/xcconfig, so this needs a small Keychain-backed entry mechanism before a real, non-Xcode-launched production build is used, which is out of scope for this phase (would be an unrelated UI addition).
+- **Authentication**: the accepted production design is Microsoft Entra ID via MSAL on the iOS native client, then Azure App Service Authentication / Easy Auth on the public backend. The backend does not accept a static shared secret from the app; it only trusts Azure-injected Easy Auth identity headers when `EASY_AUTH_ENABLED=true` and `APP_ENV != development`. A separate server-to-server secret still remains for backend -> gateway (`GATEWAY_SERVICE_TOKEN`, `X-Service-Token`), because the gateway is never a public client-facing API. No GitHub/Copilot credential ever exists in the iOS app or is committed to git.
+- **iOS auth**: a real production app must acquire a short-lived Entra access token via MSAL or a supported equivalent, send it as `Authorization: Bearer <token>`, and rely on the backend's App Service Authentication to validate it before the app reaches backend business logic. Until an MSAL integration is configured, the app intentionally keeps a placeholder `EntraAuthService` with no secret material and does not attempt an app-side static API key.
 - **Gateway deployment**: a `Dockerfile` (Python 3.13, Copilot CLI runtime pre-fetched at build time, `COPILOT_GITHUB_TOKEN`-based auth since the interactive `/login` flow has no headless equivalent) targets Azure Container Apps but has not been built/deployed here (no Docker available in the authoring environment) - see `ai-gateway/README.md`'s deployment section for the full runtime/memory/networking requirements.
-- **Networking**: production `AI_GATEWAY_BASE_URL` must be an explicit, non-`localhost`, `https://` URL (`backend/config.py` fails closed otherwise). Intended topology: `iPhone -> HTTPS Azure Functions (public) -> private/restricted gateway -> Copilot CLI runtime (never exposed)`. Only the backend is a public endpoint.
+- **Networking**: production `AI_GATEWAY_BASE_URL` must be an explicit, non-`localhost`, `https://` URL (`backend/config.py` fails closed otherwise). Intended topology: `iPhone native client -> Microsoft Entra ID via MSAL -> Azure Functions with App Service Authentication / Easy Auth -> private/restricted gateway -> Copilot CLI runtime (never exposed)`. Only the backend is a public endpoint.
 - **Timeout hierarchy**: gateway `AI_PROVIDER_TIMEOUT_SECONDS` (90s recommended) < backend `AI_GATEWAY_TIMEOUT_SECONDS` (100s) < iOS `FoodAnalysisService.timeoutInterval` (110s, raised from 30s) - see `backend/AGENTS.md`'s table.
 - **Retry UX**: no automatic/silent retries of an AI request. An explicit "Erneut versuchen" button appears only for retry-eligible failures (connectivity, backend-unavailable, rate-limited, timeout); input/configuration failures are not offered a retry action, since retrying the identical request would just fail the same way.
 - **Long-running UX**: the existing spinner is preserved; after 5s it switches to a neutral "Das Essen wird analysiert …" with no fake percentage progress.
@@ -177,7 +177,7 @@ Adds no new AI capability; hardens the existing text/image food-analysis system 
 
 - [ ] Gateway container built and deployed (Azure Container Apps or equivalent)
 - [ ] Backend (Azure Functions) deployed
-- [ ] `BACKEND_API_KEY` configured (backend) and the same value configured in the iOS build
+- [ ] Azure App Service Authentication / Easy Auth enabled on the public backend, with Entra ID trust configured and `EASY_AUTH_ENABLED=true`
 - [ ] `GATEWAY_SERVICE_TOKEN` configured identically on both backend and gateway
 - [ ] Production `AI_GATEWAY_BASE_URL` (explicit HTTPS, non-localhost) configured on the backend
 - [ ] Gateway ingress restricted to the backend only (no public gateway exposure)
@@ -185,7 +185,7 @@ Adds no new AI capability; hardens the existing text/image food-analysis system 
 - [ ] `COPILOT_MODEL_ROUTES_JSON` configured for both `food_text_v1` and `food_image_v1`, verified vision-capable via `GET /readyz`
 - [ ] Backend `GET /api/health` and `GET /api/readiness` both return healthy/ready against the deployed gateway
 - [ ] Gateway `GET /healthz` and `GET /readyz` both return healthy/ready
-- [ ] iOS production build configured with the deployed HTTPS backend URL and a real API key delivery mechanism (see "Known iOS gap" above)
+- [ ] iOS production build configured with the deployed HTTPS backend URL and a real Entra ID access-token provider (MSAL or equivalent) that sends `Authorization: Bearer <token>`
 - [ ] Real iPhone smoke test against the deployed stack (text and image, save flow) completed
 
 ## Change and validation policy
