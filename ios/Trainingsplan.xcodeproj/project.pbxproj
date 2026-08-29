@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		FA00000000000000000000A3 /* FoodAnalysisKit in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000A2 /* FoodAnalysisKit */; };
+		FA00000000000000000000B3 /* MSAL in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000B2 /* MSAL */; };
+		FA00000000000000000000C3 /* EntraAuthKit in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000C2 /* EntraAuthKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +30,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				FA00000000000000000000A3 /* FoodAnalysisKit in Frameworks */,
+				FA00000000000000000000B3 /* MSAL in Frameworks */,
+				FA00000000000000000000C3 /* EntraAuthKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +75,8 @@
 			name = Trainingsplan;
 			packageProductDependencies = (
 				FA00000000000000000000A2 /* FoodAnalysisKit */,
+				FA00000000000000000000B2 /* MSAL */,
+				FA00000000000000000000C2 /* EntraAuthKit */,
 			);
 			productName = Trainingsplan;
 			productReference = 8D2BD6F13030CBA2007993A4 /* Trainingsplan.app */;
@@ -102,6 +108,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				FA00000000000000000000A1 /* XCLocalSwiftPackageReference "FoodAnalysisKit" */,
+				FA00000000000000000000B1 /* XCRemoteSwiftPackageReference "microsoft-authentication-library-for-objc" */,
+				FA00000000000000000000C1 /* XCLocalSwiftPackageReference "EntraAuthKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8D2BD6F23030CBA2007993A4 /* Products */;
@@ -328,12 +336,36 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = FoodAnalysisKit;
 		};
+		FA00000000000000000000C1 /* XCLocalSwiftPackageReference "EntraAuthKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = EntraAuthKit;
+		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FA00000000000000000000B1 /* XCRemoteSwiftPackageReference "microsoft-authentication-library-for-objc" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AzureAD/microsoft-authentication-library-for-objc";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		FA00000000000000000000A2 /* FoodAnalysisKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = FoodAnalysisKit;
+		};
+		FA00000000000000000000B2 /* MSAL */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA00000000000000000000B1 /* XCRemoteSwiftPackageReference "microsoft-authentication-library-for-objc" */;
+			productName = MSAL;
+		};
+		FA00000000000000000000C2 /* EntraAuthKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = EntraAuthKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 

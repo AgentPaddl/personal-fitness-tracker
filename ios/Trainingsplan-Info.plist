@@ -25,5 +25,31 @@
 	     launch. Captured photos are never saved to the Photos library. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Wird verwendet, um ein Foto deines Essens für die KI-Analyse aufzunehmen.</string>
+	<!-- MSAL's documented default iOS/macOS redirect URI format is
+	     msauth.[BUNDLE_ID]://auth (see
+	     https://learn.microsoft.com/entra/msal/objc/redirect-uris-ios).
+	     Bundle ID here is com.benedikt.Trainingsplan (see
+	     PRODUCT_BUNDLE_IDENTIFIER in project.pbxproj); this scheme must
+	     also be registered as a redirect URI on the native/public-client
+	     Entra app registration (see docs/architecture.md's Entra setup
+	     checklist). This is a public identifier, not a secret. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>msauth.com.benedikt.Trainingsplan</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Lets MSAL detect whether Microsoft Authenticator/Company Portal are
+	     installed for brokered SSO; does not grant those apps any access
+	     to this app's data. Documented MSAL iOS requirement independent of
+	     whether a broker is actually installed. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>msauthv2</string>
+		<string>msauthv3</string>
+	</array>
 </dict>
 </plist>

@@ -188,6 +188,54 @@ Adds no new AI capability; hardens the existing text/image food-analysis system 
 - [ ] iOS production build configured with the deployed HTTPS backend URL and a real Entra ID access-token provider (MSAL or equivalent) that sends `Authorization: Bearer <token>`
 - [ ] Real iPhone smoke test against the deployed stack (text and image, save flow) completed
 
+### Phase 7 — Entra ID / MSAL integration (`feature/v2-entra-msal-integration`, not yet merged; no real Azure/Entra deployment or registration performed)
+
+Replaces the Phase 6 placeholder `EntraAuthService` with a real MSAL-backed implementation and prepares (but does not execute) the exact external Entra/Azure configuration the backend's Easy Auth boundary already assumes.
+
+- **Dependency**: [MSAL for iOS/macOS](https://github.com/AzureAD/microsoft-authentication-library-for-objc) added via Swift Package Manager (`XCRemoteSwiftPackageReference`, `upToNextMajorVersion` from `2.0.0`; latest release at integration time was `2.15.0`). Native/public-client flow only - no client secret ever exists in the iOS app.
+- **Architecture**: a new local Swift package `ios/EntraAuthKit/` holds the MSAL-*independent* silent-first/interactive-fallback orchestration (`EntraAuthService`, `EntraTokenAcquiring` protocol, `EntraTokenError`, `EntraConfiguration`) behind the same pattern as `ios/FoodAnalysisKit/` - testable via `swift test` with no MSAL dependency, no network, and no Microsoft/Azure endpoint ever contacted. The only file that imports MSAL is `ios/Trainingsplan/Entra/MSALEntraTokenAcquirer.swift` in the app target; `ios/Trainingsplan/EntraAuthService.swift` (`EntraAuthServiceFactory`) is the small app-target factory that wires the two together.
+- **Token flow**: silent-first (MSAL's own keychain-backed cache, no manual token persistence by this app at all) - only if MSAL reports `interactionRequired` does the flow fall back to the interactive Microsoft sign-in UI (`ASWebAuthenticationSession`, presented over the current key window's root view controller). A user cancelling interactive sign-in surfaces as `FoodAnalysisError.authenticationRequired` (generic German message, no raw MSAL error ever shown).
+- **Redirect URI**: MSAL's documented default iOS/macOS format, `msauth.<bundle-id>://auth` (here: `msauth.com.benedikt.Trainingsplan://auth`), registered in `Trainingsplan-Info.plist`'s `CFBundleURLTypes`/`CFBundleURLSchemes` and handled via `TrainingsplanApp`'s `.onOpenURL` (SwiftUI app lifecycle) forwarding to `MSALPublicClientApplication.handleMSALResponse`.
+- **Fail-closed configuration**: `EntraConfiguration.load(bundle:)` requires all four non-secret values (`EntraTenantID`, `EntraClientID`, `EntraAPIScope`, `EntraRedirectURI`) to be present and non-blank. In `DEBUG` builds, missing configuration returns `nil` (no `Authorization` header - unchanged local-development behavior). In `Release` builds, missing or MSAL-rejected configuration returns `FailClosedAccessTokenProvider`, so every request throws `authenticationRequired` rather than silently sending an unauthenticated request.
+- **Backend boundary unchanged**: `backend/security.py::caller_is_authenticated` already implements exactly the intended Easy Auth boundary (development bypass, otherwise trust `X-MS-CLIENT-PRINCIPAL-ID` only when `EASY_AUTH_ENABLED=true`) and already has a regression test proving a spoofed `X-MS-CLIENT-PRINCIPAL-ID` header is rejected when Easy Auth is disabled (`test_food_analysis_denied_with_spoofed_principal_header_when_easy_auth_disabled`). No backend/gateway contract change was needed or made for this phase.
+- **Single-user restriction recommendation**: this is a private single-user app. Prefer Azure/Entra-side restriction over a custom iOS/backend allowlist:
+  1. **App assignment (recommended)**: on the backend/API app registration's Enterprise Application, set "Assignment required?" = Yes and assign only the one intended Entra account. Azure AD then rejects sign-in/token issuance for any other account before it ever reaches this app - no application code involved.
+  2. **Tenant restriction**: since this is a single-tenant work/school scenario (`https://login.microsoftonline.com/<tenantId>` authority, not `common`/`organizations`/`consumers`), only accounts in the owning tenant can sign in at all; this is already implied by using a tenant-specific authority rather than a multi-tenant one.
+  3. **Backend-side claim check (optional, defense-in-depth only)**: if desired in addition to (1), the backend could compare the Easy-Auth-injected principal's object id (`X-MS-CLIENT-PRINCIPAL-ID`, not `-NAME`, since a UPN/email can change) against a single configurable `ALLOWED_USER_OBJECT_ID` environment variable (never hardcoded/committed) and reject any other value. Not implemented in this phase since (1) is the documented, App-Service-enforced mechanism and doesn't require trusting application code to do it correctly.
+  - No real tenant ID, client ID, UPN, email, or object ID is hardcoded or committed anywhere in this repository.
+
+#### Entra/Azure external setup checklist (not executed - portal/CLI steps only)
+
+**Backend/API app registration** (Microsoft Entra admin center → App registrations → New registration):
+1. Register an app representing the backend API (e.g. "Fitness Tracker API").
+2. Expose an API (App registration → "Expose an API"): set the Application ID URI (default suggested form `api://<backend-app-client-id>`), then add one delegated scope, e.g. `FoodAnalysis.Access` (admin and user consent description: access to the personal food-analysis API). The full scope string used by iOS/MSAL is `api://<backend-app-client-id>/FoodAnalysis.Access`.
+3. Note the backend app's Application (client) ID and the tenant ID - both are public identifiers, safe to place in app/backend configuration later, never secrets.
+
+**Native iOS app registration** (separate App registration):
+1. Register a second app representing the iOS client (e.g. "Fitness Tracker iOS").
+2. Authentication → platform: "iOS/macOS", enter the exact bundle ID (`com.benedikt.Trainingsplan`); Azure derives/confirms the redirect URI `msauth.com.benedikt.Trainingsplan://auth` for you - must match `Trainingsplan-Info.plist` exactly.
+3. Ensure "Allow public client flows" is enabled and **no client secret is ever created** for this registration - a native/public client authenticates only via MSAL's interactive/silent flow, never a secret.
+4. API permissions → add the backend API's delegated `FoodAnalysis.Access` scope (from the previous registration) and grant admin consent (single-user personal app, so this can be done once directly rather than per-user consent prompts, though per-user consent also works).
+5. Fill in the app's real `EntraTenantID`, `EntraClientID` (the iOS app's own client ID, not the backend's), `EntraAPIScope` (`api://<backend-app-client-id>/FoodAnalysis.Access`), and `EntraRedirectURI` (`msauth.com.benedikt.Trainingsplan://auth`) into the shipped app's Info.plist/build configuration - never into source control as real values in a public repo; these are public identifiers, but still keep the actual values out of a shared/public git history per personal preference.
+
+**Azure Functions Easy Auth** (Azure Portal → Function App → Authentication):
+1. Add identity provider → Microsoft, select the backend API app registration from above (not a new one) as the identity provider so tokens issued for the API's scope are accepted.
+2. Restrict access: "Require authentication" (reject unauthenticated requests before Functions code ever runs - this is what makes `X-MS-CLIENT-PRINCIPAL-ID` trustworthy at all).
+3. Set the allowed token audience(s) to the backend API app's Application ID URI from step above.
+4. Set `EASY_AUTH_ENABLED=true` on the Function App's own application settings only after the above is confirmed enforcing - this is the server-side-only flag `backend/security.py::is_easy_auth_enabled()` reads; it must never be set before Easy Auth is actually configured and enforcing.
+5. **Verify spoofing is actually blocked** (do this against the real deployed Function App, not local `func start`, since Easy Auth is an Azure App Service platform feature with no local emulation): send a request directly to the deployed backend URL with a hand-crafted `X-MS-CLIENT-PRINCIPAL-ID` header and no real Azure-issued session/token. With "Require authentication" enforcing, Azure itself must reject this before the Function code runs (typically a redirect-to-login or 401, never a 200). If a request without a valid Azure-issued session ever reaches Function code with an attacker-supplied `X-MS-CLIENT-PRINCIPAL-ID` intact, Easy Auth is not actually enforcing and must not be relied upon - this application intentionally contains no code that tries to independently/cryptographically validate that header, since Azure's platform-level enforcement is the only trustworthy source for it.
+
+### Manual end-to-end test plan (prepared, not yet executed)
+
+`iPhone -> MSAL login -> Entra token -> Azure Functions Easy Auth -> backend -> gateway -> Copilot -> food estimate`, once the checklist above is complete and the gateway/backend are actually deployed:
+
+1. **First interactive login**: fresh app install, no cached MSAL account. Trigger analysis; expect the Microsoft sign-in UI to appear, complete sign-in, expect a successful analysis.
+2. **Second request, silent/cached auth**: immediately analyze again; expect no sign-in UI (silent token from MSAL's cache), successful analysis.
+3. **Expired/refresh case**: force a token refresh scenario if feasible (e.g. wait out access token lifetime or revoke/reset session server-side) and confirm silent acquisition transparently refreshes without user-visible interaction; only if MSAL reports `interactionRequired` should sign-in UI reappear.
+4. **Login cancellation**: trigger analysis, dismiss the Microsoft sign-in UI without completing it; expect the app returns to the food-analysis screen with the typed description/photo still present and a generic German error, not a crash or partial state.
+5. **Anonymous request rejected**: call the deployed backend's `POST /api/food-analysis` directly (e.g. via `curl`) with no `Authorization` header at all; expect Azure Easy Auth to reject it before Function code runs.
+6. **Invalid token rejected**: call the deployed backend with a malformed/expired/wrong-audience bearer token; expect rejection (via Easy Auth, not custom backend JWT validation).
+
 ## Change and validation policy
 
 Changes should be small and reviewable, with explicit acceptance criteria. Build `ios/Trainingsplan.xcodeproj` after Swift changes, with DerivedData outside the repository. After backend changes, run relevant tests and verify the health endpoint. Any SwiftData schema change requires an explicit non-destructive migration plan that preserves existing user data.
