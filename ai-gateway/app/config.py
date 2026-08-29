@@ -57,6 +57,19 @@ class Settings(BaseSettings):
     # setting never has a hard-coded value and is never committed.
     copilot_github_token: str | None = Field(default=None, alias="COPILOT_GITHUB_TOKEN")
 
+    # Shared secret the backend must present (as `X-Service-Token`) on every
+    # `/v1/*` call. This is the gateway's *only* real caller-authentication
+    # mechanism outside the dev bypass; the gateway is never a public,
+    # client-facing API, so this only ever needs to authenticate our own
+    # backend, not end users. Never has a hard-coded value; never committed.
+    gateway_service_token: str | None = Field(default=None, alias="GATEWAY_SERVICE_TOKEN")
+
+    # Small, fail-fast concurrency cap on simultaneous provider calls (each
+    # one holds a Copilot CLI session). Deliberately not an unbounded queue:
+    # a request that cannot get a slot immediately is rejected
+    # (ServiceSaturatedError, 503) rather than made to wait.
+    ai_provider_max_concurrency: int = Field(default=2, alias="AI_PROVIDER_MAX_CONCURRENCY")
+
     def validate(self) -> None:
         if self.app_env not in ALLOWED_APP_ENVS:
             raise ValueError(
@@ -103,6 +116,15 @@ class Settings(BaseSettings):
                         f"purpose (here: '{purpose}') to a model id. "
                         "A model is never silently substituted."
                     )
+
+        if not (1 <= self.ai_provider_max_concurrency <= 20):
+            raise ValueError("AI_PROVIDER_MAX_CONCURRENCY must be between 1 and 20.")
+
+        if self.app_env == "production" and not (self.gateway_service_token or "").strip():
+            # The gateway is never a public API; its only caller is our own
+            # backend, authenticated with this shared secret. Fails closed
+            # in production rather than silently accepting any caller.
+            raise ValueError("GATEWAY_SERVICE_TOKEN must be set when APP_ENV=production.")
 
     def copilot_model_routes(self) -> dict[str, str]:
         """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.

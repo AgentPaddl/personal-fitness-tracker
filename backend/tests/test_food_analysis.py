@@ -18,13 +18,13 @@ _VALID_JPEG_BYTES = make_valid_jpeg_bytes()
 _VALID_PNG_BYTES = make_valid_png_bytes()
 
 
-def _request(body: dict | bytes | None) -> func.HttpRequest:
+def _request(body: dict | bytes | None, headers: dict[str, str] | None = None) -> func.HttpRequest:
     raw_body = body if isinstance(body, (bytes, type(None))) else json.dumps(body).encode()
     return func.HttpRequest(
         method="POST",
         url="/api/food-analysis",
         body=raw_body or b"",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
 
 
@@ -88,13 +88,27 @@ def test_food_analysis_rejects_description_over_length_bound():
     assert json.loads(response.get_body())["error"]["code"] == "invalid_request"
 
 
-def test_food_analysis_denied_outside_development_mode(monkeypatch):
+def test_food_analysis_denied_outside_development_mode_without_api_key(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
 
     response = food_analysis(_request({"food_description": "an apple"}))
 
-    assert response.status_code == 403
-    assert json.loads(response.get_body())["error"]["code"] == "not_implemented"
+    assert response.status_code == 401
+    assert json.loads(response.get_body())["error"]["code"] == "authentication_required"
+
+
+def test_food_analysis_allowed_outside_development_mode_with_valid_api_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("BACKEND_API_KEY", "correct-key")
+
+    request = _request({"food_description": "an apple"}, headers={"X-API-Key": "correct-key"})
+    response = food_analysis(request)
+
+    # A BACKEND_API_KEY-authenticated request should never be blocked purely
+    # by APP_ENV=production; it will still fail downstream (gateway
+    # unreachable in this unit test), but never with 401/403.
+    assert response.status_code != 401
+    assert response.status_code != 403
 
 
 def test_food_analysis_success_maps_to_public_contract(monkeypatch):
@@ -455,10 +469,10 @@ def test_food_analysis_image_maps_gateway_error(monkeypatch):
     assert json.loads(response.get_body())["error"]["code"] == "gateway_unreachable"
 
 
-def test_food_analysis_image_denied_outside_development_mode(monkeypatch):
+def test_food_analysis_image_denied_outside_development_mode_without_api_key(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
 
     response = food_analysis(_multipart_request())
 
-    assert response.status_code == 403
-    assert json.loads(response.get_body())["error"]["code"] == "not_implemented"
+    assert response.status_code == 401
+    assert json.loads(response.get_body())["error"]["code"] == "authentication_required"

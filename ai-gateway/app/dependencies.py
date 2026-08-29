@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from app.concurrency import ConcurrencyLimiter
 from app.config import Settings, get_settings
 from app.providers.base import StructuredGenerationProvider
 from app.providers.fake import FakeProvider
@@ -32,6 +33,11 @@ def get_provider() -> StructuredGenerationProvider:
     return _build_provider(get_settings())
 
 
+@lru_cache
+def get_concurrency_limiter() -> ConcurrencyLimiter:
+    return ConcurrencyLimiter(get_settings().ai_provider_max_concurrency)
+
+
 def get_food_analysis_use_case() -> FoodAnalysisUseCase:
     settings = get_settings()
     return FoodAnalysisUseCase(
@@ -39,4 +45,5 @@ def get_food_analysis_use_case() -> FoodAnalysisUseCase:
         timeout_seconds=settings.ai_provider_timeout_seconds,
         model_purpose=settings.food_text_model_purpose,
         image_model_purpose=settings.food_image_model_purpose,
+        concurrency_limiter=get_concurrency_limiter(),
     )

@@ -76,10 +76,19 @@ class GatewayClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
         client: httpx.Client | None = None,
+        service_token: str | None = None,
+        request_id: str | None = None,
     ):
         # ``client`` allows tests to inject a fully-configured httpx.Client
         # (e.g. Starlette's TestClient) that talks to the gateway in-process.
         self._client = client or httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
+        self._headers: dict[str, str] = {}
+        if service_token:
+            # Proves to the gateway this call came from the backend, not an
+            # arbitrary caller - the gateway is never a public API.
+            self._headers["X-Service-Token"] = service_token
+        if request_id:
+            self._headers["X-Request-Id"] = request_id
 
     def analyze_food_text(self, food_description: str) -> dict[str, Any]:
         return self._post_and_handle({"food_description": food_description})
@@ -100,7 +109,7 @@ class GatewayClient:
 
     def _post_and_handle(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = self._client.post("/v1/food-analysis", json=payload)
+            response = self._client.post("/v1/food-analysis", json=payload, headers=self._headers)
         except httpx.TimeoutException as exc:
             raise GatewayClientError("gateway_timeout", 504) from exc
         except httpx.RequestError as exc:

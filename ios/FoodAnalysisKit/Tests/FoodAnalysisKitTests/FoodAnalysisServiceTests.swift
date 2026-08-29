@@ -54,6 +54,38 @@ final class FoodAnalysisServiceTests: XCTestCase {
         XCTAssertEqual(estimate.calories, 95)
     }
 
+    func testAPIKeyIsSentWhenConfigured() async throws {
+        let responseJSON = """
+            {"estimate": {"food_name": "Apfel", "calories": 95, "protein_grams": 0.5,
+            "carbohydrate_grams": 25, "fat_grams": 0.3, "confidence": 0.9, "warnings": []}}
+            """.data(using: .utf8)!
+
+        let mock = MockPerformer { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-API-Key"), "test-api-key")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (responseJSON, response)
+        }
+
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock, apiKey: "test-api-key")
+        _ = try await service.analyze(description: "Ein Apfel")
+    }
+
+    func testNoAPIKeyHeaderWhenNotConfigured() async throws {
+        let responseJSON = """
+            {"estimate": {"food_name": "Apfel", "calories": 95, "protein_grams": 0.5,
+            "carbohydrate_grams": 25, "fat_grams": 0.3, "confidence": 0.9, "warnings": []}}
+            """.data(using: .utf8)!
+
+        let mock = MockPerformer { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-API-Key"))
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (responseJSON, response)
+        }
+
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+        _ = try await service.analyze(description: "Ein Apfel")
+    }
+
     func testTimeoutIsMappedToTimeoutError() async {
         let mock = MockPerformer { _ in throw URLError(.timedOut) }
         let service = FoodAnalysisService(baseURL: baseURL, session: mock)

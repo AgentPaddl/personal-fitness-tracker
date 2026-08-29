@@ -17,4 +17,20 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
     case unsupportedImageType
     /// The backend rejected the image for exceeding the size limit.
     case imageTooLarge
+
+    /// Whether an explicit "Erneut versuchen" retry action makes sense for
+    /// this failure. Only failures where an identical retry could
+    /// plausibly succeed without any change to the input (connectivity,
+    /// a temporarily unavailable backend, rate limiting, or a timeout) are
+    /// eligible; input/configuration problems are not, since retrying the
+    /// exact same request would just fail the same way again.
+    public var isRetryEligible: Bool {
+        switch self {
+        case .noConnection, .timeout, .backendUnavailable, .rateLimited, .analysisFailed:
+            return true
+        case .unauthorized, .invalidResponse, .imageProcessingFailed, .imageMissingOrEmpty,
+            .unsupportedImageType, .imageTooLarge:
+            return false
+        }
+    }
 }

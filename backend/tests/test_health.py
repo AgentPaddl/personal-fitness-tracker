@@ -13,7 +13,12 @@ def test_health_returns_ok_status():
     assert response.mimetype == "application/json"
 
 
-def test_function_app_registers_health_route():
+def test_function_app_registers_health_route(monkeypatch):
+    import sys
+
+    monkeypatch.setenv("APP_ENV", "development")
+    sys.modules.pop("function_app", None)
+
     import function_app
 
     assert function_app.app is not None

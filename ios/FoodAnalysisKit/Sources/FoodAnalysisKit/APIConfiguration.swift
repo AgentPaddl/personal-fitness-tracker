@@ -42,7 +42,7 @@ public enum APIConfigurationError: Error, Equatable, Sendable {
 /// - Production-like endpoints must use `https://`.
 public enum APIConfiguration {
     /// Public entry point: resolves using the real environment and the
-    /// real build target (Simulator vs. device).
+    /// real build target (Simulator vs. device, Debug vs. Release).
     public static func resolveBackendBaseURL(
         rawOverride: String? = ProcessInfo.processInfo.environment["API_BASE_URL"]
     ) -> Result<URL, APIConfigurationError> {
@@ -51,15 +51,44 @@ public enum APIConfiguration {
         #else
         let allowsImplicitSimulatorDefault = false
         #endif
-        return resolve(rawOverride: rawOverride, allowsImplicitSimulatorDefault: allowsImplicitSimulatorDefault)
+        // The plain-HTTP local-development exception (LAN IPs for physical-
+        // device development) only ever applies to Debug builds. A Release
+        // build - what an installed/production build actually is - must
+        // always use HTTPS, regardless of host, so a misconfigured or
+        // leftover development URL can never silently ship in production.
+        #if DEBUG
+        let allowsInsecureLocalDevelopmentHost = true
+        #else
+        let allowsInsecureLocalDevelopmentHost = false
+        #endif
+        return resolve(
+            rawOverride: rawOverride,
+            allowsImplicitSimulatorDefault: allowsImplicitSimulatorDefault,
+            allowsInsecureLocalDevelopmentHost: allowsInsecureLocalDevelopmentHost
+        )
+    }
+
+    /// Resolves the optional backend API key (`X-API-Key`), sent alongside
+    /// every request once the backend requires production authentication.
+    /// `nil` is valid - the backend's own development-mode bypass does not
+    /// require a key; a production backend fails closed server-side if the
+    /// header is absent, so this never needs its own fail-closed behavior
+    /// here.
+    public static func resolveBackendAPIKey(
+        rawValue: String? = ProcessInfo.processInfo.environment["API_KEY"]
+    ) -> String? {
+        let trimmed = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Testable core: takes the "are we allowed to default to the local
-    /// Simulator address" decision as a plain parameter instead of a
-    /// compile-time platform check.
+    /// Simulator address" and "are we allowed the local-HTTP development
+    /// exception" decisions as plain parameters instead of compile-time
+    /// platform/configuration checks.
     static func resolve(
         rawOverride: String?,
-        allowsImplicitSimulatorDefault: Bool
+        allowsImplicitSimulatorDefault: Bool,
+        allowsInsecureLocalDevelopmentHost: Bool = true
     ) -> Result<URL, APIConfigurationError> {
         let trimmed = (rawOverride ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -79,7 +108,7 @@ public enum APIConfiguration {
             return .failure(.unsupportedScheme(scheme))
         }
 
-        if scheme == "http" && !isLocalDevelopmentHost(host) {
+        if scheme == "http" && !(allowsInsecureLocalDevelopmentHost && isLocalDevelopmentHost(host)) {
             return .failure(.insecureSchemeForNonLocalHost(host: host))
         }
 

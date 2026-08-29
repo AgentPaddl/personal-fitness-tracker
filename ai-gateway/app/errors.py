@@ -109,6 +109,20 @@ class ProviderOutputInvalidError(GatewayError):
         super().__init__("The AI provider returned output that failed validation.")
 
 
+class ServiceSaturatedError(GatewayError):
+    """Raised when the configured concurrency limit is already in use.
+
+    Fails fast rather than queuing unbounded work in memory: the caller
+    should retry later, not be made to wait indefinitely.
+    """
+
+    code = "service_saturated"
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__("The gateway is at its concurrent request limit. Try again shortly.")
+
+
 class InternalGatewayError(GatewayError):
     """Final, safe fallback for any exception not otherwise normalized."""
 

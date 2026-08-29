@@ -10,6 +10,12 @@ public final class FoodAnalysisViewModel: ObservableObject {
     @Published public var descriptionText: String = ""
     @Published public private(set) var isAnalyzing = false
     @Published public var errorMessage: String?
+    /// The specific error behind `errorMessage`, if any - lets the UI
+    /// decide whether an explicit "Erneut versuchen" action makes sense
+    /// (`FoodAnalysisError.isRetryEligible`) without re-deriving it from
+    /// the display string. `nil` whenever `errorMessage` came from a
+    /// configuration failure rather than a request failure.
+    @Published public private(set) var lastError: FoodAnalysisError?
     @Published public var reviewDraft: FoodAnalysisReviewDraft?
     /// The preprocessed (resized/JPEG-compressed/metadata-stripped) image
     /// ready for upload, if the user picked one. Held only in memory for
@@ -26,7 +32,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
     public convenience init() {
         switch APIConfiguration.resolveBackendBaseURL() {
         case .success(let url):
-            self.init(service: FoodAnalysisService(baseURL: url))
+            self.init(service: FoodAnalysisService(baseURL: url, apiKey: APIConfiguration.resolveBackendAPIKey()))
         case .failure(let error):
             self.init(configurationError: error)
         }
@@ -58,6 +64,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
 
         isAnalyzing = true
         errorMessage = nil
+        lastError = nil
         defer { isAnalyzing = false }
 
         do {
@@ -74,8 +81,10 @@ public final class FoodAnalysisViewModel: ObservableObject {
             reviewDraft = FoodAnalysisReviewDraft(estimate: estimate)
         } catch let error as FoodAnalysisError {
             errorMessage = Self.userMessage(for: error)
+            lastError = error
         } catch {
             errorMessage = Self.userMessage(for: .analysisFailed)
+            lastError = .analysisFailed
         }
     }
 

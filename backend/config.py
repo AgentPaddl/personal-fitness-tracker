@@ -15,6 +15,11 @@ _MAX_TIMEOUT_SECONDS = 120.0
 #: route, which has no production authentication yet.
 ALLOWED_APP_ENVS = frozenset({"development", "test", "production"})
 
+#: Hosts that are only ever reachable from the developer's own machine/LAN.
+#: A production deployment must never point at one of these - it would
+#: mean the backend can't actually reach a real, separately-hosted gateway.
+_LOCAL_ONLY_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+
 
 class ConfigError(ValueError):
     """Raised when server-side configuration is invalid at startup."""
@@ -28,12 +33,38 @@ def is_development_mode() -> bool:
     return get_app_env() == "development"
 
 
+def is_production_mode() -> bool:
+    return get_app_env() == "production"
+
+
 def get_gateway_base_url() -> str:
     return os.environ.get("AI_GATEWAY_BASE_URL", DEFAULT_GATEWAY_BASE_URL)
 
 
 def get_gateway_timeout_seconds() -> float:
     return float(os.environ.get("AI_GATEWAY_TIMEOUT_SECONDS", DEFAULT_GATEWAY_TIMEOUT_SECONDS))
+
+
+def get_backend_api_key() -> str | None:
+    """Shared secret the iOS client must present (`X-API-Key`).
+
+    This is the backend's only real caller-authentication mechanism today;
+    it authenticates "this is our own iOS app", not individual end users
+    (there is exactly one). Never has a hard-coded value; never committed.
+    """
+
+    return os.environ.get("BACKEND_API_KEY") or None
+
+
+def get_gateway_service_token() -> str | None:
+    """Shared secret forwarded to the gateway as `X-Service-Token`.
+
+    Proves to the gateway that a call came from this backend, not an
+    arbitrary caller - the gateway itself is never a public API. Never has
+    a hard-coded value; never committed.
+    """
+
+    return os.environ.get("GATEWAY_SERVICE_TOKEN") or None
 
 
 def validate_config() -> None:
@@ -53,3 +84,21 @@ def validate_config() -> None:
         raise ConfigError(
             f"AI_GATEWAY_TIMEOUT_SECONDS must be between {_MIN_TIMEOUT_SECONDS} and {_MAX_TIMEOUT_SECONDS}."
         )
+
+    if app_env == "production":
+        # Every production requirement below fails closed: a missing value
+        # is a startup error, never a silently-permissive default.
+        if not get_backend_api_key():
+            raise ConfigError("BACKEND_API_KEY must be set when APP_ENV=production.")
+        if not get_gateway_service_token():
+            raise ConfigError("GATEWAY_SERVICE_TOKEN must be set when APP_ENV=production.")
+        if (parsed.hostname or "").lower() in _LOCAL_ONLY_HOSTNAMES:
+            raise ConfigError(
+                "AI_GATEWAY_BASE_URL must not be a localhost address when APP_ENV=production; "
+                "the production gateway must be an explicitly configured, separately-hosted URL."
+            )
+        if parsed.scheme != "https":
+            raise ConfigError(
+                "AI_GATEWAY_BASE_URL must use https when APP_ENV=production "
+                "(private networking/HTTPS only - see backend/AGENTS.md)."
+            )

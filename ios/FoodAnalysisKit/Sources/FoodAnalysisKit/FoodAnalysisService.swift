@@ -28,21 +28,29 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
     private let baseURL: URL
     private let session: URLRequestPerforming
     private let timeoutInterval: TimeInterval
+    private let apiKey: String?
 
+    /// `timeoutInterval` default (110s) sits above the documented timeout
+    /// hierarchy's outer bound - see `ios/AGENTS.md` - so this layer never
+    /// aborts before the backend/gateway/provider layers below it can
+    /// return their own normalized timeout.
     public init(
         baseURL: URL,
         session: URLRequestPerforming = URLSession.shared,
-        timeoutInterval: TimeInterval = 30
+        timeoutInterval: TimeInterval = 110,
+        apiKey: String? = nil
     ) {
         self.baseURL = baseURL
         self.session = session
         self.timeoutInterval = timeoutInterval
+        self.apiKey = apiKey
     }
 
     public func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
         var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAPIKey(to: &request)
         request.timeoutInterval = timeoutInterval
         request.httpBody = try JSONEncoder().encode(FoodAnalysisRequestDTO(foodDescription: description))
 
@@ -56,12 +64,19 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        applyAPIKey(to: &request)
         request.timeoutInterval = timeoutInterval
         request.httpBody = Self.multipartBody(
             boundary: boundary, imageData: data, mimeType: mimeType, description: description
         )
 
         return try await perform(request)
+    }
+
+    private func applyAPIKey(to request: inout URLRequest) {
+        if let apiKey, !apiKey.isEmpty {
+            request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        }
     }
 
     private func perform(_ request: URLRequest) async throws -> FoodAnalysisResponseDTO.Estimate {

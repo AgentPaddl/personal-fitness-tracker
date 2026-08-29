@@ -4,7 +4,7 @@ These instructions apply to everything under `ai-gateway/`.
 
 ## Status
 
-Phase 2 (provider-neutral gateway foundation), Phase 3 (real Copilot SDK provider), and Phase 4 text food analysis are implemented: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, the real `GitHubCopilotProvider` (official GitHub Copilot SDK via the Copilot CLI in headless/server mode), and the first `FoodAnalysisUseCase`. Image-based food analysis (`feature/v2-ios-food-image-analysis`, not yet merged) extends the same use case to accept an optional generic image `Attachment`, routed to a separate `food_image_v1` model purpose. Production deployment (Azure Container Apps, production authentication mechanism, secret storage) is **not implemented yet** — do not invent that architecture without an explicit task.
+Phase 2 (provider-neutral gateway foundation), Phase 3 (real Copilot SDK provider), Phase 4 (text food analysis), and Phase 5 (image food analysis) are implemented: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, the real `GitHubCopilotProvider` (official GitHub Copilot SDK via the Copilot CLI in headless/server mode), and `FoodAnalysisUseCase` (text and/or image). Phase 6 (`feature/v2-production-hardening`, not yet merged) adds production hardening: real backend-to-gateway authentication (`X-Service-Token`/`GATEWAY_SERVICE_TOKEN`), a fail-fast concurrency limiter, request-correlation IDs, and a `Dockerfile` for Azure Container Apps. Real Azure deployment itself has **not** been performed - see `docs/architecture.md`'s Phase 6 checklist for exactly what remains external/manual.
 
 ## Provider decision (final)
 
@@ -31,9 +31,14 @@ Phase 2 (provider-neutral gateway foundation), Phase 3 (real Copilot SDK provide
 
 ## Authentication
 
-- Production (deployed) authentication is not decided yet. Fail-closed by default: `GATEWAY_DEV_AUTH_BYPASS` defaults to false and only takes effect when `APP_ENV=development`. The default configuration (no env vars set) refuses every `/v1/*` request. `GET /healthz` remains anonymous.
+- The gateway is never a public, client-facing API - its only caller is our own backend. Fail-closed by default: `GATEWAY_DEV_AUTH_BYPASS` defaults to false and only takes effect when `APP_ENV=development`. Outside that bypass, every `/v1/*` request must present a valid `X-Service-Token` header matching `GATEWAY_SERVICE_TOKEN` (`app/security.py`, constant-time comparison); `GATEWAY_SERVICE_TOKEN` is required (fails closed at startup) when `APP_ENV=production`. `GET /healthz` remains anonymous.
 - Never enable `GATEWAY_DEV_AUTH_BYPASS` outside a trusted local environment, and never set `APP_ENV=production` with `AI_PROVIDER=fake` (rejected at startup).
-- Copilot's own authentication (separate from the above) is documented in `README.md`: a locally logged-in `copilot` CLI session by default, or an explicit `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN`. Never hard-code or commit a token.
+- Copilot's own authentication (separate from the above) is documented in `README.md`: a locally logged-in `copilot` CLI session by default, or an explicit `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN`. Never hard-code or commit a token. In a deployed container, only the `COPILOT_GITHUB_TOKEN` mechanism is viable (see `Dockerfile`) - the interactive device-code login has no headless equivalent.
+
+## Concurrency and observability
+
+- `AI_PROVIDER_MAX_CONCURRENCY` (default 2, range 1-20) bounds simultaneous provider calls via `app/concurrency.py::ConcurrencyLimiter` - a fail-fast counter, not a queue. A request that cannot get a slot immediately gets `ServiceSaturatedError` (503 `service_saturated`) rather than waiting or being buffered in memory.
+- Every request gets a correlation ID (`X-Request-Id`, forwarded from the backend if present, otherwise minted) logged with path/method/status/latency and echoed back in the response header and in any error envelope's `request_id` field (`app/main.py`'s logging middleware). Never logs the food description, image bytes, or raw provider response.
 
 ## Provider abstraction
 
