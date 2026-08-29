@@ -11,6 +11,23 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+#: Conservative, end-to-end-verified image formats only. Matches the
+#: gateway's own accepted set (`ai-gateway/app/schemas/food_analysis.py`).
+#: The iOS client always re-encodes to JPEG before upload; PNG is accepted
+#: for other callers/tests. HEIC is intentionally not accepted.
+SUPPORTED_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png"})
+
+#: Conservative cap on the raw uploaded file. The iOS client resizes and
+#: compresses before upload, so a compliant client's photo is always far
+#: below this. Matches the gateway's own `MAX_IMAGE_BYTES` (chosen to fit
+#: within the currently-configured vision model's advertised
+#: `max_prompt_image_size` - see `ai-gateway/app/schemas/food_analysis.py`).
+MAX_IMAGE_BYTES = 3 * 1024 * 1024
+
+#: Maximum length for the optional text field accompanying an image upload,
+#: matching the text-only contract's limit.
+MAX_FOOD_DESCRIPTION_LENGTH = 2000
+
 
 class FoodAnalysisPublicRequest(BaseModel):
     food_description: str = Field(min_length=1, max_length=2000)

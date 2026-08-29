@@ -20,5 +20,10 @@
 	     else. See ios/AGENTS.md for exact scope/rationale. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Wird nur verwendet, um sich während der Entwicklung mit dem Backend auf deinem Mac im lokalen Netzwerk zu verbinden.</string>
+	<!-- Camera capture for the food-analysis flow ("Foto aufnehmen"). Only
+	     requested when the user explicitly taps that action; never on
+	     launch. Captured photos are never saved to the Photos library. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Wird verwendet, um ein Foto deines Essens für die KI-Analyse aufzunehmen.</string>
 </dict>
 </plist>

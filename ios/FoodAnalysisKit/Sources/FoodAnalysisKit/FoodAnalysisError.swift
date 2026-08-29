@@ -9,4 +9,12 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
     case unauthorized
     case invalidResponse
     case analysisFailed
+    /// The picked photo could not be decoded/re-encoded on-device.
+    case imageProcessingFailed
+    /// No image was selected (or it was empty) when an image call was made.
+    case imageMissingOrEmpty
+    /// The backend rejected the image's MIME type.
+    case unsupportedImageType
+    /// The backend rejected the image for exceeding the size limit.
+    case imageTooLarge
 }

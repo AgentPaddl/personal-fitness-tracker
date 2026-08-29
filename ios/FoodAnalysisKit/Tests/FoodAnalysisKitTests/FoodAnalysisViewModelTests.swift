@@ -1,3 +1,6 @@
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import FoodAnalysisKit
@@ -6,6 +9,8 @@ import XCTest
 private final class StubService: FoodAnalysisServicing {
     var result: Result<FoodAnalysisResponseDTO.Estimate, Error>
     private(set) var callCount = 0
+    private(set) var lastImageMimeType: String?
+    private(set) var lastImageDescription: String?
 
     init(result: Result<FoodAnalysisResponseDTO.Estimate, Error>) {
         self.result = result
@@ -13,6 +18,15 @@ private final class StubService: FoodAnalysisServicing {
 
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
         callCount += 1
+        return try result.get()
+    }
+
+    func analyzeImage(
+        data: Data, mimeType: String, description: String?
+    ) async throws -> FoodAnalysisResponseDTO.Estimate {
+        callCount += 1
+        lastImageMimeType = mimeType
+        lastImageDescription = description
         return try result.get()
     }
 }
@@ -27,6 +41,15 @@ private final class GatedService: FoodAnalysisServicing {
     private var continuation: CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>?
 
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
+        callCount += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func analyzeImage(
+        data: Data, mimeType: String, description: String?
+    ) async throws -> FoodAnalysisResponseDTO.Estimate {
         callCount += 1
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
@@ -108,5 +131,100 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         XCTAssertEqual(service.callCount, 1)
         XCTAssertFalse(viewModel.isAnalyzing)
         XCTAssertNotNil(viewModel.reviewDraft)
+    }
+
+    // MARK: - Image support
+
+    private func makeTestJPEGData() -> Data {
+        let width = 4
+        let height = 4
+        let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let cgImage = context.makeImage()!
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        CGImageDestinationFinalize(destination)
+        return data as Data
+    }
+
+    func testAnalyzeIgnoresEmptyStateWithNoTextOrImage() async {
+        let service = StubService(result: .success(makeEstimate()))
+        let viewModel = FoodAnalysisViewModel(service: service)
+
+        await viewModel.analyze()
+
+        XCTAssertEqual(service.callCount, 0)
+    }
+
+    func testSetPickedImageStoresPreprocessedImageOnSuccess() {
+        let service = StubService(result: .success(makeEstimate()))
+        let viewModel = FoodAnalysisViewModel(service: service)
+
+        viewModel.setPickedImage(rawData: makeTestJPEGData())
+
+        XCTAssertNotNil(viewModel.selectedImage)
+        XCTAssertEqual(viewModel.selectedImage?.mimeType, "image/jpeg")
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testSetPickedImageWithInvalidDataSurfacesError() {
+        let service = StubService(result: .success(makeEstimate()))
+        let viewModel = FoodAnalysisViewModel(service: service)
+
+        viewModel.setPickedImage(rawData: Data("not an image".utf8))
+
+        XCTAssertNil(viewModel.selectedImage)
+        XCTAssertEqual(viewModel.errorMessage, FoodAnalysisViewModel.userMessage(for: .imageProcessingFailed))
+    }
+
+    func testRemoveSelectedImageClearsState() {
+        let service = StubService(result: .success(makeEstimate()))
+        let viewModel = FoodAnalysisViewModel(service: service)
+        viewModel.setPickedImage(rawData: makeTestJPEGData())
+        XCTAssertNotNil(viewModel.selectedImage)
+
+        viewModel.removeSelectedImage()
+
+        XCTAssertNil(viewModel.selectedImage)
+    }
+
+    func testAnalyzeWithImageOnlyCallsAnalyzeImage() async {
+        let service = StubService(result: .success(makeEstimate()))
+        let viewModel = FoodAnalysisViewModel(service: service)
+        viewModel.setPickedImage(rawData: makeTestJPEGData())
+
+        await viewModel.analyze()
+
+        XCTAssertEqual(service.callCount, 1)
+        XCTAssertNil(service.lastImageDescription)
+        XCTAssertNotNil(viewModel.reviewDraft)
+    }
+
+    func testAnalyzeWithTextAndImageSendsBoth() async {
+        let service = StubService(result: .success(makeEstimate()))
+        let viewModel = FoodAnalysisViewModel(service: service)
+        viewModel.descriptionText = "a bowl of pasta"
+        viewModel.setPickedImage(rawData: makeTestJPEGData())
+
+        await viewModel.analyze()
+
+        XCTAssertEqual(service.callCount, 1)
+        XCTAssertEqual(service.lastImageDescription, "a bowl of pasta")
+    }
+
+    func testSelectedImageIsRetainedAfterAnalysisFailure() async {
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let viewModel = FoodAnalysisViewModel(service: service)
+        viewModel.setPickedImage(rawData: makeTestJPEGData())
+
+        await viewModel.analyze()
+
+        XCTAssertNotNil(viewModel.selectedImage)
+        XCTAssertEqual(viewModel.errorMessage, FoodAnalysisViewModel.userMessage(for: .timeout))
     }
 }

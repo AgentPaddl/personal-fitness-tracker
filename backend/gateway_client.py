@@ -13,6 +13,7 @@ is read (safely) to decide which whitelisted backend status/code applies.
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import httpx
@@ -81,10 +82,25 @@ class GatewayClient:
         self._client = client or httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
 
     def analyze_food_text(self, food_description: str) -> dict[str, Any]:
+        return self._post_and_handle({"food_description": food_description})
+
+    def analyze_food_image(
+        self, image_bytes: bytes, mime_type: str, food_description: str | None = None
+    ) -> dict[str, Any]:
+        # Sent as an inline base64 JSON payload on the existing internal
+        # gateway contract (server-to-server, not the public multipart API)
+        # to reuse the existing JSON httpx client rather than adding a
+        # second internal transport.
+        payload: dict[str, Any] = {
+            "image": {"media_type": mime_type, "data_base64": base64.b64encode(image_bytes).decode("ascii")}
+        }
+        if food_description:
+            payload["food_description"] = food_description
+        return self._post_and_handle(payload)
+
+    def _post_and_handle(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = self._client.post(
-                "/v1/food-analysis", json={"food_description": food_description}
-            )
+            response = self._client.post("/v1/food-analysis", json=payload)
         except httpx.TimeoutException as exc:
             raise GatewayClientError("gateway_timeout", 504) from exc
         except httpx.RequestError as exc:

@@ -37,12 +37,15 @@ from app.errors import (
     ProviderRateLimitedError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    RequestValidationFailedError,
 )
 from app.providers.base import (
+    Attachment,
     StructuredGenerationProvider,
     StructuredGenerationRequest,
     StructuredGenerationResult,
 )
+from app.schemas.food_analysis import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_MEDIA_TYPES
 
 _SUBMIT_TOOL_NAME = "submit_structured_result"
 _SUBMIT_TOOL_DESCRIPTION = (
@@ -61,9 +64,15 @@ logger = logging.getLogger(__name__)
 class GitHubCopilotProvider(StructuredGenerationProvider):
     """Adapter around the official GitHub Copilot SDK (``copilot`` package)."""
 
-    def __init__(self, model_routes: dict[str, str], github_token: str | None = None):
+    def __init__(
+        self,
+        model_routes: dict[str, str],
+        github_token: str | None = None,
+        vision_required_purposes: frozenset[str] = frozenset(),
+    ):
         self._model_routes = model_routes
         self._github_token = github_token
+        self._vision_required_purposes = vision_required_purposes
         self._client: CopilotClient | None = None
         self._start_lock = asyncio.Lock()
 
@@ -91,6 +100,7 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
 
     async def generate(self, request: StructuredGenerationRequest) -> StructuredGenerationResult:
         model = self._resolve_model(request.model_purpose)
+        sdk_attachments = _to_sdk_attachments(request.attachments)
         client = await self._ensure_client()
 
         system_content = "\n".join(m.content for m in request.messages if m.role == "system")
@@ -147,7 +157,9 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
         try:
             session.on(_on_event)
             try:
-                await session.send_and_wait(user_content, timeout=request.timeout_seconds)
+                await session.send_and_wait(
+                    user_content, attachments=sdk_attachments, timeout=request.timeout_seconds
+                )
             except TimeoutError as exc:
                 raise ProviderTimeoutError() from exc
             except Exception as exc:
@@ -181,14 +193,110 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
                 return False
             models = await client.list_models()
             available_ids = {model.id for model in models}
-            return all(model_id in available_ids for model_id in self._model_routes.values())
+            if not all(model_id in available_ids for model_id in self._model_routes.values()):
+                return False
+            return self._configured_vision_routes_are_supported(models)
         except Exception:
             return False
+
+    def _configured_vision_routes_are_supported(self, models: list[Any]) -> bool:
+        # Never assumes a model supports images; only trusts the SDK's own
+        # reported capability. A route required for image analysis whose
+        # model does not fully satisfy `_vision_route_is_fully_supported`
+        # fails readiness rather than silently attempting (and likely
+        # failing, or silently mis-behaving on) a real generation call.
+        if not self._vision_required_purposes:
+            return True
+        models_by_id = {model.id: model for model in models}
+        for purpose in self._vision_required_purposes:
+            model_id = self._model_routes.get(purpose)
+            if model_id is None:
+                continue  # Not configured; ModelUnavailableError already covers request-time use.
+            model = models_by_id.get(model_id)
+            if model is None or not _vision_route_is_fully_supported(model):
+                return False
+        return True
 
     async def aclose(self) -> None:
         if self._client is not None:
             client, self._client = self._client, None
             await client.stop()
+
+
+def _vision_route_is_fully_supported(model: Any) -> bool:
+    """Strict readiness check for a model required to support image input.
+
+    Checks every capability field the gateway actually relies on for image
+    analysis (see ``github-copilot-sdk`` 1.0.11's ``ModelCapabilities`` /
+    ``ModelVisionLimits`` in ``copilot/client.py``), not just the coarse
+    ``supports.vision`` flag:
+
+    - ``capabilities.supports.vision`` must be true.
+    - ``capabilities.limits.vision.supported_media_types`` must be present
+      and include every MIME type the gateway itself accepts for images
+      (``SUPPORTED_IMAGE_MEDIA_TYPES``).
+    - ``capabilities.limits.vision.max_prompt_images`` must be present and
+      at least 1.
+    - ``capabilities.limits.vision.max_prompt_image_size`` must be present
+      and at least our own ``MAX_IMAGE_BYTES``. SDK 1.0.11 does not
+      document a "missing means unlimited" semantic for this field, so a
+      missing value is treated as unknown/incompatible, not permissive -
+      readiness fails closed rather than assuming compatibility.
+
+    Any other missing/ambiguous field (no vision limits object at all, no
+    reported supported media types, no reported max_prompt_images) fails
+    closed - readiness is only ever true when the SDK's own capability
+    data affirmatively confirms every requirement above.
+    """
+
+    capabilities = getattr(model, "capabilities", None)
+    supports = getattr(capabilities, "supports", None) if capabilities is not None else None
+    if not supports or not getattr(supports, "vision", False):
+        return False
+
+    limits = getattr(capabilities, "limits", None)
+    vision_limits = getattr(limits, "vision", None) if limits is not None else None
+    if vision_limits is None:
+        return False
+
+    supported_media_types = getattr(vision_limits, "supported_media_types", None)
+    if supported_media_types is None:
+        return False
+    normalized_media_types = {media_type.lower() for media_type in supported_media_types}
+    if not SUPPORTED_IMAGE_MEDIA_TYPES.issubset(normalized_media_types):
+        return False
+
+    max_prompt_images = getattr(vision_limits, "max_prompt_images", None)
+    if max_prompt_images is None or max_prompt_images < 1:
+        return False
+
+    max_prompt_image_size = getattr(vision_limits, "max_prompt_image_size", None)
+    if max_prompt_image_size is None or max_prompt_image_size < MAX_IMAGE_BYTES:
+        return False
+
+    return True
+
+
+def _to_sdk_attachments(attachments: list[Attachment]) -> list[dict[str, str]] | None:
+    """Translate generic gateway attachments into the SDK's inline blob attachments.
+
+    Uses the SDK's ``BlobAttachment`` (inline base64 data, no temporary
+    files needed). Stays domain-blind: any attachment kind other than
+    "image" is rejected rather than silently ignored or guessed at.
+    """
+
+    if not attachments:
+        return None
+    sdk_attachments: list[dict[str, str]] = []
+    for attachment in attachments:
+        if attachment.kind != "image":
+            raise RequestValidationFailedError(f"Unsupported attachment kind '{attachment.kind}'.")
+        if not attachment.data:
+            raise RequestValidationFailedError("Attachment payload must not be empty.")
+        if not attachment.media_type:
+            raise RequestValidationFailedError("Attachment media type must not be empty.")
+        sdk_attachments.append({"type": "blob", "data": attachment.data, "mimeType": attachment.media_type})
+    return sdk_attachments
 
 
 def _classify_failure(status_code: int | None, error_type: str | None, message: str | None) -> GatewayError:

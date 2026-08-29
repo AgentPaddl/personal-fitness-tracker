@@ -90,10 +90,20 @@ def test_copilot_provider_valid_configuration_passes():
     settings = Settings(
         app_env="development",
         ai_provider="copilot",
-        copilot_model_routes_json='{"food_text_v1": "gpt-5"}',
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5-mini"}',
     )
     settings.validate()  # must not raise
-    assert settings.copilot_model_routes() == {"food_text_v1": "gpt-5"}
+    assert settings.copilot_model_routes() == {"food_text_v1": "gpt-5", "food_image_v1": "gpt-5-mini"}
+
+
+def test_copilot_provider_requires_route_for_image_purpose():
+    settings = Settings(
+        app_env="development",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5"}',
+    )
+    with pytest.raises(ValueError, match="food_image_v1"):
+        settings.validate()
 
 
 def test_copilot_model_routes_never_silently_defaults():

@@ -14,13 +14,16 @@ They also require a model-routing configuration, e.g.:
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
+import struct
 import subprocess
 import sys
+import zlib
 
 import pytest
 
-from app.providers.base import GenerationMessage, StructuredGenerationRequest
+from app.providers.base import Attachment, GenerationMessage, StructuredGenerationRequest
 from app.providers.github_copilot import GitHubCopilotProvider
 from tests.test_smoke_process import _GATEWAY_ROOT, _free_port, _wait_until_ready
 
@@ -162,3 +165,81 @@ def test_real_local_smoke_backend_to_gateway_to_copilot():
     assert estimate["food_name"]
     assert "copilot" not in str(result).lower()
     assert "gpt" not in str(result).lower()
+
+
+def _make_synthetic_png(width: int = 64, height: int = 64) -> bytes:
+    """Builds a small, deterministic, non-sensitive test PNG (a solid
+    reddish square) using only the stdlib (struct + zlib) - no bundled
+    fixture, no user photo, no external dependency.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+    signature = b"\x89PNG\r\n\x1a\n"
+    ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    raw_row = b"\x00" + bytes((200, 60, 40) * width)  # filter byte 0 + RGB pixels
+    raw = raw_row * height
+    idat = chunk(b"IDAT", zlib.compress(raw))
+    iend = chunk(b"IEND", b"")
+    return signature + ihdr + idat + iend
+
+
+def _image_model_routes() -> dict[str, str]:
+    routes = _model_routes()
+    if "food_image_v1" not in routes:
+        pytest.skip(
+            "COPILOT_MODEL_ROUTES_JSON must include a 'food_image_v1' route for the opt-in image test."
+        )
+    return routes
+
+
+def test_real_copilot_check_ready_includes_vision_capable_image_route():
+    async def _run() -> bool:
+        routes = _image_model_routes()
+        provider = GitHubCopilotProvider(model_routes=routes, vision_required_purposes=frozenset({"food_image_v1"}))
+        try:
+            return await provider.check_ready()
+        finally:
+            await provider.aclose()
+
+    # Fails (rather than silently proceeding) if the configured image
+    # model does not report vision support via the SDK's own capabilities.
+    assert asyncio.run(_run()) is True
+
+
+def test_real_copilot_image_analysis_synthetic_food_like_photo():
+    async def _run() -> dict:
+        routes = _image_model_routes()
+        provider = GitHubCopilotProvider(model_routes=routes)
+        image_base64 = base64.b64encode(_make_synthetic_png()).decode("ascii")
+        request = StructuredGenerationRequest(
+            model_purpose="food_image_v1",
+            messages=[
+                GenerationMessage(
+                    role="system",
+                    content=(
+                        "You are a nutrition estimation assistant. Given a photo of food, "
+                        "visually estimate the food and its portion size, and return a "
+                        "structured nutrition estimate matching the requested schema."
+                    ),
+                ),
+                GenerationMessage(
+                    role="user",
+                    content="A photo of the food is attached. Estimate the food and its portion from the image alone.",
+                ),
+            ],
+            output_json_schema=_SCHEMA,
+            timeout_seconds=90.0,
+            attachments=[Attachment(kind="image", media_type="image/png", data=image_base64)],
+        )
+        try:
+            result = await provider.generate(request)
+        finally:
+            await provider.aclose()
+        return result.data
+
+    data = asyncio.run(_run())
+
+    assert isinstance(data, dict)
+    assert data.get("food_name")

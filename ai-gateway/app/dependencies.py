@@ -21,6 +21,7 @@ def _build_provider(settings: Settings) -> StructuredGenerationProvider:
         return GitHubCopilotProvider(
             model_routes=settings.copilot_model_routes(),
             github_token=settings.copilot_github_token,
+            vision_required_purposes=frozenset({settings.food_image_model_purpose}),
         )
     # Unreachable: Settings.validate() already rejects other values.
     raise ValueError(f"Unsupported AI_PROVIDER '{settings.ai_provider}'.")
@@ -37,4 +38,5 @@ def get_food_analysis_use_case() -> FoodAnalysisUseCase:
         provider=get_provider(),
         timeout_seconds=settings.ai_provider_timeout_seconds,
         model_purpose=settings.food_text_model_purpose,
+        image_model_purpose=settings.food_image_model_purpose,
     )
