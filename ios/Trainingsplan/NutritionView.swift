@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import AVFoundation
+import UIKit
 import FoodAnalysisKit
 
 struct NutritionView: View {
@@ -24,6 +26,8 @@ struct NutritionView: View {
     @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel()
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var isLoadingPickedPhoto = false
+    @State private var isCameraSheetPresented = false
+    private let isCameraHardwareAvailable = UIImagePickerController.isSourceTypeAvailable(.camera)
 
     var body: some View {
         NavigationStack {
@@ -129,14 +133,25 @@ struct NutritionView: View {
                             .disabled(foodAnalysisViewModel.isAnalyzing)
                         }
                     } else {
-                        PhotosPicker(
-                            selection: $photoPickerItem,
-                            matching: .images,
-                            photoLibrary: .shared()
-                        ) {
-                            Label("Foto auswählen", systemImage: "photo")
+                        HStack {
+                            PhotosPicker(
+                                selection: $photoPickerItem,
+                                matching: .images,
+                                photoLibrary: .shared()
+                            ) {
+                                Label("Foto auswählen", systemImage: "photo")
+                            }
+                            .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
+
+                            if isCameraHardwareAvailable {
+                                Button {
+                                    requestCameraCapture()
+                                } label: {
+                                    Label("Foto aufnehmen", systemImage: "camera")
+                                }
+                                .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
+                            }
                         }
-                        .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
                     }
 
                     if isLoadingPickedPhoto {
@@ -232,6 +247,43 @@ struct NutritionView: View {
                     }
                 }
             }
+            .fullScreenCover(isPresented: $isCameraSheetPresented) {
+                CameraCaptureView(
+                    onCapture: { data in
+                        foodAnalysisViewModel.setPickedImage(rawData: data)
+                        isCameraSheetPresented = false
+                    },
+                    onCancel: {
+                        isCameraSheetPresented = false
+                    }
+                )
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    /// Only checks/requests camera *permission* here, in direct response to
+    /// the user tapping "Foto aufnehmen" - never proactively on view load.
+    private func requestCameraCapture() {
+        let decision = CameraCaptureAvailability.decide(
+            isCameraHardwareAvailable: isCameraHardwareAvailable,
+            authorizationStatus: CameraAuthorizationStatus(AVCaptureDevice.authorizationStatus(for: .video))
+        )
+        switch decision {
+        case .presentCamera:
+            isCameraSheetPresented = true
+        case .requestPermission:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        isCameraSheetPresented = true
+                    } else {
+                        foodAnalysisViewModel.errorMessage = FoodAnalysisViewModel.userMessage(for: .permissionDenied)
+                    }
+                }
+            }
+        case .unavailable(let reason):
+            foodAnalysisViewModel.errorMessage = FoodAnalysisViewModel.userMessage(for: reason)
         }
     }
 
@@ -391,6 +443,21 @@ private func createPreset(from entry: FoodEntry) {
             try modelContext.save()
         } catch {
             print("Fehler beim Löschen des Favoriten:", error)
+        }
+    }
+}
+
+extension CameraAuthorizationStatus {
+    /// Maps AVFoundation's status onto `FoodAnalysisKit`'s
+    /// AVFoundation-independent enum, isolating that dependency to this
+    /// one call site in the app layer.
+    init(_ status: AVAuthorizationStatus) {
+        switch status {
+        case .authorized: self = .authorized
+        case .notDetermined: self = .notDetermined
+        case .denied: self = .denied
+        case .restricted: self = .restricted
+        @unknown default: self = .restricted
         }
     }
 }

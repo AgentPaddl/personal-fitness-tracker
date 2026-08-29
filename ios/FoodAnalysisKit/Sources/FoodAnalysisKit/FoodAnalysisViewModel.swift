@@ -137,4 +137,15 @@ public final class FoodAnalysisViewModel: ObservableObject {
             return "Die konfigurierte Backend-Adresse enthält einen nicht unterstützten Pfad."
         }
     }
+
+    public static func userMessage(for reason: CameraCaptureUnavailableReason) -> String {
+        switch reason {
+        case .hardwareUnavailable:
+            return "Auf diesem Gerät ist keine Kamera verfügbar."
+        case .permissionDenied:
+            return "Kein Kamerazugriff. Bitte erlaube den Zugriff in den Einstellungen, um ein Foto aufzunehmen."
+        case .permissionRestricted:
+            return "Der Kamerazugriff ist auf diesem Gerät eingeschränkt."
+        }
+    }
 }
