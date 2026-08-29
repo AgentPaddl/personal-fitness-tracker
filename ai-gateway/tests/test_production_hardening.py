@@ -301,6 +301,45 @@ def test_production_accepts_provider_timeout_at_floor():
     settings.validate()  # must not raise: exactly at the floor is acceptable
 
 
+# --- Production timeout hierarchy validation --------------------------------
+
+
+def test_production_accepts_provider_timeout_at_recommended_value():
+    settings = Settings(
+        app_env="production",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        gateway_service_token="correct-token",
+        copilot_github_token="test-github-token",
+        ai_provider_timeout_seconds=90.0,
+    )
+    settings.validate()  # must not raise: recommended value is valid
+
+
+def test_production_rejects_provider_timeout_exceeding_hierarchy_maximum():
+    # Gateway max is 99s to preserve: 99s (provider) < 100s (backend) < 110s (iOS)
+    settings = Settings(
+        app_env="production",
+        ai_provider="copilot",
+        copilot_model_routes_json='{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5"}',
+        gateway_service_token="correct-token",
+        copilot_github_token="test-github-token",
+        ai_provider_timeout_seconds=100.0,
+    )
+    with pytest.raises(ValueError, match="AI_PROVIDER_TIMEOUT_SECONDS.*99.*hierarchy"):
+        settings.validate()
+
+
+def test_development_allows_short_provider_timeout_for_testing():
+    # Tests and development may use short timeouts; only production has constraints
+    settings = Settings(
+        app_env="development",
+        ai_provider="fake",
+        ai_provider_timeout_seconds=5.0,
+    )
+    settings.validate()  # must not raise: development has no timeout constraints
+
+
 # --- Gateway service-token rotation ------------------------------------------
 
 

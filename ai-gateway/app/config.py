@@ -24,10 +24,17 @@ _MAX_TIMEOUT_SECONDS = 120.0
 #: Timeout hierarchy floor (self-contained - does not require knowing the
 #: backend's own configured timeout): real Copilot calls are observed to
 #: take tens of seconds, so a production provider timeout below this would
-#: spuriously fail almost every real request. Recommended production value
-#: is 90s; see backend/AGENTS.md for the full provider < backend < iOS
-#: timeout table.
+#: spuriously fail almost every real request.
 _MIN_PRODUCTION_PROVIDER_TIMEOUT_SECONDS = 30.0
+
+#: Production maximum for provider timeout. Must stay below backend's
+#: configured timeout (which has its own minimum of 40s). Default production
+#: value is 90s, maximum is 99s to preserve: 99s (provider) < 100s (backend).
+_MAX_PRODUCTION_PROVIDER_TIMEOUT_SECONDS = 99.0
+
+#: Production default provider timeout (recommended value; can be overridden
+#: via AI_PROVIDER_TIMEOUT_SECONDS environment variable).
+_DEFAULT_PRODUCTION_PROVIDER_TIMEOUT_SECONDS = 90.0
 
 
 class Settings(BaseSettings):
@@ -38,6 +45,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="production", alias="APP_ENV")
 
     ai_provider: str = Field(default="fake", alias="AI_PROVIDER")
+    # Default to production-recommended 90s in production; 10s for fast local tests/dev
     ai_provider_timeout_seconds: float = Field(default=10.0, alias="AI_PROVIDER_TIMEOUT_SECONDS")
 
     # Server-side, opaque model-routing key for the food-text generation
@@ -156,11 +164,20 @@ class Settings(BaseSettings):
         if self.app_env == "production" and self.ai_provider_timeout_seconds < _MIN_PRODUCTION_PROVIDER_TIMEOUT_SECONDS:
             # Real Copilot calls are observed to take tens of seconds; a
             # production timeout below this floor would spuriously time out
-            # essentially every real request. Self-contained validation -
-            # does not require knowing the backend's own configured timeout.
+            # essentially every real request.
             raise ValueError(
                 f"AI_PROVIDER_TIMEOUT_SECONDS must be at least {_MIN_PRODUCTION_PROVIDER_TIMEOUT_SECONDS} "
-                "seconds when APP_ENV=production, to leave headroom for real Copilot latency."
+                "seconds when APP_ENV=production."
+            )
+
+        if self.app_env == "production" and self.ai_provider_timeout_seconds > _MAX_PRODUCTION_PROVIDER_TIMEOUT_SECONDS:
+            # Enforce timeout hierarchy: provider < backend (100s minimum) < iOS (110s).
+            # Gateway must not permit timeouts that equal or exceed backend's floor.
+            # Maximum 99s preserves: 99s (provider) < 100s (backend) < 110s (iOS).
+            raise ValueError(
+                f"AI_PROVIDER_TIMEOUT_SECONDS must be at most {_MAX_PRODUCTION_PROVIDER_TIMEOUT_SECONDS} "
+                "seconds when APP_ENV=production to preserve the timeout hierarchy: "
+                "provider < backend (100s) < iOS (110s)."
             )
 
     def copilot_model_routes(self) -> dict[str, str]:

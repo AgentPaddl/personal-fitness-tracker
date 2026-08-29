@@ -11,12 +11,20 @@ DEFAULT_GATEWAY_TIMEOUT_SECONDS = 10.0
 _MIN_TIMEOUT_SECONDS = 0.1
 _MAX_TIMEOUT_SECONDS = 120.0
 
-#: The gateway's own production floor is 30s (real Copilot calls are
-#: observed to take tens of seconds); the backend must allow strictly more
-#: headroom than that so a slow-but-successful gateway call is never cut
-#: off first by the backend's own timeout. Self-contained - does not
-#: require querying the gateway's live config.
+#: Production minimum for backend→gateway timeout. The gateway's own
+#: production floor is 30s (real Copilot calls take tens of seconds);
+#: the backend must allow strictly more headroom than that so a
+#: slow-but-successful gateway call is never cut off first.
 _MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 40.0
+
+#: Production maximum for backend→gateway timeout. Must stay below iOS's
+#: configured request timeout (110s). Default production value is 100s,
+#: maximum is 109s to preserve: 99s (gateway→provider) < 100s (backend→gateway) < 110s (iOS).
+_MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 109.0
+
+#: Production default backend→gateway timeout (recommended value; can be
+#: overridden via AI_GATEWAY_TIMEOUT_SECONDS environment variable).
+_DEFAULT_PRODUCTION_GATEWAY_TIMEOUT_SECONDS = 100.0
 
 #: Fail-closed by default: only "development" unlocks the food-analysis
 #: route, which has no production authentication yet.
@@ -109,6 +117,12 @@ def validate_config() -> None:
         if timeout < _MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS:
             raise ConfigError(
                 f"AI_GATEWAY_TIMEOUT_SECONDS must be at least {_MIN_PRODUCTION_GATEWAY_TIMEOUT_SECONDS} "
-                "seconds when APP_ENV=production, to leave headroom above the gateway's own "
-                "production timeout floor for real Copilot latency."
+                "seconds when APP_ENV=production."
+            )
+
+        if timeout > _MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS:
+            raise ConfigError(
+                f"AI_GATEWAY_TIMEOUT_SECONDS must be at most {_MAX_PRODUCTION_GATEWAY_TIMEOUT_SECONDS} "
+                "seconds when APP_ENV=production to preserve the timeout hierarchy: "
+                "provider (99s max) < backend (100-109s) < iOS (110s)."
             )

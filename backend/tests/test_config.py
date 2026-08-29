@@ -74,6 +74,23 @@ def test_validate_config_passes_with_a_valid_production_configuration(monkeypatc
     config.validate_config()  # must not raise
 
 
+def test_validate_config_accepts_production_timeout_at_recommended_value(monkeypatch):
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "test-service-token")
+    monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://gateway.internal.example")
+    monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "100")
+
+    config.validate_config()  # must not raise: 100s is the recommended production value
+
+
+def test_validate_config_rejects_production_timeout_exceeding_hierarchy_maximum(monkeypatch):
+    # Backend max is 109s to preserve: 99s (gateway→provider) < 100-109s (backend→gateway) < 110s (iOS)
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "test-service-token")
+    monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://gateway.internal.example")
+    monkeypatch.setenv("AI_GATEWAY_TIMEOUT_SECONDS", "110")
+    with pytest.raises(config.ConfigError, match="AI_GATEWAY_TIMEOUT_SECONDS.*109.*hierarchy"):
+        config.validate_config()
+
+
 def test_validate_config_passes_in_development_with_defaults(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
 
