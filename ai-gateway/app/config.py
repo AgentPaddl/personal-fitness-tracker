@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # require any change to the public request/response contract.
     food_text_model_purpose: str = Field(default="food_text_v1", alias="FOOD_TEXT_MODEL_PURPOSE")
 
+    # Separate routing key for image-based food analysis, since it requires
+    # a vision-capable model. Never silently falls back to the text route.
+    food_image_model_purpose: str = Field(default="food_image_v1", alias="FOOD_IMAGE_MODEL_PURPOSE")
+
     # Development-only bypass, off by default. Even when true, it only takes
     # effect if app_env == "development" (enforced in app.security).
     gateway_dev_auth_bypass: bool = Field(default=False, alias="GATEWAY_DEV_AUTH_BYPASS")
@@ -87,14 +91,18 @@ class Settings(BaseSettings):
         if not self.food_text_model_purpose.strip():
             raise ValueError("FOOD_TEXT_MODEL_PURPOSE must not be blank.")
 
+        if not self.food_image_model_purpose.strip():
+            raise ValueError("FOOD_IMAGE_MODEL_PURPOSE must not be blank.")
+
         if self.ai_provider == "copilot":
             routes = self.copilot_model_routes()
-            if self.food_text_model_purpose not in routes:
-                raise ValueError(
-                    "COPILOT_MODEL_ROUTES_JSON must map every configured model "
-                    f"purpose (here: '{self.food_text_model_purpose}') to a model id. "
-                    "A model is never silently substituted."
-                )
+            for purpose in (self.food_text_model_purpose, self.food_image_model_purpose):
+                if purpose not in routes:
+                    raise ValueError(
+                        "COPILOT_MODEL_ROUTES_JSON must map every configured model "
+                        f"purpose (here: '{purpose}') to a model id. "
+                        "A model is never silently substituted."
+                    )
 
     def copilot_model_routes(self) -> dict[str, str]:
         """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.

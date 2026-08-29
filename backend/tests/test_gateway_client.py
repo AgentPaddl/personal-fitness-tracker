@@ -160,3 +160,52 @@ def test_analyze_food_text_maps_transport_timeout_to_gateway_timeout():
 
     assert excinfo.value.code == "gateway_timeout"
     assert excinfo.value.http_status == 504
+
+
+def test_analyze_food_image_sends_base64_payload_and_maps_gateway_response():
+    import base64
+    import json as jsonlib
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = jsonlib.loads(request.content)
+        return httpx.Response(200, json={"estimate": {"food_name": "pasta"}})
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    result = client.analyze_food_image(b"raw image bytes", "image/jpeg", food_description="a bowl of pasta")
+
+    assert result == {"estimate": {"food_name": "pasta"}}
+    assert captured["body"]["food_description"] == "a bowl of pasta"
+    assert captured["body"]["image"]["media_type"] == "image/jpeg"
+    assert base64.b64decode(captured["body"]["image"]["data_base64"]) == b"raw image bytes"
+
+
+def test_analyze_food_image_omits_food_description_when_none():
+    import json as jsonlib
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = jsonlib.loads(request.content)
+        return httpx.Response(200, json={"estimate": {"food_name": "pasta"}})
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    client.analyze_food_image(b"raw image bytes", "image/jpeg")
+
+    assert "food_description" not in captured["body"]
+
+
+def test_analyze_food_image_normalizes_gateway_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(504, json={"error": {"code": "provider_timeout", "message": "detail"}})
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_image(b"raw image bytes", "image/jpeg")
+
+    assert excinfo.value.code == "gateway_timeout"
+    assert excinfo.value.http_status == 504

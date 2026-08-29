@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// Drives the text food-analysis flow: calls the backend, tracks
+/// Drives the text/image food-analysis flow: calls the backend, tracks
 /// loading/error state, and exposes a review draft only after a
 /// successful analysis. Nothing is persisted here; persistence happens
 /// only after explicit user confirmation in the app's review view.
@@ -11,6 +11,10 @@ public final class FoodAnalysisViewModel: ObservableObject {
     @Published public private(set) var isAnalyzing = false
     @Published public var errorMessage: String?
     @Published public var reviewDraft: FoodAnalysisReviewDraft?
+    /// The preprocessed (resized/JPEG-compressed/metadata-stripped) image
+    /// ready for upload, if the user picked one. Held only in memory for
+    /// the duration of this flow; never persisted.
+    @Published public private(set) var selectedImage: PreprocessedFoodImage?
 
     private let service: FoodAnalysisServicing?
     private let configurationErrorMessage: String?
@@ -39,12 +43,13 @@ public final class FoodAnalysisViewModel: ObservableObject {
         self.configurationErrorMessage = Self.userMessage(forConfigurationError: configurationError)
     }
 
-    /// Triggers analysis of the current `descriptionText`. Guards against
-    /// duplicate submissions and leaves the typed text untouched so the
-    /// user can retry after an error.
+    /// Triggers analysis of the current `descriptionText`/`selectedImage`.
+    /// Guards against duplicate submissions. Leaves the typed text and
+    /// selected image untouched so the user can retry after an error.
+    /// If both text and an image are present, both are sent together.
     public func analyze() async {
         let trimmed = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isAnalyzing else { return }
+        guard !trimmed.isEmpty || selectedImage != nil, !isAnalyzing else { return }
 
         guard let service else {
             errorMessage = configurationErrorMessage
@@ -56,13 +61,39 @@ public final class FoodAnalysisViewModel: ObservableObject {
         defer { isAnalyzing = false }
 
         do {
-            let estimate = try await service.analyze(description: trimmed)
+            let estimate: FoodAnalysisResponseDTO.Estimate
+            if let selectedImage {
+                estimate = try await service.analyzeImage(
+                    data: selectedImage.data,
+                    mimeType: selectedImage.mimeType,
+                    description: trimmed.isEmpty ? nil : trimmed
+                )
+            } else {
+                estimate = try await service.analyze(description: trimmed)
+            }
             reviewDraft = FoodAnalysisReviewDraft(estimate: estimate)
         } catch let error as FoodAnalysisError {
             errorMessage = Self.userMessage(for: error)
         } catch {
             errorMessage = Self.userMessage(for: .analysisFailed)
         }
+    }
+
+    /// Preprocesses and stores a freshly picked photo (resize/JPEG-compress,
+    /// strip metadata). On failure, `errorMessage` is set and no image is
+    /// retained. Replaces any previously selected image.
+    public func setPickedImage(rawData: Data) {
+        switch FoodImagePreprocessor.preprocess(imageData: rawData) {
+        case .success(let preprocessed):
+            selectedImage = preprocessed
+            errorMessage = nil
+        case .failure:
+            errorMessage = Self.userMessage(for: .imageProcessingFailed)
+        }
+    }
+
+    public func removeSelectedImage() {
+        selectedImage = nil
     }
 
     public static func userMessage(for error: FoodAnalysisError) -> String {
@@ -81,6 +112,14 @@ public final class FoodAnalysisViewModel: ObservableObject {
             return "Die Antwort konnte nicht verarbeitet werden. Bitte versuche es erneut."
         case .analysisFailed:
             return "Die Analyse ist fehlgeschlagen. Bitte versuche es erneut."
+        case .imageProcessingFailed:
+            return "Das Foto konnte nicht verarbeitet werden. Bitte wähle ein anderes Foto."
+        case .imageMissingOrEmpty:
+            return "Es wurde kein gültiges Foto übermittelt. Bitte wähle ein Foto aus."
+        case .unsupportedImageType:
+            return "Dieses Bildformat wird nicht unterstützt. Bitte verwende ein JPEG- oder PNG-Foto."
+        case .imageTooLarge:
+            return "Das Foto ist zu groß. Bitte wähle ein kleineres Foto."
         }
     }
 

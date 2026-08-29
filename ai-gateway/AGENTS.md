@@ -4,7 +4,7 @@ These instructions apply to everything under `ai-gateway/`.
 
 ## Status
 
-Phase 2 (provider-neutral gateway foundation) and Phase 3 (real Copilot SDK provider) are implemented: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, the real `GitHubCopilotProvider` (official GitHub Copilot SDK via the Copilot CLI in headless/server mode), and the first `FoodAnalysisUseCase`. Production deployment (Azure Container Apps, production authentication mechanism, secret storage) is **not implemented yet** — do not invent that architecture without an explicit task.
+Phase 2 (provider-neutral gateway foundation), Phase 3 (real Copilot SDK provider), and Phase 4 text food analysis are implemented: a domain-blind `StructuredGenerationProvider` adapter interface, a deterministic schema-driven `FakeProvider`, the real `GitHubCopilotProvider` (official GitHub Copilot SDK via the Copilot CLI in headless/server mode), and the first `FoodAnalysisUseCase`. Image-based food analysis (`feature/v2-ios-food-image-analysis`, not yet merged) extends the same use case to accept an optional generic image `Attachment`, routed to a separate `food_image_v1` model purpose. Production deployment (Azure Container Apps, production authentication mechanism, secret storage) is **not implemented yet** — do not invent that architecture without an explicit task.
 
 ## Provider decision (final)
 
@@ -39,7 +39,8 @@ Phase 2 (provider-neutral gateway foundation) and Phase 3 (real Copilot SDK prov
 
 - `StructuredGenerationProvider` (`app/providers/base.py`) is domain-blind: it only receives generic messages, an opaque `model_purpose` routing key, a JSON output schema, optional attachments, and a timeout. Providers must never branch on domain task names.
 - All food-specific instructions, schema selection, and result interpretation belong in `FoodAnalysisUseCase` (or a future use case), never in a provider implementation. `GitHubCopilotProvider` must stay domain-blind too: do not add food-specific prompts/fields to it.
-- Model/provider routing is server-side configuration (`FOOD_TEXT_MODEL_PURPOSE`, `COPILOT_MODEL_ROUTES_JSON`) and must never be exposed through the public API or influence the public request/response shape. A configured model must never be silently substituted.
+- Model/provider routing is server-side configuration (`FOOD_TEXT_MODEL_PURPOSE`, `FOOD_IMAGE_MODEL_PURPOSE`, `COPILOT_MODEL_ROUTES_JSON`) and must never be exposed through the public API or influence the public request/response shape. A configured model must never be silently substituted.
+- Image analysis reuses the same generic `Attachment` (`kind`, `media_type`, `data`) rather than a food-specific type. `GitHubCopilotProvider` translates it into the SDK's inline `BlobAttachment` (base64, no temporary files) and rejects any other attachment `kind` or an empty payload before creating a session. Image requests are routed through `FOOD_IMAGE_MODEL_PURPOSE` (never the text purpose), and `check_ready()` verifies via the SDK's own `list_models()` capability data (`model.capabilities.supports.vision`) that the configured image route is actually vision-capable — never silently proceeds with a non-vision model.
 
 ## Secrets and validation
 

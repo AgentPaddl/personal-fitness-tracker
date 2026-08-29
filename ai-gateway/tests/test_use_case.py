@@ -9,13 +9,16 @@ than a hardcoded shortcut.
 from __future__ import annotations
 
 import asyncio
+import base64
 
 import pytest
 
 from app.errors import ProviderOutputInvalidError, ProviderTimeoutError, ProviderUnavailableError
 from app.providers.base import StructuredGenerationRequest, StructuredGenerationResult, StructuredGenerationProvider
-from app.schemas.food_analysis import FoodAnalysisRequest
+from app.schemas.food_analysis import FoodAnalysisRequest, ImageAttachment
 from app.use_cases.food_analysis import FoodAnalysisUseCase
+
+_TINY_IMAGE_BASE64 = base64.b64encode(b"fake jpeg bytes for tests").decode("ascii")
 
 _VALID_DATA = {
     "food_name": "chicken breast",
@@ -96,3 +99,58 @@ def test_execute_enforces_real_timeout_and_cancels_provider():
 
     # The provider's sleep must have been cancelled, not merely ignored.
     assert slow_provider.completed is False
+
+
+class _CapturingProvider(StructuredGenerationProvider):
+    def __init__(self, data: dict):
+        self._data = data
+        self.last_request: StructuredGenerationRequest | None = None
+
+    async def generate(self, request: StructuredGenerationRequest) -> StructuredGenerationResult:
+        self.last_request = request
+        return StructuredGenerationResult(data=self._data)
+
+
+def test_execute_routes_text_only_to_text_model_purpose():
+    provider = _CapturingProvider(_VALID_DATA)
+    use_case = FoodAnalysisUseCase(
+        provider=provider, timeout_seconds=1.0, model_purpose="food_text_v1", image_model_purpose="food_image_v1"
+    )
+
+    asyncio.run(use_case.execute(FoodAnalysisRequest(food_description="an apple")))
+
+    assert provider.last_request.model_purpose == "food_text_v1"
+    assert provider.last_request.attachments == []
+
+
+def test_execute_routes_image_only_to_image_model_purpose():
+    provider = _CapturingProvider(_VALID_DATA)
+    use_case = FoodAnalysisUseCase(
+        provider=provider, timeout_seconds=1.0, model_purpose="food_text_v1", image_model_purpose="food_image_v1"
+    )
+    request = FoodAnalysisRequest(image=ImageAttachment(media_type="image/jpeg", data_base64=_TINY_IMAGE_BASE64))
+
+    asyncio.run(use_case.execute(request))
+
+    assert provider.last_request.model_purpose == "food_image_v1"
+    assert len(provider.last_request.attachments) == 1
+    assert provider.last_request.attachments[0].kind == "image"
+    assert provider.last_request.attachments[0].media_type == "image/jpeg"
+    assert provider.last_request.attachments[0].data == _TINY_IMAGE_BASE64
+
+
+def test_execute_routes_text_and_image_to_image_model_purpose():
+    provider = _CapturingProvider(_VALID_DATA)
+    use_case = FoodAnalysisUseCase(
+        provider=provider, timeout_seconds=1.0, model_purpose="food_text_v1", image_model_purpose="food_image_v1"
+    )
+    request = FoodAnalysisRequest(
+        food_description="a bowl of pasta",
+        image=ImageAttachment(media_type="image/png", data_base64=_TINY_IMAGE_BASE64),
+    )
+
+    asyncio.run(use_case.execute(request))
+
+    assert provider.last_request.model_purpose == "food_image_v1"
+    assert "pasta" in provider.last_request.messages[-1].content
+    assert len(provider.last_request.attachments) == 1

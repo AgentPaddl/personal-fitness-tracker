@@ -10,6 +10,12 @@ extension URLSession: URLRequestPerforming {}
 /// Public contract for the text food-analysis networking call.
 public protocol FoodAnalysisServicing: Sendable {
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate
+    /// Uploads an already-preprocessed image (and optional text) via
+    /// `multipart/form-data`. `description`, if non-nil/non-blank, is sent
+    /// alongside the image.
+    func analyzeImage(
+        data: Data, mimeType: String, description: String?
+    ) async throws -> FoodAnalysisResponseDTO.Estimate
 }
 
 /// Calls the Fitness API backend's `POST /api/food-analysis` endpoint.
@@ -40,6 +46,25 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         request.timeoutInterval = timeoutInterval
         request.httpBody = try JSONEncoder().encode(FoodAnalysisRequestDTO(foodDescription: description))
 
+        return try await perform(request)
+    }
+
+    public func analyzeImage(
+        data: Data, mimeType: String, description: String? = nil
+    ) async throws -> FoodAnalysisResponseDTO.Estimate {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = timeoutInterval
+        request.httpBody = Self.multipartBody(
+            boundary: boundary, imageData: data, mimeType: mimeType, description: description
+        )
+
+        return try await perform(request)
+    }
+
+    private func perform(_ request: URLRequest) async throws -> FoodAnalysisResponseDTO.Estimate {
         let data: Data
         let response: URLResponse
         do {
@@ -62,6 +87,32 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
             throw FoodAnalysisError.invalidResponse
         }
         return decoded.estimate
+    }
+
+    static func multipartBody(boundary: String, imageData: Data, mimeType: String, description: String?) -> Data {
+        var body = Data()
+
+        func appendString(_ string: String) {
+            if let stringData = string.data(using: .utf8) {
+                body.append(stringData)
+            }
+        }
+
+        if let description, !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appendString("--\(boundary)\r\n")
+            appendString("Content-Disposition: form-data; name=\"food_description\"\r\n\r\n")
+            appendString(description)
+            appendString("\r\n")
+        }
+
+        appendString("--\(boundary)\r\n")
+        appendString("Content-Disposition: form-data; name=\"image\"; filename=\"photo.jpg\"\r\n")
+        appendString("Content-Type: \(mimeType)\r\n\r\n")
+        body.append(imageData)
+        appendString("\r\n")
+        appendString("--\(boundary)--\r\n")
+
+        return body
     }
 
     static func mapURLError(_ error: URLError) -> FoodAnalysisError {
@@ -88,6 +139,12 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
                 return .timeout
             case "gateway_service_unavailable", "gateway_unreachable":
                 return .backendUnavailable
+            case "unsupported_media_type":
+                return .unsupportedImageType
+            case "image_too_large":
+                return .imageTooLarge
+            case "image_required", "image_empty":
+                return .imageMissingOrEmpty
             default:
                 break
             }
@@ -96,6 +153,10 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         switch statusCode {
         case 401, 403:
             return .unauthorized
+        case 413:
+            return .imageTooLarge
+        case 415:
+            return .unsupportedImageType
         case 429:
             return .rateLimited
         case 503:

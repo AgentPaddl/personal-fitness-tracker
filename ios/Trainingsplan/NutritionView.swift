@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 import FoodAnalysisKit
 
 struct NutritionView: View {
@@ -21,6 +22,8 @@ struct NutritionView: View {
     @State private var notes = ""
     @State private var selectedEntryToEdit: FoodEntry?
     @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel()
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var isLoadingPickedPhoto = false
 
     var body: some View {
         NavigationStack {
@@ -95,8 +98,8 @@ struct NutritionView: View {
                     }
                 }
 
-                Section("KI-Analyse (Text)") {
-                    Text("Beschreibe dein Essen in natürlicher Sprache. Das Ergebnis ist eine Schätzung, die du vor dem Speichern prüfen und anpassen kannst.")
+                Section("KI-Analyse (Text & Foto)") {
+                    Text("Beschreibe dein Essen oder wähle ein Foto - oder beides. Das Ergebnis ist eine Schätzung, die du vor dem Speichern prüfen und anpassen kannst.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -107,6 +110,42 @@ struct NutritionView: View {
                     )
                     .lineLimit(1...4)
                     .disabled(foodAnalysisViewModel.isAnalyzing)
+
+                    if let selectedImage = foodAnalysisViewModel.selectedImage,
+                        let uiImage = UIImage(data: selectedImage.data)
+                    {
+                        HStack {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 60, height: 60)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                            Spacer()
+
+                            Button("Entfernen", role: .destructive) {
+                                foodAnalysisViewModel.removeSelectedImage()
+                            }
+                            .disabled(foodAnalysisViewModel.isAnalyzing)
+                        }
+                    } else {
+                        PhotosPicker(
+                            selection: $photoPickerItem,
+                            matching: .images,
+                            photoLibrary: .shared()
+                        ) {
+                            Label("Foto auswählen", systemImage: "photo")
+                        }
+                        .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
+                    }
+
+                    if isLoadingPickedPhoto {
+                        HStack {
+                            ProgressView()
+                            Text("Foto wird geladen…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
                     if foodAnalysisViewModel.isAnalyzing {
                         HStack {
@@ -121,6 +160,7 @@ struct NutritionView: View {
                         .disabled(
                             foodAnalysisViewModel.descriptionText
                                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                && foodAnalysisViewModel.selectedImage == nil
                         )
                     }
 
@@ -171,6 +211,24 @@ struct NutritionView: View {
             .sheet(item: $foodAnalysisViewModel.reviewDraft) { draft in
                 FoodAnalysisReviewView(draft: draft) {
                     foodAnalysisViewModel.descriptionText = ""
+                    foodAnalysisViewModel.removeSelectedImage()
+                }
+            }
+            .onChange(of: photoPickerItem) { _, newItem in
+                guard let newItem else { return }
+                isLoadingPickedPhoto = true
+                Task {
+                    defer {
+                        isLoadingPickedPhoto = false
+                        photoPickerItem = nil
+                    }
+                    if let data = try? await newItem.loadTransferable(type: Data.self) {
+                        foodAnalysisViewModel.setPickedImage(rawData: data)
+                    } else {
+                        foodAnalysisViewModel.errorMessage = FoodAnalysisViewModel.userMessage(
+                            for: .imageProcessingFailed
+                        )
+                    }
                 }
             }
         }

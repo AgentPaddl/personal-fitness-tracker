@@ -55,16 +55,20 @@ SDK's own `GH_TOKEN`/`GITHUB_TOKEN`) to a fine-grained PAT with the
 
 `AI_PROVIDER=copilot` additionally requires `COPILOT_MODEL_ROUTES_JSON`, a
 JSON object mapping every configured model-routing purpose (e.g.
-`food_text_v1`, from `FOOD_TEXT_MODEL_PURPOSE`) to a concrete Copilot model
+`food_text_v1`, `food_image_v1` - see below) to a concrete Copilot model
 id. There is no default mapping and no silent fallback to another model:
 
 ```bash
-export COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini"}'
+export COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"}'
 ```
 
 Available model ids change over time and depend on your Copilot plan; call
 `client.list_models()` (or check `GET /readyz`) rather than assuming a
-specific id is available.
+specific id is available. Image analysis (`food_image_v1`) requires a
+**vision-capable** model; `/readyz` fails if the configured model does not
+report vision support via the SDK's own `list_models()` capability data
+(`model.capabilities.supports.vision`) - it never silently proceeds with a
+non-vision model. As of 2026-08-29, `gpt-5-mini` is verified vision-capable.
 
 `GET /readyz` validates that the configured model id is actually returned
 by the CLI's `list_models()` and that the CLI reports an authenticated
@@ -81,9 +85,39 @@ Real Copilot calls typically take tens of seconds — much longer than
 cd ai-gateway
 source .venv/bin/activate
 APP_ENV=development GATEWAY_DEV_AUTH_BYPASS=true AI_PROVIDER=copilot \
-  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini"}' \
+  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"}' \
   AI_PROVIDER_TIMEOUT_SECONDS=90 \
   uvicorn app.main:app --port 8000
+```
+
+### Image analysis
+
+`POST /v1/food-analysis` accepts `food_description`, `image`, or both (at
+least one is required). `image` is `{"media_type": "image/jpeg" |
+"image/png", "data_base64": "..."}` - an inline base64 blob, capped at 5 MB
+decoded and validated as actually-decodable base64. This is the gateway's
+own internal contract (the backend's *public* API instead accepts
+`multipart/form-data`; see `backend/AGENTS.md`).
+
+Image requests are routed to a separate model purpose,
+`FOOD_IMAGE_MODEL_PURPOSE` (default `food_image_v1`), never the text
+purpose - a vision-incapable model is never silently used for image input.
+`GitHubCopilotProvider` translates the image into the SDK's inline
+`BlobAttachment` (base64, no temporary files); attachments of any other
+kind, or an empty payload, are rejected before a session is even created.
+Nothing about the image (bytes, metadata) is logged or persisted by the
+gateway; it exists only for the duration of one generation call.
+
+### Opt-in real image integration test
+
+The same opt-in gate covers a real image-analysis smoke test using a
+small, synthetic, deterministically-generated PNG (built in-test via
+`struct`/`zlib` - no bundled photo, no user data):
+
+```bash
+RUN_COPILOT_INTEGRATION_TESTS=1 \
+  COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"}' \
+  pytest tests/test_copilot_integration.py -v
 ```
 
 ### Runtime lifecycle

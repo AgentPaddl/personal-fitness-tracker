@@ -37,8 +37,10 @@ from app.errors import (
     ProviderRateLimitedError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    RequestValidationFailedError,
 )
 from app.providers.base import (
+    Attachment,
     StructuredGenerationProvider,
     StructuredGenerationRequest,
     StructuredGenerationResult,
@@ -61,9 +63,15 @@ logger = logging.getLogger(__name__)
 class GitHubCopilotProvider(StructuredGenerationProvider):
     """Adapter around the official GitHub Copilot SDK (``copilot`` package)."""
 
-    def __init__(self, model_routes: dict[str, str], github_token: str | None = None):
+    def __init__(
+        self,
+        model_routes: dict[str, str],
+        github_token: str | None = None,
+        vision_required_purposes: frozenset[str] = frozenset(),
+    ):
         self._model_routes = model_routes
         self._github_token = github_token
+        self._vision_required_purposes = vision_required_purposes
         self._client: CopilotClient | None = None
         self._start_lock = asyncio.Lock()
 
@@ -91,6 +99,7 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
 
     async def generate(self, request: StructuredGenerationRequest) -> StructuredGenerationResult:
         model = self._resolve_model(request.model_purpose)
+        sdk_attachments = _to_sdk_attachments(request.attachments)
         client = await self._ensure_client()
 
         system_content = "\n".join(m.content for m in request.messages if m.role == "system")
@@ -147,7 +156,9 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
         try:
             session.on(_on_event)
             try:
-                await session.send_and_wait(user_content, timeout=request.timeout_seconds)
+                await session.send_and_wait(
+                    user_content, attachments=sdk_attachments, timeout=request.timeout_seconds
+                )
             except TimeoutError as exc:
                 raise ProviderTimeoutError() from exc
             except Exception as exc:
@@ -181,14 +192,56 @@ class GitHubCopilotProvider(StructuredGenerationProvider):
                 return False
             models = await client.list_models()
             available_ids = {model.id for model in models}
-            return all(model_id in available_ids for model_id in self._model_routes.values())
+            if not all(model_id in available_ids for model_id in self._model_routes.values()):
+                return False
+            return self._configured_vision_routes_are_supported(models)
         except Exception:
             return False
+
+    def _configured_vision_routes_are_supported(self, models: list[Any]) -> bool:
+        # Never assumes a model supports images; only trusts the SDK's own
+        # reported capability. A route required for image analysis whose
+        # model does not declare vision support fails readiness rather than
+        # silently attempting (and likely failing) a real generation call.
+        if not self._vision_required_purposes:
+            return True
+        models_by_id = {model.id: model for model in models}
+        for purpose in self._vision_required_purposes:
+            model_id = self._model_routes.get(purpose)
+            if model_id is None:
+                continue  # Not configured; ModelUnavailableError already covers request-time use.
+            model = models_by_id.get(model_id)
+            supports_vision = bool(getattr(getattr(model, "capabilities", None), "supports", None) and model.capabilities.supports.vision)
+            if not supports_vision:
+                return False
+        return True
 
     async def aclose(self) -> None:
         if self._client is not None:
             client, self._client = self._client, None
             await client.stop()
+
+
+def _to_sdk_attachments(attachments: list[Attachment]) -> list[dict[str, str]] | None:
+    """Translate generic gateway attachments into the SDK's inline blob attachments.
+
+    Uses the SDK's ``BlobAttachment`` (inline base64 data, no temporary
+    files needed). Stays domain-blind: any attachment kind other than
+    "image" is rejected rather than silently ignored or guessed at.
+    """
+
+    if not attachments:
+        return None
+    sdk_attachments: list[dict[str, str]] = []
+    for attachment in attachments:
+        if attachment.kind != "image":
+            raise RequestValidationFailedError(f"Unsupported attachment kind '{attachment.kind}'.")
+        if not attachment.data:
+            raise RequestValidationFailedError("Attachment payload must not be empty.")
+        if not attachment.media_type:
+            raise RequestValidationFailedError("Attachment media type must not be empty.")
+        sdk_attachments.append({"type": "blob", "data": attachment.data, "mimeType": attachment.media_type})
+    return sdk_attachments
 
 
 def _classify_failure(status_code: int | None, error_type: str | None, message: str | None) -> GatewayError:

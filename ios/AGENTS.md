@@ -20,11 +20,19 @@ These instructions apply to everything under `ios/`.
 - Send sensitive data only to our authenticated application API and only when required by an explicitly approved feature.
 - AI-derived nutrition or activity values are estimates; present them for review/confirmation before persistence where appropriate. Persist only after explicit user confirmation, never automatically.
 
-## Food analysis (text) flow
+## Food analysis (text + image) flow
 
-- `NutritionView` hosts a "KI-Analyse (Text)" section where the user types a natural-language food description and triggers analysis via `FoodAnalysisKit.FoodAnalysisViewModel`, which calls `FoodAnalysisService` against the backend's `POST /api/food-analysis`.
-- A successful analysis presents `FoodAnalysisReviewView` (app target) as a sheet with editable name/calories/protein/carbs/fat, pre-filled from the estimate. Confidence/warnings are shown as non-persisted review metadata only.
-- Confirmation is coordinated by `FoodAnalysisKit.FoodEntryPersistenceCoordinator`: it inserts then saves, rolls back (deletes) the inserted object if the save throws, and guarantees at most one committed save per presented review (a rapid duplicate tap on "Übernehmen" is a no-op once saving/committed). A failed save shows an inline error in the sheet (never console-only), never dismisses, and allows retry. Cancelling/dismissing the sheet never touches `modelContext`.
+- `NutritionView` hosts a "KI-Analyse (Text & Foto)" section where the user types a natural-language food description and/or picks a photo, then triggers analysis via `FoodAnalysisKit.FoodAnalysisViewModel`, which calls `FoodAnalysisService` against the backend's `POST /api/food-analysis`. Both may be sent together; the backend/gateway use both when present.
+- A successful analysis presents `FoodAnalysisReviewView` (app target) as a sheet with editable name/calories/protein/carbs/fat, pre-filled from the estimate, regardless of whether the estimate came from text, an image, or both. Confidence/warnings are shown as non-persisted review metadata only.
+- Confirmation is coordinated by `FoodAnalysisKit.FoodEntryPersistenceCoordinator`: it inserts then saves, rolls back (deletes) the inserted object if the save throws, and guarantees at most one committed save per presented review (a rapid duplicate tap on "Übernehmen" is a no-op once saving/committed). A failed save shows an inline error in the sheet (never console-only), never dismisses, and allows retry. Cancelling/dismissing the sheet never touches `modelContext`. There is one review/persistence flow shared by text and image analysis — never a second one.
+
+### Image input
+
+- Selection: `PhotosPicker` (library only, in `NutritionView`). **Camera capture is not implemented in this phase** — it was deprioritized per explicit scope guidance to avoid fragile UIKit `UIImagePickerController` bridging; add it as a follow-up task if needed.
+- Preprocessing (`FoodAnalysisKit.FoodImagePreprocessor`, pure ImageIO/CoreGraphics, no UIKit so it is testable via `swift test`): resizes to a max 1280px longest side, re-encodes as JPEG at quality 0.7. Re-encoding never copies the source image's properties/metadata dictionary to the output, which strips EXIF/GPS and other source metadata as a side effect of the resize step — this is not optional and cannot be bypassed.
+- Upload: `FoodAnalysisService.analyzeImage` sends `multipart/form-data` (fields: `image`, optional `food_description`) to the same `POST /api/food-analysis` endpoint used for text.
+- UI states: image preview + "Entfernen" once selected (hides the picker), a photo-loading spinner while the picker item is being read, the existing "Analysiere…" spinner while the request is in flight, and the existing inline error text. The "Analysieren" button is enabled when either the text field or the image (or both) is non-empty. Duplicate submission while analyzing is already prevented by the existing `isAnalyzing` guard in the view model. Both the typed text and the selected image are retained after a failure so the user can retry without redoing input; both are cleared only after a successful confirmed save.
+- Never send photo-library asset identifiers, filenames, or device metadata — only the preprocessed JPEG bytes and MIME type ever leave the device.
 - Review values are validated (`FoodAnalysisReviewDraft.validated()`) before save: blank name, unparsable/negative/non-finite numbers, and out-of-bounds values (matching the backend's own 0...10000 kcal / 0...1000 g bounds) are all rejected. Calories are parsed as a decimal (comma or dot) and rounded to the nearest whole number.
 - Image analysis is not implemented; this phase is text-only.
 
@@ -51,3 +59,12 @@ All three are development-only conveniences; production/non-local endpoints rema
 - After any Swift or Xcode project change, build `ios/Trainingsplan.xcodeproj` using the existing `Trainingsplan` scheme and place DerivedData outside the repository.
 - Run `swift test` in `ios/FoodAnalysisKit/` for the networking/validation/persistence-orchestration logic; run relevant app-level checks manually when automated coverage is absent (e.g. no XCTest target exists for the `Trainingsplan` app target itself - keep new business/networking logic in `FoodAnalysisKit` instead, where it's testable).
 - Do not commit DerivedData, Xcode user data, generated archives, `.build/`, `.swiftpm/`, or other build output.
+
+### Manual Simulator smoke (text + image)
+
+1. Start the gateway with a vision-capable image route configured, e.g. `COPILOT_MODEL_ROUTES_JSON='{"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"}'` (see `ai-gateway/README.md`).
+2. Start the backend with `APP_ENV=development` pointed at the gateway (see `backend/AGENTS.md`).
+3. Run the app in the Simulator with `API_BASE_URL` unset (uses the local default) or explicitly set.
+4. Text flow: type a description in "KI-Analyse (Text & Foto)", tap "Analysieren", review, confirm.
+5. Image flow: tap "Foto auswählen", pick a photo from the Simulator's Photos library, wait for the preview, tap "Analysieren", review, confirm.
+6. Confirm exactly one `FoodEntry` is created per confirmed review in both cases, and that cancelling/dismissing the review sheet persists nothing.

@@ -6,7 +6,11 @@ These instructions apply to everything under `backend/`.
 
 - Azure Functions application targeting Python 3.13, organized as blueprints registered from `function_app.py`.
 - `GET /api/health` still returns `{"status": "ok"}` and must keep doing so.
-- `POST /api/food-analysis` forwards a food description to the Personal AI Gateway through `gateway_client.py`, validates against the backend-owned schemas in `schemas.py`, and returns only the mapped public estimate (never the gateway's raw JSON). It works locally against the gateway's `FakeProvider` path; it does not call any AI provider directly.
+- `POST /api/food-analysis` forwards a food description and/or photo to the Personal AI Gateway through `gateway_client.py`, validates against the backend-owned schemas in `schemas.py`, and returns only the mapped public estimate (never the gateway's raw JSON). It works locally against the gateway's `FakeProvider` path; it does not call any AI provider directly.
+  - `Content-Type: application/json` — text-only, unchanged: `{"food_description": "..."}"`.
+  - `Content-Type: multipart/form-data` — image analysis: a required `image` file field (`image/jpeg` or `image/png` only, non-empty, ≤5 MB - see `schemas.SUPPORTED_IMAGE_MIME_TYPES`/`MAX_IMAGE_BYTES`) plus an optional `food_description` text field (≤2000 characters). Both branches return the identical `{"estimate": {...}}` envelope. The image is forwarded to the gateway as an inline base64 payload (`GatewayClient.analyze_food_image`) over the existing internal JSON contract, not re-wrapped as multipart again - there is no second internal transport.
+  - Image validation errors use their own normalized codes: `image_required`, `image_empty` (400), `unsupported_media_type` (415), `image_too_large` (413). Malformed multipart bodies are caught and mapped to `invalid_request` (400), never an unhandled 500.
+  - The uploaded image is never persisted or logged; it exists only for the duration of the one gateway call.
 - The route fails closed by default: it only serves requests when `APP_ENV=development` is explicitly set (see `config.py`), returning 403 otherwise. This is a temporary development-only allowance until real authentication is implemented, and is layered on top of the gateway's own independent fail-closed auth.
 - `function_app.py` calls `config.validate_config()` at import time so an invalid gateway URL or out-of-bounds timeout fails at startup rather than at first request.
 

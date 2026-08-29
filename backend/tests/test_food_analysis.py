@@ -6,6 +6,8 @@ import pytest
 from api.food_analysis import food_analysis
 from gateway_client import GatewayClient, GatewayClientError
 
+_BOUNDARY = "test-boundary-123"
+
 
 def _request(body: dict | bytes | None) -> func.HttpRequest:
     raw_body = body if isinstance(body, (bytes, type(None))) else json.dumps(body).encode()
@@ -14,6 +16,36 @@ def _request(body: dict | bytes | None) -> func.HttpRequest:
         url="/api/food-analysis",
         body=raw_body or b"",
         headers={"Content-Type": "application/json"},
+    )
+
+
+def _multipart_request(
+    *,
+    image_bytes: bytes | None = b"\xff\xd8\xff\xe0fake jpeg bytes",
+    mime_type: str = "image/jpeg",
+    food_description: str | None = None,
+    include_image_field: bool = True,
+) -> func.HttpRequest:
+    parts = []
+    if include_image_field:
+        parts.append(
+            f'--{_BOUNDARY}\r\nContent-Disposition: form-data; name="image"; filename="photo.jpg"\r\n'
+            f"Content-Type: {mime_type}\r\n\r\n".encode()
+            + (image_bytes or b"")
+            + b"\r\n"
+        )
+    if food_description is not None:
+        parts.append(
+            f'--{_BOUNDARY}\r\nContent-Disposition: form-data; name="food_description"\r\n\r\n'
+            f"{food_description}\r\n".encode()
+        )
+    parts.append(f"--{_BOUNDARY}--\r\n".encode())
+    raw_body = b"".join(parts)
+    return func.HttpRequest(
+        method="POST",
+        url="/api/food-analysis",
+        body=raw_body,
+        headers={"Content-Type": f"multipart/form-data; boundary={_BOUNDARY}"},
     )
 
 
@@ -201,3 +233,120 @@ def test_food_analysis_normalizes_unknown_gateway_error_to_502(monkeypatch):
 
     assert response.status_code == 502
     assert json.loads(response.get_body())["error"]["code"] == "gateway_upstream_error"
+
+
+def _gateway_result() -> dict:
+    return {
+        "estimate": {
+            "food_name": "pasta with tomato sauce",
+            "calories": 450.0,
+            "protein_grams": 12.0,
+            "carbohydrate_grams": 70.0,
+            "fat_grams": 10.0,
+            "confidence": 0.6,
+            "warnings": ["Portion size estimated from image only."],
+        }
+    }
+
+
+def test_food_analysis_image_only_success(monkeypatch):
+    captured = {}
+
+    def fake_analyze_image(self, image_bytes, mime_type, food_description=None):
+        captured["image_bytes"] = image_bytes
+        captured["mime_type"] = mime_type
+        captured["food_description"] = food_description
+        return _gateway_result()
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_image", fake_analyze_image)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_multipart_request())
+
+    assert response.status_code == 200
+    assert json.loads(response.get_body()) == _gateway_result()
+    assert captured["mime_type"] == "image/jpeg"
+    assert captured["food_description"] is None
+    assert captured["image_bytes"] == b"\xff\xd8\xff\xe0fake jpeg bytes"
+
+
+def test_food_analysis_image_with_text(monkeypatch):
+    captured = {}
+
+    def fake_analyze_image(self, image_bytes, mime_type, food_description=None):
+        captured["food_description"] = food_description
+        return _gateway_result()
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_image", fake_analyze_image)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_multipart_request(food_description="a bowl of pasta"))
+
+    assert response.status_code == 200
+    assert captured["food_description"] == "a bowl of pasta"
+
+
+def test_food_analysis_rejects_missing_image_field():
+    response = food_analysis(_multipart_request(include_image_field=False))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_required"
+
+
+def test_food_analysis_rejects_empty_image_payload():
+    response = food_analysis(_multipart_request(image_bytes=b""))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "image_empty"
+
+
+def test_food_analysis_rejects_unsupported_image_mime_type():
+    response = food_analysis(_multipart_request(mime_type="image/gif"))
+
+    assert response.status_code == 415
+    assert json.loads(response.get_body())["error"]["code"] == "unsupported_media_type"
+
+
+def test_food_analysis_rejects_oversized_image():
+    from schemas import MAX_IMAGE_BYTES
+
+    response = food_analysis(_multipart_request(image_bytes=b"x" * (MAX_IMAGE_BYTES + 1)))
+
+    assert response.status_code == 413
+    assert json.loads(response.get_body())["error"]["code"] == "image_too_large"
+
+
+def test_food_analysis_rejects_malformed_multipart_body():
+    request = func.HttpRequest(
+        method="POST",
+        url="/api/food-analysis",
+        body=b"this is not a valid multipart body",
+        headers={"Content-Type": f"multipart/form-data; boundary={_BOUNDARY}"},
+    )
+
+    response = food_analysis(request)
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] in ("invalid_request", "image_required")
+
+
+def test_food_analysis_image_maps_gateway_error(monkeypatch):
+    def fake_analyze_image(self, image_bytes, mime_type, food_description=None):
+        raise GatewayClientError("gateway_unreachable", 503, "The AI gateway is unreachable.")
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_image", fake_analyze_image)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_multipart_request())
+
+    assert response.status_code == 503
+    assert json.loads(response.get_body())["error"]["code"] == "gateway_unreachable"
+
+
+def test_food_analysis_image_denied_outside_development_mode(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+
+    response = food_analysis(_multipart_request())
+
+    assert response.status_code == 403
+    assert json.loads(response.get_body())["error"]["code"] == "not_implemented"

@@ -138,12 +138,17 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 - Unit tests mock the SDK client boundary and require no credentials; an opt-in integration/smoke test (`RUN_COPILOT_INTEGRATION_TESTS=1`) exercises the real CLI and is never run in normal CI/local test runs. `trsdn/github_copilot_openai_api_wrapper` is not part of this plan.
 - Remaining for production: Azure Container Apps packaging, a chosen production auth mechanism (server-to-server token vs. another documented option), secret storage, and network isolation for the CLI process.
 
-### Phase 4 — food analysis workflow (text analysis implemented)
+### Phase 4 — food analysis workflow (text and image analysis; image on feature branch, not yet merged)
 
 - Implemented the iOS text food-analysis flow: `NutritionView` lets the user type a natural-language description, calls the backend's `POST /api/food-analysis` via a local Swift package (`ios/FoodAnalysisKit`), and presents an editable review sheet (`FoodAnalysisReviewView`) before any persistence.
 - The app only ever talks to our own backend's public JSON contract; it has no knowledge of the Personal AI Gateway, GitHub Copilot, model ids, or provider routing.
 - `FoodEntry` (existing SwiftData model) is created only after explicit user confirmation of the reviewed values; cancelling/dismissing the review never persists anything. No SwiftData schema change was made.
-- Image analysis is not implemented yet; this phase is text-only.
+- **Image analysis (`feature/v2-ios-food-image-analysis`, not yet merged):** extends the same flow with photo input, reusing the identical review/persistence UI and the same structured estimate contract.
+  - iOS: `PhotosPicker`-based selection (camera capture intentionally deferred - see `ios/AGENTS.md`), client-side preprocessing (`FoodImagePreprocessor`: resize to a max 1280px side, re-encode as JPEG at quality 0.7, which also strips EXIF/GPS since the source's properties are never copied to the re-encoded output), then upload via `FoodAnalysisService.analyzeImage`.
+  - Backend: `POST /api/food-analysis` now also accepts `multipart/form-data` (`image` file field, required; optional `food_description` text field), validated for MIME type (`image/jpeg`, `image/png` only), non-empty payload, and a 5 MB size cap, then forwarded to the gateway as an inline base64 payload over the existing internal JSON contract.
+  - Gateway: `FoodAnalysisRequest` now accepts `food_description`, `image`, or both (at least one required); `FoodAnalysisUseCase` builds a generic `Attachment` and routes image requests to a separate, vision-specific model purpose (`FOOD_IMAGE_MODEL_PURPOSE`, default `food_image_v1`) rather than the text purpose, so an image call is never silently sent to a non-vision model.
+  - `GitHubCopilotProvider` translates the generic attachment into the SDK's inline `BlobAttachment` (base64, no temporary files) and rejects unsupported attachment kinds/empty payloads before ever creating a session. `check_ready()` additionally verifies, via the SDK's own `list_models()` capability data, that any route required for image analysis actually supports vision (`gpt-5-mini` verified vision-capable via a real Copilot session on 2026-08-29).
+  - The output schema, bounds, and review/persistence flow are unchanged from text analysis; no new SwiftData model or migration was introduced.
 - Verify privacy controls, failure handling, and observability without sensitive-payload logging.
 
 ### Phase 5 — expansion and provider portability

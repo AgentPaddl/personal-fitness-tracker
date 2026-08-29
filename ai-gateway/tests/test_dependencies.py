@@ -22,7 +22,7 @@ def test_ai_provider_fake_selects_fake_provider(monkeypatch):
 def test_ai_provider_copilot_selects_github_copilot_provider(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("AI_PROVIDER", "copilot")
-    monkeypatch.setenv("COPILOT_MODEL_ROUTES_JSON", '{"food_text_v1": "gpt-5"}')
+    monkeypatch.setenv("COPILOT_MODEL_ROUTES_JSON", '{"food_text_v1": "gpt-5", "food_image_v1": "gpt-5-mini"}')
     get_settings.cache_clear()
     get_provider.cache_clear()
 

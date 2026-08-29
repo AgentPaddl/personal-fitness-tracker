@@ -153,4 +153,110 @@ final class FoodAnalysisServiceTests: XCTestCase {
 
         await assertThrowsFoodAnalysisError(try await service.analyze(description: "x"), .analysisFailed)
     }
+
+    // MARK: - Image analysis
+
+    func testImageAnalysisSendsMultipartRequestWithImageAndDescription() async throws {
+        let baseURL = baseURL
+        let responseJSON = """
+            {"estimate": {"food_name": "Pasta", "calories": 450, "protein_grams": 12,
+            "carbohydrate_grams": 70, "fat_grams": 10, "confidence": 0.6, "warnings": []}}
+            """.data(using: .utf8)!
+        let imageData = Data("fake-jpeg-bytes".utf8)
+
+        let mock = MockPerformer { request in
+            XCTAssertEqual(request.url, baseURL.appendingPathComponent("food-analysis"))
+            XCTAssertEqual(request.httpMethod, "POST")
+            let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
+            XCTAssertTrue(contentType.hasPrefix("multipart/form-data; boundary="))
+
+            let body = try XCTUnwrap(request.httpBody)
+            let bodyString = String(decoding: body, as: UTF8.self)
+            XCTAssertTrue(bodyString.contains("name=\"image\""))
+            XCTAssertTrue(bodyString.contains("Content-Type: image/jpeg"))
+            XCTAssertTrue(bodyString.contains("name=\"food_description\""))
+            XCTAssertTrue(bodyString.contains("a bowl of pasta"))
+            XCTAssertTrue(body.range(of: imageData) != nil)
+
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (responseJSON, response)
+        }
+
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+        let estimate = try await service.analyzeImage(
+            data: imageData, mimeType: "image/jpeg", description: "a bowl of pasta"
+        )
+
+        XCTAssertEqual(estimate.foodName, "Pasta")
+    }
+
+    func testImageOnlyAnalysisOmitsDescriptionField() async throws {
+        let imageData = Data("fake-jpeg-bytes".utf8)
+        let responseJSON = """
+            {"estimate": {"food_name": "Pasta", "calories": 450, "protein_grams": 12,
+            "carbohydrate_grams": 70, "fat_grams": 10, "confidence": 0.6, "warnings": []}}
+            """.data(using: .utf8)!
+
+        let mock = MockPerformer { request in
+            let body = try XCTUnwrap(request.httpBody)
+            let bodyString = String(decoding: body, as: UTF8.self)
+            XCTAssertFalse(bodyString.contains("name=\"food_description\""))
+
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (responseJSON, response)
+        }
+
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+        _ = try await service.analyzeImage(data: imageData, mimeType: "image/jpeg", description: nil)
+    }
+
+    func testUnsupportedImageTypeErrorIsMapped() async {
+        let errorJSON = #"{"error": {"code": "unsupported_media_type", "message": "nope"}}"#.data(using: .utf8)!
+        let mock = MockPerformer { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 415, httpVersion: nil, headerFields: nil)!
+            return (errorJSON, response)
+        }
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+
+        do {
+            _ = try await service.analyzeImage(data: Data("x".utf8), mimeType: "image/gif", description: nil)
+            XCTFail("Expected an error")
+        } catch let error as FoodAnalysisError {
+            XCTAssertEqual(error, .unsupportedImageType)
+        } catch {
+            XCTFail("Expected FoodAnalysisError, got \(error)")
+        }
+    }
+
+    func testImageTooLargeErrorIsMapped() async {
+        let errorJSON = #"{"error": {"code": "image_too_large", "message": "too big"}}"#.data(using: .utf8)!
+        let mock = MockPerformer { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 413, httpVersion: nil, headerFields: nil)!
+            return (errorJSON, response)
+        }
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+
+        do {
+            _ = try await service.analyzeImage(data: Data("x".utf8), mimeType: "image/jpeg", description: nil)
+            XCTFail("Expected an error")
+        } catch let error as FoodAnalysisError {
+            XCTAssertEqual(error, .imageTooLarge)
+        } catch {
+            XCTFail("Expected FoodAnalysisError, got \(error)")
+        }
+    }
+
+    func testImageNetworkTimeoutIsMappedToTimeout() async {
+        let mock = MockPerformer { _ in throw URLError(.timedOut) }
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+
+        do {
+            _ = try await service.analyzeImage(data: Data("x".utf8), mimeType: "image/jpeg", description: nil)
+            XCTFail("Expected an error")
+        } catch let error as FoodAnalysisError {
+            XCTAssertEqual(error, .timeout)
+        } catch {
+            XCTFail("Expected FoodAnalysisError, got \(error)")
+        }
+    }
 }

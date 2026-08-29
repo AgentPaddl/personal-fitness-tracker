@@ -23,9 +23,10 @@ from app.errors import (
     ProviderRateLimitedError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    RequestValidationFailedError,
 )
 from app.providers import github_copilot as gc_module
-from app.providers.base import GenerationMessage, StructuredGenerationRequest
+from app.providers.base import Attachment, GenerationMessage, StructuredGenerationRequest
 from app.providers.github_copilot import GitHubCopilotProvider
 
 _SCHEMA = {
@@ -72,8 +73,9 @@ class _FakeSession:
         assert self._handler is not None, "no event handler registered"
         self._handler(SimpleNamespace(data=data))
 
-    async def send_and_wait(self, prompt: str, *, timeout: float) -> None:
+    async def send_and_wait(self, prompt: str, *, attachments: Any = None, timeout: float) -> None:
         self.last_prompt = prompt
+        self.last_attachments = attachments
         await self._on_send(self, timeout)
 
     async def disconnect(self) -> None:
@@ -92,11 +94,13 @@ class _FakeClient:
         *,
         is_authenticated: bool = True,
         model_ids: tuple[str, ...] = ("gpt-5",),
+        vision_model_ids: frozenset[str] = frozenset(),
         disconnect_exc: Exception | None = None,
     ):
         self._on_send = on_send
         self._is_authenticated = is_authenticated
         self._model_ids = model_ids
+        self._vision_model_ids = vision_model_ids
         self._disconnect_exc = disconnect_exc
         self.started = False
         self.stopped = False
@@ -119,7 +123,13 @@ class _FakeClient:
         return SimpleNamespace(isAuthenticated=self._is_authenticated)
 
     async def list_models(self) -> list[SimpleNamespace]:
-        return [SimpleNamespace(id=model_id) for model_id in self._model_ids]
+        return [
+            SimpleNamespace(
+                id=model_id,
+                capabilities=SimpleNamespace(supports=SimpleNamespace(vision=model_id in self._vision_model_ids)),
+            )
+            for model_id in self._model_ids
+        ]
 
 
 def _install_fake_client(monkeypatch, client: _FakeClient) -> None:
@@ -395,3 +405,96 @@ def test_check_ready_true_when_authenticated_and_model_available(monkeypatch):
     _install_fake_client(monkeypatch, client)
 
     assert asyncio.run(_provider({"food_text_v1": "gpt-5"}).check_ready()) is True
+
+
+def _request_with_attachments(attachments: list[Attachment]) -> StructuredGenerationRequest:
+    request = _request()
+    return StructuredGenerationRequest(
+        model_purpose=request.model_purpose,
+        messages=request.messages,
+        output_json_schema=request.output_json_schema,
+        timeout_seconds=request.timeout_seconds,
+        attachments=attachments,
+    )
+
+
+def test_image_attachment_is_translated_to_sdk_blob_attachment(monkeypatch):
+    async def on_send(session, timeout):
+        await _call_submit_tool(session, {"food_name": "apple", "calories": 95})
+
+    client = _FakeClient(on_send)
+    _install_fake_client(monkeypatch, client)
+
+    request = _request_with_attachments([Attachment(kind="image", media_type="image/jpeg", data="YmFzZTY0")])
+    asyncio.run(_provider().generate(request))
+
+    assert client.last_session.last_attachments == [
+        {"type": "blob", "data": "YmFzZTY0", "mimeType": "image/jpeg"}
+    ]
+
+
+def test_no_attachments_passes_none_to_sdk(monkeypatch):
+    async def on_send(session, timeout):
+        await _call_submit_tool(session, {"food_name": "apple", "calories": 95})
+
+    client = _FakeClient(on_send)
+    _install_fake_client(monkeypatch, client)
+
+    asyncio.run(_provider().generate(_request()))
+
+    assert client.last_session.last_attachments is None
+
+
+def test_unsupported_attachment_kind_is_rejected(monkeypatch):
+    client = _FakeClient(lambda session, timeout: None)
+    _install_fake_client(monkeypatch, client)
+
+    request = _request_with_attachments([Attachment(kind="video", media_type="video/mp4", data="abc")])
+
+    with pytest.raises(RequestValidationFailedError):
+        asyncio.run(_provider().generate(request))
+
+    # Rejected before ever creating a session/spending a model call.
+    assert client.last_create_session_kwargs is None
+
+
+def test_empty_attachment_payload_is_rejected(monkeypatch):
+    client = _FakeClient(lambda session, timeout: None)
+    _install_fake_client(monkeypatch, client)
+
+    request = _request_with_attachments([Attachment(kind="image", media_type="image/jpeg", data="")])
+
+    with pytest.raises(RequestValidationFailedError):
+        asyncio.run(_provider().generate(request))
+
+
+def test_check_ready_false_when_required_vision_model_lacks_vision_support(monkeypatch):
+    client = _FakeClient(
+        lambda session, timeout: None,
+        model_ids=("gpt-5-mini",),
+        vision_model_ids=frozenset(),  # gpt-5-mini not reported as vision-capable
+    )
+    _install_fake_client(monkeypatch, client)
+
+    provider = GitHubCopilotProvider(
+        model_routes={"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"},
+        vision_required_purposes=frozenset({"food_image_v1"}),
+    )
+
+    assert asyncio.run(provider.check_ready()) is False
+
+
+def test_check_ready_true_when_required_vision_model_supports_vision(monkeypatch):
+    client = _FakeClient(
+        lambda session, timeout: None,
+        model_ids=("gpt-5-mini",),
+        vision_model_ids=frozenset({"gpt-5-mini"}),
+    )
+    _install_fake_client(monkeypatch, client)
+
+    provider = GitHubCopilotProvider(
+        model_routes={"food_text_v1": "gpt-5-mini", "food_image_v1": "gpt-5-mini"},
+        vision_required_purposes=frozenset({"food_image_v1"}),
+    )
+
+    assert asyncio.run(provider.check_ready()) is True
