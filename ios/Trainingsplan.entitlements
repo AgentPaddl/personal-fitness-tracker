@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required by MSAL for its keychain-backed token cache (Microsoft's
+	     documented "Configure your project to use MSAL" setup step -
+	     without this, MSAL's keychain reads/writes fail, which surfaces
+	     as an immediate authenticationRequired error with no sign-in UI
+	     ever shown). Group name is MSAL's own documented constant for
+	     iOS, not something this app invents. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.microsoft.adalcache</string>
+	</array>
+</dict>
+</plist>

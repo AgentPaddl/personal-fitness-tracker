@@ -144,6 +144,7 @@ struct NutritionView: View {
                             ) {
                                 Label("Foto auswählen", systemImage: "photo")
                             }
+                            .buttonStyle(.borderless)
                             .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
 
                             if isCameraHardwareAvailable {
@@ -152,6 +153,7 @@ struct NutritionView: View {
                                 } label: {
                                     Label("Foto aufnehmen", systemImage: "camera")
                                 }
+                                .buttonStyle(.borderless)
                                 .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
                             }
                         }
