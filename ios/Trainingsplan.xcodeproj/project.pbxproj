@@ -273,6 +273,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2SF7PV3WCD;
 				ENABLE_PREVIEWS = YES;
+				API_BASE_URL = "";
 				ENTRA_API_SCOPE = "";
 				ENTRA_CLIENT_ID = "";
 				ENTRA_REDIRECT_URI = "";
@@ -311,6 +312,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2SF7PV3WCD;
 				ENABLE_PREVIEWS = YES;
+				API_BASE_URL = "https://fitness-tracker-api-bk-ckewh6fhd0gmfkcd.germanywestcentral-01.azurewebsites.net/api";
 				ENTRA_API_SCOPE = "api://8a31b030-58f4-4897-b76f-11fb33381d14/FoodAnalysis.Access";
 				ENTRA_CLIENT_ID = ed51ac30-3a4c-4bf6-b0e7-151c7c7b3ed8;
 				ENTRA_REDIRECT_URI = "msauth.com.benedikt.Trainingsplan://auth";

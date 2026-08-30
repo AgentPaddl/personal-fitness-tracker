@@ -21,30 +21,38 @@ public enum APIConfigurationError: Error, Equatable, Sendable {
 
 /// Resolves the Fitness API backend's base URL for the food-analysis flow.
 ///
-/// This intentionally stays a small, source-level mechanism rather than a
-/// build system (Info.plist keys, xcconfig files, etc.) to avoid adding
-/// configuration complexity for a single development URL, but it fails
-/// closed: an installed/device build never silently falls back to a
-/// localhost address, and an explicitly configured but invalid/insecure
-/// value is never silently replaced.
+/// Precedence (highest first):
+/// 1. **Compiled-in `ProductionAPIBaseURL` Info.plist value** - populated via
+///    the `API_BASE_URL` build setting through Xcode's standard `$(VAR)`
+///    Info.plist substitution (same mechanism as `EntraConfiguration`'s
+///    `Entra*` keys). Blank in `Debug`, set to the real production URL in
+///    `Release` - this is what makes Release archive/TestFlight-safe
+///    without depending on a scheme environment variable.
+/// 2. **`API_BASE_URL` environment variable** on the app's Xcode scheme
+///    (Product > Scheme > Edit Scheme... > Run > Arguments > Environment
+///    Variables) - only reached when the plist value above is blank (i.e.
+///    in practice, `Debug` builds). Preserved for local/device development
+///    convenience; never consulted once a build has a compiled-in value.
+/// 3. **Simulator implicit default** (`http://127.0.0.1:7071/api`) if
+///    neither of the above is set.
+/// 4. Otherwise fails closed with `.missingConfiguration` - an
+///    installed/device build never silently falls back to a localhost
+///    address, and an explicitly configured but invalid/insecure value is
+///    never silently replaced.
 ///
-/// Configure via the `API_BASE_URL` environment variable on the app's
-/// Xcode scheme (Product > Scheme > Edit Scheme... > Run > Arguments >
-/// Environment Variables):
-/// - Simulator: leave unset to use the local default
-///   (`http://127.0.0.1:7071/api`, the Simulator shares the Mac's network
-///   namespace so loopback reaches `func start` directly), or override.
-/// - Physical device: **must** be set explicitly to the Mac's reachable
-///   LAN hostname/IP, e.g. `http://192.168.1.23:7071/api` (also requires
-///   the narrow `NSAllowsLocalNetworking` ATS exception - see
-///   `ios/AGENTS.md`). `localhost`/`127.0.0.1` refers to the device
-///   itself, not your Mac, and will never work here.
+/// - Physical device (Debug, no compiled-in value): set `API_BASE_URL` on
+///   the scheme to the Mac's reachable LAN hostname/IP, e.g.
+///   `http://192.168.1.23:7071/api` (also requires the narrow
+///   `NSAllowsLocalNetworking` ATS exception - see `ios/AGENTS.md`).
+///   `localhost`/`127.0.0.1` refers to the device itself, not your Mac.
 /// - Production-like endpoints must use `https://`.
 public enum APIConfiguration {
-    /// Public entry point: resolves using the real environment and the
-    /// real build target (Simulator vs. device, Debug vs. Release).
+    /// Public entry point: resolves using the real environment, the real
+    /// build target (Simulator vs. device, Debug vs. Release), and the
+    /// app's real Info.plist (`bundle`, defaulting to `Bundle.main`).
     public static func resolveBackendBaseURL(
-        rawOverride: String? = ProcessInfo.processInfo.environment["API_BASE_URL"]
+        rawOverride: String? = ProcessInfo.processInfo.environment["API_BASE_URL"],
+        bundle: Bundle = .main
     ) -> Result<URL, APIConfigurationError> {
         #if targetEnvironment(simulator)
         let allowsImplicitSimulatorDefault = true
@@ -62,10 +70,31 @@ public enum APIConfiguration {
         let allowsInsecureLocalDevelopmentHost = false
         #endif
         return resolve(
-            rawOverride: rawOverride,
+            rawOverride: effectiveOverride(rawOverride: rawOverride, bundle: bundle),
             allowsImplicitSimulatorDefault: allowsImplicitSimulatorDefault,
             allowsInsecureLocalDevelopmentHost: allowsInsecureLocalDevelopmentHost
         )
+    }
+
+    /// The compiled-in Info.plist value takes precedence over the scheme
+    /// environment variable, so a Release build's durable production URL
+    /// can never be silently shadowed by a leftover scheme override; the
+    /// environment variable is only ever reached when the plist value is
+    /// blank (in practice, Debug builds - see `resolveBackendBaseURL`'s
+    /// precedence doc above).
+    static func effectiveOverride(rawOverride: String?, bundle: Bundle) -> String? {
+        nonBlankString(bundle, "ProductionAPIBaseURL") ?? nonBlank(rawOverride)
+    }
+
+    private static func nonBlankString(_ bundle: Bundle, _ key: String) -> String? {
+        guard let value = bundle.object(forInfoDictionaryKey: key) as? String else { return nil }
+        return nonBlank(value)
+    }
+
+    private static func nonBlank(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Testable core: takes the "are we allowed to default to the local

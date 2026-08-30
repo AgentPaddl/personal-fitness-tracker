@@ -61,6 +61,15 @@
 	<string>$(ENTRA_API_SCOPE)</string>
 	<key>EntraRedirectURI</key>
 	<string>$(ENTRA_REDIRECT_URI)</string>
+	<!-- Durable production backend URL (FoodAnalysisKit.APIConfiguration),
+	     same $(VAR) substitution mechanism as the Entra* keys above: blank
+	     in Debug (falls through to the API_BASE_URL scheme environment
+	     variable, matching today's local-dev behavior) and set to the real
+	     deployed Function App URL in Release, so a Release/archive build
+	     never depends on a scheme environment variable. Never a secret -
+	     this is a public HTTPS endpoint. -->
+	<key>ProductionAPIBaseURL</key>
+	<string>$(API_BASE_URL)</string>
 	<!-- Lets MSAL detect whether Microsoft Authenticator/Company Portal are
 	     installed for brokered SSO; does not grant those apps any access
 	     to this app's data. Documented MSAL iOS requirement independent of

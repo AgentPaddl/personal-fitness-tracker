@@ -203,4 +203,68 @@ final class APIConfigurationTests: XCTestCase {
 
         XCTAssertEqual(try? result.get(), URL(string: "https://api.example.com/api"))
     }
+
+    // MARK: - effectiveOverride precedence (compiled-in Info.plist vs. scheme environment variable)
+
+    func testEffectiveOverridePrefersCompiledPlistValueOverEnvironmentVariable() {
+        let bundle = FakeInfoDictionaryBundle(values: ["ProductionAPIBaseURL": "https://prod.example.com/api"])
+
+        let result = APIConfiguration.effectiveOverride(rawOverride: "http://192.168.1.23:7071", bundle: bundle)
+
+        XCTAssertEqual(result, "https://prod.example.com/api")
+    }
+
+    func testEffectiveOverrideFallsBackToEnvironmentVariableWhenPlistValueIsBlank() {
+        let bundle = FakeInfoDictionaryBundle(values: ["ProductionAPIBaseURL": "   "])
+
+        let result = APIConfiguration.effectiveOverride(rawOverride: "http://192.168.1.23:7071", bundle: bundle)
+
+        XCTAssertEqual(result, "http://192.168.1.23:7071")
+    }
+
+    func testEffectiveOverrideFallsBackToEnvironmentVariableWhenPlistKeyIsAbsent() {
+        let bundle = FakeInfoDictionaryBundle(values: [:])
+
+        let result = APIConfiguration.effectiveOverride(rawOverride: "http://192.168.1.23:7071", bundle: bundle)
+
+        XCTAssertEqual(result, "http://192.168.1.23:7071")
+    }
+
+    func testEffectiveOverrideIsNilWhenNeitherPlistNorEnvironmentVariableIsSet() {
+        let bundle = FakeInfoDictionaryBundle(values: [:])
+
+        let result = APIConfiguration.effectiveOverride(rawOverride: nil, bundle: bundle)
+
+        XCTAssertNil(result)
+    }
+
+    func testResolveBackendBaseURLUsesCompiledPlistValueEndToEnd() {
+        let bundle = FakeInfoDictionaryBundle(values: [
+            "ProductionAPIBaseURL": "https://fitness-tracker-api-bk-ckewh6fhd0gmfkcd.germanywestcentral-01.azurewebsites.net/api"
+        ])
+
+        let result = APIConfiguration.resolveBackendBaseURL(rawOverride: nil, bundle: bundle)
+
+        XCTAssertEqual(
+            try? result.get(),
+            URL(string: "https://fitness-tracker-api-bk-ckewh6fhd0gmfkcd.germanywestcentral-01.azurewebsites.net/api")
+        )
+    }
+}
+
+/// A real `Bundle` cannot be given an arbitrary Info.plist dictionary in a
+/// SwiftPM test target, so bundle-reading configuration code is exercised
+/// through this minimal subclass instead (same pattern as
+/// `EntraAuthKitTests`' equivalent fake).
+private final class FakeInfoDictionaryBundle: Bundle, @unchecked Sendable {
+    private let values: [String: String]
+
+    init(values: [String: String]) {
+        self.values = values
+        super.init()
+    }
+
+    override func object(forInfoDictionaryKey key: String) -> Any? {
+        values[key]
+    }
 }
