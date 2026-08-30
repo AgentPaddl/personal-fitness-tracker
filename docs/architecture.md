@@ -2,7 +2,7 @@
 
 ## Purpose and current status
 
-This repository contains a private, non-commercial personal fitness and nutrition tracker. The current product is an iOS app, an Azure Functions backend, and a Personal AI Gateway that together implement a working end-to-end food-analysis feature (text and image) against the real GitHub Copilot SDK. Production deployment (an actual Azure rollout) has **not** been performed; Phase 6 (below) prepares the application-level configuration/hardening for it without doing the deployment itself.
+This repository contains a private, non-commercial personal fitness and nutrition tracker. The current product is an iOS app, an Azure Functions backend, and a Personal AI Gateway that together implement a working end-to-end food-analysis feature (text and image) against the real GitHub Copilot SDK. **Production deployment has been performed** (Phase 10) and the full stack — iPhone → Easy Auth → Azure Function backend → Azure Container Apps gateway → GitHub Copilot SDK — is live and verified end-to-end via a real device (see `docs/operations-runbook.md` for deployment/rotation/monitoring procedures and the current caveats on durable iOS distribution configuration).
 
 ## Current monorepo layout
 
@@ -175,18 +175,18 @@ Adds no new AI capability; hardens the existing text/image food-analysis system 
 
 #### Personal production checklist
 
-- [ ] Gateway container built and deployed (Azure Container Apps or equivalent)
-- [ ] Backend (Azure Functions) deployed
-- [ ] Azure App Service Authentication / Easy Auth enabled on the public backend, with Entra ID trust configured and `EASY_AUTH_ENABLED=true`
-- [ ] `GATEWAY_SERVICE_TOKEN` configured identically on both backend and gateway
-- [ ] Production `AI_GATEWAY_BASE_URL` (explicit HTTPS, non-localhost) configured on the backend
-- [ ] Gateway ingress restricted to the backend only (no public gateway exposure)
-- [ ] `COPILOT_GITHUB_TOKEN` (server-to-server) configured as a gateway secret
-- [ ] `COPILOT_MODEL_ROUTES_JSON` configured for both `food_text_v1` and `food_image_v1`, verified vision-capable via `GET /readyz`
-- [ ] Backend `GET /api/health` and `GET /api/readiness` both return healthy/ready against the deployed gateway
-- [ ] Gateway `GET /healthz` and `GET /readyz` both return healthy/ready
-- [ ] iOS production build configured with the deployed HTTPS backend URL and a real Entra ID access-token provider (MSAL or equivalent) that sends `Authorization: Bearer <token>`
-- [ ] Real iPhone smoke test against the deployed stack (text and image, save flow) completed
+- [x] Gateway container built and deployed (Azure Container Apps)
+- [x] Backend (Azure Functions) deployed
+- [x] Azure App Service Authentication / Easy Auth enabled on the public backend, with Entra ID trust configured and `EASY_AUTH_ENABLED=true`
+- [x] `GATEWAY_SERVICE_TOKEN` configured identically on both backend and gateway
+- [x] Production `AI_GATEWAY_BASE_URL` (explicit HTTPS, non-localhost) configured on the backend
+- [ ] Gateway ingress restricted to the backend only (currently external HTTPS + service token; IP allow-list/private networking intentionally deferred — see `docs/operations-runbook.md` §6)
+- [x] `COPILOT_GITHUB_TOKEN` (a fine-grained GitHub personal access token for unattended SDK use, not a server-to-server installation token — see `docs/operations-runbook.md` §2) configured as a gateway secret
+- [x] `COPILOT_MODEL_ROUTES_JSON` configured for both `food_text_v1` and `food_image_v1`, verified vision-capable via `GET /readyz`
+- [x] Gateway `GET /healthz` and `GET /readyz` both return healthy/ready (explicitly HTTP-smoke-tested, `200` on both)
+- [ ] Backend `GET /api/health` and `GET /api/readiness` explicitly authenticated-smoke-tested (not yet done individually; what's proven instead: all three backend routes are deployed, and a real production `POST /api/food-analysis` call succeeded end-to-end, which implies the Easy Auth boundary and backend→gateway connectivity both work)
+- [ ] iOS **durable** production build configuration (the real-device smoke test used the Xcode Scheme's `API_BASE_URL` environment variable, which does not survive archiving/TestFlight — see Phase 8's note; a compiled-in production backend URL mechanism is still pending) with a real Entra ID access-token provider (MSAL, already implemented) that sends `Authorization: Bearer <token>`
+- [x] Real iPhone smoke test against the deployed stack (text and image, save flow) completed
 
 ### Phase 7 — Entra ID / MSAL integration (`feature/v2-entra-msal-integration`, not yet merged; no real Azure/Entra deployment or registration performed)
 
@@ -259,6 +259,18 @@ Configures the real (but still non-secret/public) Entra identifiers for the `Rel
 8. Trigger a third analysis and cancel the interactive sign-in UI if it reappears (e.g. after clearing the app's MSAL cache via device Settings, or on a fresh install); confirm the typed description/selected photo are still present afterward and a generic German error is shown, matching `FoodAnalysisError.authenticationRequired`'s existing behavior.
 
 This test has not been executed as part of this phase; only the configuration and manual steps have been prepared.
+
+### Phase 9 — real physical-iPhone Entra/MSAL smoke test (completed)
+
+Diagnosed and fixed, via live device testing: a missing MSAL Keychain Sharing entitlement (`ios/Trainingsplan.entitlements`), a v1-vs-v2 Azure AD token/issuer mismatch, and an Azure Easy Auth `authsettingsV2` configuration drift (`openIdIssuer`, `allowedApplications`) — all confirmed fixed via direct `az rest` inspection and an independently verified minimal PATCH. Full MSAL sign-in, silent token reuse, and Easy Auth enforcement confirmed working on a real iPhone.
+
+### Phase 10 — production deployment (completed)
+
+Deployed the Personal AI Gateway to Azure Container Apps (`fitness-tracker-gateway`, environment `fitness-tracker-gateway-env`, external HTTPS ingress, `GATEWAY_SERVICE_TOKEN` + `COPILOT_GITHUB_TOKEN` as Container Apps secrets, image pulled from `fitnesstrackeracr` via the Container App's system-assigned managed identity, no ACR admin user) and redeployed the current backend code to `fitness-tracker-api-bk` with the required production App Settings. Verified end-to-end on a real iPhone, launched via Xcode with the backend URL supplied through the Scheme's `API_BASE_URL` environment variable (not yet a durable, archive-surviving configuration — see Phase 8's note on this same limitation and `docs/operations-runbook.md`): text analysis, silent MSAL token reuse, and image analysis all succeeded against the real GitHub Copilot SDK. See `docs/operations-runbook.md` for exact resource names and procedures.
+
+### Phase 11 — cleanup and hardening (in progress)
+
+Removed the unused legacy Azure OpenAI scaffold (App Settings and the `fitness-tracker-api-bk-openai-b0a0` resource — confirmed unreferenced by any current code). Fixed an orphaned Application Insights workspace link on the backend (`WorkspaceResourceId` was `null` despite `ingestionMode: LogAnalytics`), restoring telemetry visibility. Operational runbook documented in `docs/operations-runbook.md`.
 
 ## Change and validation policy
 
