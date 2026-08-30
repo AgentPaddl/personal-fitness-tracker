@@ -36,6 +36,8 @@ struct EditActivityView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Bearbeiten")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

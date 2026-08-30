@@ -233,6 +233,8 @@ struct NutritionView: View {
                     .disabled(!canSave)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Ernährung")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

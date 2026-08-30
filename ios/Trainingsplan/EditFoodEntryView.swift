@@ -36,6 +36,8 @@ struct EditFoodEntryView: View {
                         .lineLimit(2...4)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Bearbeiten")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
