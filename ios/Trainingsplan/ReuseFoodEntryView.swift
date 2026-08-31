@@ -52,7 +52,6 @@ struct ReuseFoodEntryView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Wiederverwenden")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

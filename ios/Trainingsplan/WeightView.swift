@@ -76,7 +76,6 @@ struct WeightView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Gewicht")
             .alert("Fehler beim Speichern", isPresented: Binding(
                 get: { saveError != nil },

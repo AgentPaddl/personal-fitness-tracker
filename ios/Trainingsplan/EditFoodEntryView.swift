@@ -37,7 +37,6 @@ struct EditFoodEntryView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Bearbeiten")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

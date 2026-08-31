@@ -74,7 +74,6 @@ struct FoodAnalysisReviewView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("KI-Schätzung")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

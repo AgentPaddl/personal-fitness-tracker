@@ -79,7 +79,6 @@ struct TrainingView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Training")
             .sheet(item: $selectedActivityToEdit) { activity in
                 EditActivityView(activity: activity)

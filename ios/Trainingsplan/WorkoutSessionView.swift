@@ -96,7 +96,6 @@ struct WorkoutSessionView: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
-        .dismissesKeyboardOnBackgroundTap()
         .navigationTitle("Krafttraining")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {

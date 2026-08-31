@@ -41,7 +41,6 @@ struct ExercisePickerView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Übung hinzufügen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

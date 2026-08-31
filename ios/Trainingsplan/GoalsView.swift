@@ -55,7 +55,6 @@ struct GoalsView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Ziele")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

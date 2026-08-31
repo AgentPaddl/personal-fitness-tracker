@@ -37,7 +37,6 @@ struct WorkoutFinishView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .dismissesKeyboardOnBackgroundTap()
             .navigationTitle("Training abschließen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
