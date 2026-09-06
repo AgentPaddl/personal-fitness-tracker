@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import ActivitySummaryKit
 
 struct ActivityHistoryView: View {
     @Environment(\.modelContext) private var modelContext
@@ -14,14 +15,14 @@ struct ActivityHistoryView: View {
 
     var body: some View {
         List {
-            if historyItems.isEmpty {
+            if completedActivities.isEmpty {
                 Text("Noch keine Aktivitäten")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(historyItems) { item in
+                ForEach(completedActivities) { item in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Label(item.title, systemImage: item.icon)
+                            Label(item.title, systemImage: icon(for: item))
 
                             Spacer()
 
@@ -34,10 +35,15 @@ struct ActivityHistoryView: View {
                         }
                         .fontWeight(.semibold)
 
-                        Text("\(item.durationMinutes) Min. · ca. \(item.calories) kcal")
-                            .foregroundStyle(.secondary)
+                        if let calories = item.estimatedCalories {
+                            Text("\(item.durationMinutes) Min. · ca. \(calories) kcal")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(item.durationMinutes) Min. · Keine Schätzung")
+                                .foregroundStyle(.secondary)
+                        }
 
-                        if let weight = item.bodyWeightKg {
+                        if let weight = bodyWeight(for: item) {
                             Text("Körpergewicht: \(weight, specifier: "%.1f") kg")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -46,12 +52,12 @@ struct ActivityHistoryView: View {
                     .padding(.vertical, 3)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if case .activity(let activity) = item.source {
+                        if let activity = activity(for: item) {
                             selectedActivityToEdit = activity
                         }
                     }
                     .swipeActions {
-                        if case .activity(let activity) = item.source {
+                        if let activity = activity(for: item) {
                             Button(role: .destructive) {
                                 deleteActivity(activity)
                             } label: {
@@ -69,35 +75,35 @@ struct ActivityHistoryView: View {
         }
     }
 
-    private var historyItems: [ActivityHistoryItem] {
-        let activityItems = activities.map { activity in
-            ActivityHistoryItem(
-                title: activity.type,
-                icon: "figure.walk",
-                date: activity.date,
-                durationMinutes: activity.durationMinutes,
-                calories: activity.estimatedCalories,
-                bodyWeightKg: activity.bodyWeightKg,
-                source: .activity(activity)
-            )
+    private var completedActivities: [AppCompletedActivity] {
+        completedActivitySummaries(
+            activities: activities,
+            workoutSessions: workoutSessions
+        )
+    }
+
+    private func activity(for item: AppCompletedActivity) -> Activity? {
+        guard item.id.kind == .activity else {
+            return nil
         }
 
-        let workoutItems = workoutSessions
-            .filter { $0.isCompleted }
-            .map { workout in
-                ActivityHistoryItem(
-                    title: "Krafttraining",
-                    icon: "dumbbell.fill",
-                    date: workout.startedAt,
-                    durationMinutes: workout.durationMinutes ?? 0,
-                    calories: workout.estimatedCalories ?? 0,
-                    bodyWeightKg: workout.bodyWeightKg,
-                    source: .workout(workout)
-                )
-            }
+        return activities.first { $0.persistentModelID == item.id.value }
+    }
 
-        return (activityItems + workoutItems)
-            .sorted { $0.date > $1.date }
+    private func workout(for item: AppCompletedActivity) -> WorkoutSession? {
+        guard item.id.kind == .workoutSession else {
+            return nil
+        }
+
+        return workoutSessions.first { $0.persistentModelID == item.id.value }
+    }
+
+    private func icon(for item: AppCompletedActivity) -> String {
+        item.id.kind == .workoutSession ? "dumbbell.fill" : "figure.walk"
+    }
+
+    private func bodyWeight(for item: AppCompletedActivity) -> Double? {
+        activity(for: item)?.bodyWeightKg ?? workout(for: item)?.bodyWeightKg
     }
 
     private func deleteActivity(_ activity: Activity) {
@@ -109,21 +115,4 @@ struct ActivityHistoryView: View {
             print("Fehler beim Löschen der Aktivität:", error)
         }
     }
-}
-
-private struct ActivityHistoryItem: Identifiable {
-    let id = UUID()
-
-    let title: String
-    let icon: String
-    let date: Date
-    let durationMinutes: Int
-    let calories: Int
-    let bodyWeightKg: Double?
-    let source: ActivityHistorySource
-}
-
-private enum ActivityHistorySource {
-    case activity(Activity)
-    case workout(WorkoutSession)
 }

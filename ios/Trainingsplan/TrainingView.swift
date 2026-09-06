@@ -1,11 +1,15 @@
 import SwiftUI
 import SwiftData
+import ActivitySummaryKit
 
 struct TrainingView: View {
     @Environment(\.modelContext) private var modelContext
     
     @Query(sort: \Activity.date, order: .reverse)
     private var activities: [Activity]
+
+    @Query(sort: \WorkoutSession.startedAt, order: .reverse)
+    private var workoutSessions: [WorkoutSession]
     
     @Query(sort: \WeightEntry.date, order: .reverse)
     private var weightEntries: [WeightEntry]
@@ -41,39 +45,50 @@ struct TrainingView: View {
                 }
                 
                 Section("Letzte Aktivitäten") {
-                    if activities.isEmpty {
+                    if completedActivities.isEmpty {
                         Text("Noch keine Aktivitäten")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(recentActivities) { activity in
+                        ForEach(recentActivities) { item in
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack {
-                                    Text(activity.type)
+                                    Text(item.title)
                                         .fontWeight(.semibold)
                                     
                                     Spacer()
                                     
-                                    Text(activity.date, format: .dateTime.day().month().year())
+                                    Text(item.date, format: .dateTime.day().month().year())
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 
-                                Text("\(activity.durationMinutes) Min. · ca. \(activity.estimatedCalories) kcal")
-                                    .foregroundStyle(.secondary)
+                                if let calories = item.estimatedCalories {
+                                    Text("\(item.durationMinutes) Min. · ca. \(calories) kcal")
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("\(item.durationMinutes) Min. · Keine Schätzung")
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedActivityToEdit = activity
+                                selectedActivityToEdit = activity(for: item)
+                            }
+                            .swipeActions {
+                                if let activity = activity(for: item) {
+                                    Button(role: .destructive) {
+                                        deleteActivity(activity)
+                                    } label: {
+                                        Label("Löschen", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
-                        .onDelete(perform: deleteActivities)
                         
-                        if activities.count > 5 {
-                            NavigationLink {
-                                ActivityHistoryView()
-                            } label: {
-                                Text("Alle Aktivitäten anzeigen")
-                            }
+                        NavigationLink {
+                            ActivityHistoryView()
+                        } label: {
+                            Text("Alle Aktivitäten anzeigen")
                         }
                     }
                 }
@@ -87,8 +102,15 @@ struct TrainingView: View {
         
     }
     
-    private var recentActivities: [Activity] {
-        Array(activities.prefix(5))
+    private var completedActivities: [AppCompletedActivity] {
+        completedActivitySummaries(
+            activities: activities,
+            workoutSessions: workoutSessions
+        )
+    }
+
+    private var recentActivities: [AppCompletedActivity] {
+        Array(completedActivities.prefix(5))
     }
     
     private var canSave: Bool {
@@ -145,11 +167,16 @@ struct TrainingView: View {
             print("Fehler beim Speichern der Aktivität:", error)
         }
     }
-    private func deleteActivities(at offsets: IndexSet) {
-        for index in offsets {
-            let activity = recentActivities[index]
-            modelContext.delete(activity)
+    private func activity(for item: AppCompletedActivity) -> Activity? {
+        guard item.id.kind == .activity else {
+            return nil
         }
+
+        return activities.first { $0.persistentModelID == item.id.value }
+    }
+
+    private func deleteActivity(_ activity: Activity) {
+        modelContext.delete(activity)
 
         do {
             try modelContext.save()

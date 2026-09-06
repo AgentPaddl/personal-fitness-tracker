@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import ActivitySummaryKit
 
 struct TodayView: View {
     @Query(sort: \FoodEntry.date, order: .reverse)
@@ -88,44 +89,27 @@ struct TodayView: View {
     }
 
     private var weeklyActivityCount: Int {
-        completedWorkoutSessionsThisWeek.count + activitiesThisWeek.count
+        weeklyActivityTotals.count
     }
 
     private var weeklyActivityCalories: Int {
-        let workoutCalories = completedWorkoutSessionsThisWeek.reduce(0) {
-            $0 + ($1.estimatedCalories ?? 0)
-        }
-
-        let otherActivityCalories = activitiesThisWeek.reduce(0) {
-            $0 + $1.estimatedCalories
-        }
-
-        return workoutCalories + otherActivityCalories
+        weeklyActivityTotals.estimatedCalories
     }
 
-    private var completedWorkoutSessionsThisWeek: [WorkoutSession] {
-        workoutSessions.filter {
-            $0.isCompleted && isDateInCurrentWeek($0.startedAt)
-        }
+    private var completedActivities: [AppCompletedActivity] {
+        completedActivitySummaries(
+            activities: activities,
+            workoutSessions: workoutSessions
+        )
     }
 
-    private var activitiesThisWeek: [Activity] {
-        activities.filter {
-            isDateInCurrentWeek($0.date)
-        }
-    }
-
-    private func isDateInCurrentWeek(_ date: Date) -> Bool {
-        var calendar = Calendar(identifier: .iso8601)
-        calendar.timeZone = .current
-
-        guard let weekInterval = calendar.dateInterval(
-            of: .weekOfYear,
-            for: Date()
-        ) else {
-            return false
-        }
-
-        return weekInterval.contains(date)
+    private var weeklyActivityTotals: CompletedActivityTotals {
+        let calendar = CompletedActivityProjection.mondayThroughSundayCalendar()
+        let weeklyItems = CompletedActivityProjection.items(
+            completedActivities,
+            inWeekContaining: Date(),
+            calendar: calendar
+        )
+        return CompletedActivityProjection.totals(for: weeklyItems)
     }
 }
