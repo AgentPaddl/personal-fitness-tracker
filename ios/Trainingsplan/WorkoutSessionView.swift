@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import ActivitySummaryKit
 
 struct WorkoutSessionView: View {
     @Environment(\.modelContext) private var modelContext
@@ -18,9 +19,7 @@ struct WorkoutSessionView: View {
     
     @State private var session: WorkoutSession?
     @State private var showExercisePicker = false
-    @State private var showFinishWorkout = false
-    @State private var finishDuration = 0
-    @State private var finishCalories = 0
+    @State private var completionDraft: WorkoutCompletionDraft?
     
     var body: some View {
         Form {
@@ -108,12 +107,11 @@ struct WorkoutSessionView: View {
             }
         }
         
-        .sheet(isPresented: $showFinishWorkout) {
+        .sheet(item: $completionDraft) { draft in
             if let session {
                 WorkoutFinishView(
                     session: session,
-                    durationMinutes: finishDuration,
-                    estimatedCalories: finishCalories
+                    draft: draft
                 ) {
                     self.session = nil
                 }
@@ -216,35 +214,13 @@ struct WorkoutSessionView: View {
         guard let session else {
             return
         }
-        
-        let duration = max(
-            1,
-            Int(Date().timeIntervalSince(session.startedAt) / 60)
-        )
-        
-        finishDuration = duration
-        finishCalories = estimateCalories(
-            durationMinutes: duration,
+
+        let finishMoment = Date()
+        completionDraft = WorkoutCompletion.makeDraft(
+            startedAt: session.startedAt,
+            capturedFinishAt: finishMoment,
             bodyWeightKg: session.bodyWeightKg
         )
-        
-        showFinishWorkout = true
-    }
-    private func estimateCalories(
-        durationMinutes: Int,
-        bodyWeightKg: Double?
-    ) -> Int {
-        let weight = bodyWeightKg ?? 80
-        
-        let metValue = 5.0
-        
-        let calories =
-        metValue *
-        weight *
-        Double(durationMinutes) /
-        60.0
-        
-        return Int(calories.rounded())
     }
     private func restoreOpenWorkoutIfNeeded() {
         guard session == nil else {
