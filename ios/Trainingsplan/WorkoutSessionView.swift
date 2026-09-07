@@ -20,6 +20,9 @@ struct WorkoutSessionView: View {
     @State private var session: WorkoutSession?
     @State private var showExercisePicker = false
     @State private var completionDraft: WorkoutCompletionDraft?
+    @State private var sessionPendingDiscard: WorkoutSession?
+    @State private var discardError: String?
+    @State private var deletionService = WorkoutSessionDeletionService()
     
     var body: some View {
         Form {
@@ -79,6 +82,12 @@ struct WorkoutSessionView: View {
                     }
                     .disabled(currentSessionPerformances.isEmpty)
                 }
+
+                Section {
+                    Button("Training verwerfen", role: .destructive) {
+                        sessionPendingDiscard = session
+                    }
+                }
             } else {
                 Section {
                     Button {
@@ -117,10 +126,52 @@ struct WorkoutSessionView: View {
                 }
             }
         }
+        .confirmationDialog(
+            "Training verwerfen?",
+            isPresented: discardConfirmationIsPresented,
+            presenting: sessionPendingDiscard
+        ) { session in
+            Button("Training verwerfen", role: .destructive) {
+                discardWorkout(session)
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: { _ in
+            Text("Das begonnene Training und alle eingetragenen Übungen und Sätze werden dauerhaft gelöscht.")
+        }
+        .alert(
+            "Training konnte nicht verworfen werden",
+            isPresented: discardErrorIsPresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(discardError ?? "Bitte versuche es erneut.")
+        }
     }
     
     private var latestWeight: Double? {
         weightEntries.first?.weightKg
+    }
+
+    private var discardConfirmationIsPresented: Binding<Bool> {
+        Binding(
+            get: { sessionPendingDiscard != nil },
+            set: { isPresented in
+                if !isPresented {
+                    sessionPendingDiscard = nil
+                }
+            }
+        )
+    }
+
+    private var discardErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { discardError != nil },
+            set: { isPresented in
+                if !isPresented {
+                    discardError = nil
+                }
+            }
+        )
     }
     
     private func startWorkout() {
@@ -222,6 +273,26 @@ struct WorkoutSessionView: View {
             bodyWeightKg: session.bodyWeightKg
         )
     }
+
+    private func discardWorkout(_ session: WorkoutSession) {
+        let result = deletionService.discard(
+            session: session,
+            performances: performances,
+            workoutSets: workoutSets,
+            modelContext: modelContext
+        )
+
+        switch result {
+        case .deleted:
+            sessionPendingDiscard = nil
+            self.session = nil
+        case .failed:
+            discardError = "Das Training wurde nicht verworfen. Deine Eingaben bleiben erhalten. Bitte versuche es erneut."
+        case .skipped:
+            break
+        }
+    }
+
     private func restoreOpenWorkoutIfNeeded() {
         guard session == nil else {
             return

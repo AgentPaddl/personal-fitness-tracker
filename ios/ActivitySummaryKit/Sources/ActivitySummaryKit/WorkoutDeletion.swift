@@ -32,7 +32,39 @@ public struct WorkoutDeletionPlan<ID: Hashable>: Equatable {
     }
 }
 
+public enum WorkoutDeletionScope: Equatable {
+    case completed
+    case incomplete
+
+    public func accepts(isCompleted: Bool) -> Bool {
+        switch self {
+        case .completed:
+            return isCompleted
+        case .incomplete:
+            return !isCompleted
+        }
+    }
+}
+
 public enum WorkoutDeletionPlanner {
+    public static func plan<ID: Hashable>(
+        workoutSessionID: ID,
+        isCompleted: Bool,
+        scope: WorkoutDeletionScope,
+        performances: [WorkoutDeletionPerformance<ID>],
+        sets: [WorkoutDeletionSet<ID>]
+    ) -> WorkoutDeletionPlan<ID>? {
+        guard scope.accepts(isCompleted: isCompleted) else {
+            return nil
+        }
+
+        return plan(
+            workoutSessionID: workoutSessionID,
+            performances: performances,
+            sets: sets
+        )
+    }
+
     public static func plan<ID: Hashable>(
         workoutSessionID: ID,
         performances: [WorkoutDeletionPerformance<ID>],

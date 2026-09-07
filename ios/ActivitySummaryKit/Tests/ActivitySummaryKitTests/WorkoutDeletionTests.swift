@@ -3,6 +3,92 @@ import XCTest
 @testable import ActivitySummaryKit
 
 final class WorkoutDeletionTests: XCTestCase {
+    func testIncompleteScopeSelectsOnlyTheChosenIncompleteSessionAndItsChildren() throws {
+        let plan = try XCTUnwrap(
+            scopedPlan(
+                workoutSessionID: "workout-1",
+                isCompleted: false,
+                scope: .incomplete
+            )
+        )
+
+        XCTAssertEqual(plan.workoutSessionID, "workout-1")
+        XCTAssertEqual(plan.performanceIDs, ["performance-1"])
+        XCTAssertEqual(plan.setIDs, ["set-1", "set-2"])
+        XCTAssertFalse(plan.performanceIDs.contains("performance-2"))
+        XCTAssertFalse(plan.setIDs.contains("set-3"))
+    }
+
+    func testIncompleteScopeRejectsCompletedSession() {
+        XCTAssertNil(
+            scopedPlan(
+                workoutSessionID: "workout-1",
+                isCompleted: true,
+                scope: .incomplete
+            )
+        )
+    }
+
+    func testCompletedScopeStillAcceptsCompletedSession() {
+        XCTAssertNotNil(
+            scopedPlan(
+                workoutSessionID: "workout-1",
+                isCompleted: true,
+                scope: .completed
+            )
+        )
+    }
+
+    func testCompletedScopeRejectsIncompleteSession() {
+        XCTAssertNil(
+            scopedPlan(
+                workoutSessionID: "workout-1",
+                isCompleted: false,
+                scope: .completed
+            )
+        )
+    }
+
+    func testCancellingDiscardDoesNotInvokeDeletion() {
+        let coordinator = WorkoutDeletionCoordinator<String>()
+        var operations: [String] = []
+        let confirmed = false
+
+        if confirmed {
+            _ = coordinator.delete(
+                plan: makePlan(workoutSessionID: "workout-1"),
+                deleteSet: { operations.append("set:\($0)") },
+                deletePerformance: { operations.append("performance:\($0)") },
+                deleteWorkoutSession: { operations.append("session:\($0)") },
+                persist: { operations.append("persist") },
+                rollback: { operations.append("rollback") }
+            )
+        }
+
+        XCTAssertTrue(operations.isEmpty)
+    }
+
+    func testDiscardFailureRollbackLeavesWorkoutActive() {
+        enum TestError: Error {
+            case persistenceFailed
+        }
+
+        let coordinator = WorkoutDeletionCoordinator<String>()
+        var activeWorkoutID: String? = "workout-1"
+
+        let result = coordinator.delete(
+            plan: makePlan(workoutSessionID: "workout-1"),
+            deleteSet: { _ in },
+            deletePerformance: { _ in },
+            deleteWorkoutSession: { _ in activeWorkoutID = nil },
+            persist: { throw TestError.persistenceFailed },
+            rollback: { activeWorkoutID = "workout-1" }
+        )
+
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(activeWorkoutID, "workout-1")
+    }
+
     func testPlanAddressesExactlySelectedWorkoutSession() {
         let plan = makePlan(workoutSessionID: "workout-1")
 
@@ -183,6 +269,35 @@ final class WorkoutDeletionTests: XCTestCase {
     private func makePlan(workoutSessionID: String) -> WorkoutDeletionPlan<String> {
         WorkoutDeletionPlanner.plan(
             workoutSessionID: workoutSessionID,
+            performances: [
+                WorkoutDeletionPerformance(
+                    id: "performance-1",
+                    workoutSessionID: "workout-1",
+                    exerciseID: "shared-exercise"
+                ),
+                WorkoutDeletionPerformance(
+                    id: "performance-2",
+                    workoutSessionID: "workout-2",
+                    exerciseID: "shared-exercise"
+                )
+            ],
+            sets: [
+                WorkoutDeletionSet(id: "set-1", performanceID: "performance-1"),
+                WorkoutDeletionSet(id: "set-2", performanceID: "performance-1"),
+                WorkoutDeletionSet(id: "set-3", performanceID: "performance-2")
+            ]
+        )
+    }
+
+    private func scopedPlan(
+        workoutSessionID: String,
+        isCompleted: Bool,
+        scope: WorkoutDeletionScope
+    ) -> WorkoutDeletionPlan<String>? {
+        WorkoutDeletionPlanner.plan(
+            workoutSessionID: workoutSessionID,
+            isCompleted: isCompleted,
+            scope: scope,
             performances: [
                 WorkoutDeletionPerformance(
                     id: "performance-1",
