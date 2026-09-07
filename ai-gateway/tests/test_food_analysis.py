@@ -13,8 +13,37 @@ from tests.image_fixtures import (
 
 import base64
 
+import pytest
+
 _TINY_IMAGE_BASE64 = base64.b64encode(make_valid_jpeg_bytes()).decode("ascii")
 _TINY_PNG_BASE64 = base64.b64encode(make_valid_png_bytes()).decode("ascii")
+
+_CURRENT_ESTIMATE = {
+    "food_name": "rice bowl",
+    "calories": 620.0,
+    "protein_grams": 24.0,
+    "carbohydrate_grams": 86.0,
+    "fat_grams": 18.0,
+    "confidence": 0.72,
+    "warnings": ["Portion size is uncertain."],
+    "assumptions": ["Rice weight was interpreted as cooked."],
+}
+
+
+def _refinement_payload(
+    *, source_kind: str = "text", iteration: int = 1, food_description: str | None = "rice bowl"
+) -> dict:
+    payload = {
+        "refinement": {
+            "correction_text": "I ate only half of it.",
+            "current_estimate": dict(_CURRENT_ESTIMATE),
+            "source_kind": source_kind,
+            "iteration": iteration,
+        }
+    }
+    if food_description is not None:
+        payload["food_description"] = food_description
+    return payload
 
 
 def test_food_analysis_success_returns_bounded_estimate(client):
@@ -31,6 +60,7 @@ def test_food_analysis_success_returns_bounded_estimate(client):
     assert 0 <= estimate["fat_grams"] <= 1_000
     assert 0 <= estimate["confidence"] <= 1
     assert isinstance(estimate["warnings"], list)
+    assert isinstance(estimate["assumptions"], list)
 
 
 def test_food_analysis_is_deterministic(client):
@@ -39,6 +69,150 @@ def test_food_analysis_is_deterministic(client):
     second = client.post("/v1/food-analysis", json=payload).json()
 
     assert first == second
+
+
+def test_food_analysis_accepts_text_refinement_and_returns_distinct_deterministic_result(client):
+    payload = _refinement_payload()
+
+    first = client.post("/v1/food-analysis", json=payload)
+    second = client.post("/v1/food-analysis", json=payload)
+    initial = client.post("/v1/food-analysis", json={"food_description": "rice bowl"})
+
+    assert first.status_code == 200
+    assert first.json() == second.json()
+    assert first.json() != initial.json()
+
+
+def test_food_analysis_accepts_refinement_of_image_source_without_image_bytes(client):
+    response = client.post(
+        "/v1/food-analysis",
+        json=_refinement_payload(source_kind="image", food_description=None),
+    )
+
+    assert response.status_code == 200
+
+
+def test_food_analysis_accepts_text_and_image_sourced_refinement_without_image_bytes(client):
+    response = client.post(
+        "/v1/food-analysis",
+        json=_refinement_payload(source_kind="text_and_image"),
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("iteration", [1, 3])
+def test_food_analysis_accepts_refinement_iteration_bounds(client, iteration):
+    response = client.post("/v1/food-analysis", json=_refinement_payload(iteration=iteration))
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("iteration", [0, 4, True])
+def test_food_analysis_rejects_refinement_iteration_outside_bounds(client, iteration):
+    response = client.post("/v1/food-analysis", json=_refinement_payload(iteration=iteration))
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request_invalid"
+
+
+@pytest.mark.parametrize("correction_text", ["", "   ", "x" * 1001])
+def test_food_analysis_rejects_invalid_refinement_correction_text(client, correction_text):
+    payload = _refinement_payload()
+    payload["refinement"]["correction_text"] = correction_text
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_food_analysis_rejects_missing_refinement_current_estimate(client):
+    payload = _refinement_payload()
+    del payload["refinement"]["current_estimate"]
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "food_name",
+        "calories",
+        "protein_grams",
+        "carbohydrate_grams",
+        "fat_grams",
+        "confidence",
+        "warnings",
+        "assumptions",
+    ],
+)
+def test_food_analysis_requires_complete_refinement_current_estimate(client, missing_field):
+    payload = _refinement_payload()
+    del payload["refinement"]["current_estimate"][missing_field]
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_food_analysis_rejects_invalid_refinement_current_estimate(client):
+    payload = _refinement_payload()
+    payload["refinement"]["current_estimate"]["calories"] = -1
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_food_analysis_rejects_invalid_refinement_source_kind(client):
+    payload = _refinement_payload(source_kind="video")
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "food_description", "include_image"),
+    [
+        ("text", None, False),
+        ("text_and_image", None, False),
+        ("image", "rice bowl", False),
+        ("text", "rice bowl", True),
+    ],
+)
+def test_food_analysis_rejects_contradictory_refinement_modes(
+    client, source_kind, food_description, include_image
+):
+    payload = _refinement_payload(source_kind=source_kind, food_description=food_description)
+    if include_image:
+        payload["image"] = {"media_type": "image/jpeg", "data_base64": _TINY_IMAGE_BASE64}
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["warnings", "assumptions"])
+def test_food_analysis_validates_warning_and_assumption_item_lengths_separately(client, field):
+    payload = _refinement_payload()
+    payload["refinement"]["current_estimate"][field] = ["x" * 501]
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["warnings", "assumptions"])
+def test_food_analysis_validates_warning_and_assumption_counts_separately(client, field):
+    payload = _refinement_payload()
+    payload["refinement"]["current_estimate"][field] = ["bounded note"] * 21
+
+    response = client.post("/v1/food-analysis", json=payload)
+
+    assert response.status_code == 422
 
 
 def test_food_analysis_rejects_blank_description(client):

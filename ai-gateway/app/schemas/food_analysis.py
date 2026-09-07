@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import math
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -35,6 +36,11 @@ MAX_IMAGE_BYTES = 3 * 1024 * 1024
 #: longer than this can never decode within the size limit, so it is
 #: rejected before spending a full base64 decode/allocation on it.
 _MAX_IMAGE_BASE64_LENGTH = 4 * math.ceil(MAX_IMAGE_BYTES / 3)
+
+MAX_ESTIMATE_NOTES = 20
+MAX_ESTIMATE_NOTE_LENGTH = 500
+
+EstimateNote = Annotated[str, Field(min_length=1, max_length=MAX_ESTIMATE_NOTE_LENGTH)]
 
 
 class ImageAttachment(BaseModel):
@@ -86,14 +92,59 @@ class ImageAttachment(BaseModel):
         return self
 
 
-class FoodAnalysisRequest(BaseModel):
-    """A food item or meal to analyze: text description, an image, or both.
+class FoodAnalysisEstimate(BaseModel):
+    """A structured, bounded nutrition estimate for a single food item."""
 
-    At least one of ``food_description``/``image`` must be present.
+    food_name: str = Field(min_length=1, max_length=200)
+    calories: float = Field(ge=0, le=10_000)
+    protein_grams: float = Field(ge=0, le=1_000)
+    carbohydrate_grams: float = Field(ge=0, le=1_000)
+    fat_grams: float = Field(ge=0, le=1_000)
+    confidence: float = Field(ge=0, le=1)
+    warnings: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
+    assumptions: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
+
+
+class RefinementCurrentEstimate(FoodAnalysisEstimate):
+    """Complete current review state supplied for a stateless refinement."""
+
+    warnings: list[EstimateNote] = Field(max_length=MAX_ESTIMATE_NOTES)
+    assumptions: list[EstimateNote] = Field(max_length=MAX_ESTIMATE_NOTES)
+
+
+class FoodAnalysisRefinement(BaseModel):
+    """Bounded context for one text-only revision of an existing estimate.
+
+    ``source_kind`` describes the original evidence; no image bytes are
+    accepted for the new refinement request itself.
+    """
+
+    correction_text: str = Field(min_length=1, max_length=1000)
+    current_estimate: RefinementCurrentEstimate
+    source_kind: Literal["text", "image", "text_and_image"]
+    # Bounds the client-visible refinement loop and its provider-call cost.
+    iteration: int = Field(strict=True, ge=1, le=3)
+
+    @field_validator("correction_text")
+    @classmethod
+    def _reject_blank_correction(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("correction_text must not be blank.")
+        return stripped
+
+
+class FoodAnalysisRequest(BaseModel):
+    """An initial analysis or a stateless, text-only refinement.
+
+    Initial analysis requires text, an image, or both. Refinement carries
+    the original text when one existed, plus complete bounded review state;
+    it never accepts or retransmits image bytes.
     """
 
     food_description: str | None = Field(default=None, max_length=2000)
     image: ImageAttachment | None = None
+    refinement: FoodAnalysisRefinement | None = None
 
     @field_validator("food_description")
     @classmethod
@@ -106,22 +157,23 @@ class FoodAnalysisRequest(BaseModel):
         return stripped
 
     @model_validator(mode="after")
-    def _require_text_or_image(self) -> "FoodAnalysisRequest":
-        if self.food_description is None and self.image is None:
-            raise ValueError("Either food_description or image must be provided.")
+    def _validate_mode(self) -> "FoodAnalysisRequest":
+        if self.refinement is None:
+            if self.food_description is None and self.image is None:
+                raise ValueError("Either food_description or image must be provided.")
+            return self
+
+        if self.image is not None:
+            raise ValueError("Refinement is text-only and must not include image bytes.")
+
+        has_original_text = self.food_description is not None
+        if self.refinement.source_kind == "image" and has_original_text:
+            raise ValueError("source_kind 'image' must not include food_description.")
+        if self.refinement.source_kind in {"text", "text_and_image"} and not has_original_text:
+            raise ValueError(
+                f"source_kind '{self.refinement.source_kind}' requires the original food_description."
+            )
         return self
-
-
-class FoodAnalysisEstimate(BaseModel):
-    """A structured, bounded nutrition estimate for a single food item."""
-
-    food_name: str = Field(min_length=1, max_length=200)
-    calories: float = Field(ge=0, le=10_000)
-    protein_grams: float = Field(ge=0, le=1_000)
-    carbohydrate_grams: float = Field(ge=0, le=1_000)
-    fat_grams: float = Field(ge=0, le=1_000)
-    confidence: float = Field(ge=0, le=1)
-    warnings: list[str] = Field(default_factory=list, max_length=20)
 
 
 class FoodAnalysisResponse(BaseModel):

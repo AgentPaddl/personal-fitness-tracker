@@ -16,6 +16,7 @@ _EXPECTED_ESTIMATE_KEYS = {
     "fat_grams",
     "confidence",
     "warnings",
+    "assumptions",
 }
 
 
