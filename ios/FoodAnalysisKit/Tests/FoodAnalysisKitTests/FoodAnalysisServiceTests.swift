@@ -210,6 +210,89 @@ final class FoodAnalysisServiceTests: XCTestCase {
         await assertThrowsFoodAnalysisError(try await service.analyze(description: "x"), .analysisFailed)
     }
 
+    // MARK: - Refinement
+
+    func testRefinementUsesSameEndpointAuthorizationAndJSONWithoutImageBytes() async throws {
+        let baseURL = baseURL
+        let responseJSON = """
+            {"estimate": {"food_name": "Reis", "calories": 310, "protein_grams": 12,
+            "carbohydrate_grams": 43, "fat_grams": 9, "confidence": 0.8,
+            "warnings": [], "assumptions": []}}
+            """.data(using: .utf8)!
+        let requestDTO = makeRefinementRequest()
+
+        let mock = MockPerformer { request in
+            XCTAssertEqual(request.url, baseURL.appendingPathComponent("food-analysis"))
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer refinement-token")
+            let body = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertNil(json["image"])
+            XCTAssertNotNil(json["refinement"])
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (responseJSON, response)
+        }
+
+        let service = FoodAnalysisService(
+            baseURL: baseURL,
+            session: mock,
+            tokenProvider: StubTokenProvider(token: "refinement-token")
+        )
+        let estimate = try await service.refine(request: requestDTO)
+
+        XCTAssertEqual(estimate.calories, 310)
+    }
+
+    func testRefinementMapsErrorsLikeInitialAnalysis() async {
+        let errorJSON = #"{"error": {"code": "gateway_rate_limited", "message": "rate limited"}}"#
+            .data(using: .utf8)!
+        let mock = MockPerformer { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: nil)!
+            return (errorJSON, response)
+        }
+        let service = FoodAnalysisService(baseURL: baseURL, session: mock)
+
+        await assertThrowsFoodAnalysisError(try await service.refine(request: makeRefinementRequest()), .rateLimited)
+    }
+
+    func testRefinementTokenFailurePreventsNetworkRequest() async {
+        let mock = MockPerformer { _ in
+            XCTFail("The network layer must never be reached when token acquisition fails")
+            throw URLError(.unknown)
+        }
+        let service = FoodAnalysisService(
+            baseURL: baseURL,
+            session: mock,
+            tokenProvider: StubTokenProvider(error: URLError(.userAuthenticationRequired))
+        )
+
+        await assertThrowsFoodAnalysisError(
+            try await service.refine(request: makeRefinementRequest()), .authenticationRequired
+        )
+    }
+
+    private func makeRefinementRequest() -> FoodAnalysisRefinementRequestDTO {
+        FoodAnalysisRefinementRequestDTO(
+            foodDescription: "Eine Schüssel Reis",
+            refinement: FoodAnalysisRefinementDTO(
+                correctionText: "Nur die Hälfte gegessen",
+                currentEstimate: FoodAnalysisRefinementCurrentEstimateDTO(
+                    foodName: "Reisschüssel",
+                    calories: 620,
+                    proteinGrams: 24,
+                    carbohydrateGrams: 86,
+                    fatGrams: 18,
+                    confidence: 0.72,
+                    warnings: [],
+                    assumptions: []
+                ),
+                sourceKind: .text,
+                iteration: 1
+            )
+        )
+    }
+
     // MARK: - Image analysis
 
     func testImageAnalysisSendsMultipartRequestWithImageAndDescription() async throws {

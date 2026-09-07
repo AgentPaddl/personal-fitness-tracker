@@ -11,7 +11,8 @@ final class FoodAnalysisReviewDraftTests: XCTestCase {
             carbohydrateGrams: 43,
             fatGrams: 5.5,
             confidence: 0.7,
-            warnings: ["Portionsgrößen geschätzt"]
+            warnings: ["Portionsgrößen geschätzt"],
+            assumptions: ["Brotgewicht geschätzt"]
         )
     }
 
@@ -25,6 +26,7 @@ final class FoodAnalysisReviewDraftTests: XCTestCase {
         XCTAssertEqual(draft.fat, "5.5")
         XCTAssertEqual(draft.confidence, 0.7)
         XCTAssertEqual(draft.warnings, ["Portionsgrößen geschätzt"])
+        XCTAssertEqual(draft.assumptions, ["Brotgewicht geschätzt"])
     }
 
     func testValidatedReturnsInputForWellFormedDraft() throws {
@@ -44,6 +46,21 @@ final class FoodAnalysisReviewDraftTests: XCTestCase {
         draft.protein = "4,5"
 
         XCTAssertEqual(draft.validated()?.proteinGrams, 4.5)
+    }
+
+    func testRefinementEstimateUsesCurrentVisibleValuesAndMetadata() throws {
+        var draft = FoodAnalysisReviewDraft(estimate: makeEstimate())
+        draft.name = "  Angepasste Portion  "
+        draft.calories = "120,5"
+        draft.protein = "2,25"
+
+        let estimate = try XCTUnwrap(draft.refinementCurrentEstimate())
+
+        XCTAssertEqual(estimate.foodName, "Angepasste Portion")
+        XCTAssertEqual(estimate.calories, 120.5)
+        XCTAssertEqual(estimate.proteinGrams, 2.25)
+        XCTAssertEqual(estimate.warnings, ["Portionsgrößen geschätzt"])
+        XCTAssertEqual(estimate.assumptions, ["Brotgewicht geschätzt"])
     }
 
     func testValidatedTrimsWhitespaceFromName() {

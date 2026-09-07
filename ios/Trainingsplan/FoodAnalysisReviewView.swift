@@ -11,12 +11,16 @@ struct FoodAnalysisReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
-    @State var draft: FoodAnalysisReviewDraft
+    @ObservedObject var session: FoodAnalysisReviewSession
     var onSaved: (() -> Void)?
 
     @State private var isSaving = false
     @State private var saveErrorMessage: String?
-    @State private var persistenceCoordinator = FoodEntryPersistenceCoordinator()
+
+    private var draft: FoodAnalysisReviewDraft {
+        get { session.currentDraft }
+        nonmutating set { session.currentDraft = newValue }
+    }
 
     var body: some View {
         NavigationStack {
@@ -31,22 +35,22 @@ struct FoodAnalysisReviewView: View {
                 }
 
                 Section("Ergebnis prüfen") {
-                    TextField("Bezeichnung", text: $draft.name)
+                    TextField("Bezeichnung", text: $session.currentDraft.name)
                         .disabled(isSaving)
 
-                    TextField("Kalorien", text: $draft.calories)
+                    TextField("Kalorien", text: $session.currentDraft.calories)
                         .keyboardType(.numberPad)
                         .disabled(isSaving)
 
-                    TextField("Protein in g", text: $draft.protein)
+                    TextField("Protein in g", text: $session.currentDraft.protein)
                         .keyboardType(.decimalPad)
                         .disabled(isSaving)
 
-                    TextField("Kohlenhydrate in g", text: $draft.carbs)
+                    TextField("Kohlenhydrate in g", text: $session.currentDraft.carbs)
                         .keyboardType(.decimalPad)
                         .disabled(isSaving)
 
-                    TextField("Fett in g", text: $draft.fat)
+                    TextField("Fett in g", text: $session.currentDraft.fat)
                         .keyboardType(.decimalPad)
                         .disabled(isSaving)
                 }
@@ -113,7 +117,7 @@ struct FoodAnalysisReviewView: View {
             fatGrams: input.fatGrams
         )
 
-        let result = persistenceCoordinator.save(
+        let result = session.persistenceCoordinator.save(
             insert: { modelContext.insert(entry) },
             persist: { try modelContext.save() },
             rollback: { modelContext.delete(entry) }

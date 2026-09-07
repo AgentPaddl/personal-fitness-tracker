@@ -16,6 +16,7 @@ public struct FoodAnalysisReviewDraft: Identifiable, Equatable, Sendable {
     /// ``ValidatedFoodEntryInput`` so it never reaches SwiftData.
     public let confidence: Double
     public let warnings: [String]
+    public let assumptions: [String]
 
     public init(id: UUID = UUID(), estimate: FoodAnalysisResponseDTO.Estimate) {
         self.id = id
@@ -26,6 +27,7 @@ public struct FoodAnalysisReviewDraft: Identifiable, Equatable, Sendable {
         self.fat = Self.formatted(estimate.fatGrams)
         self.confidence = estimate.confidence
         self.warnings = estimate.warnings
+        self.assumptions = estimate.assumptions
     }
 
     private static func formatted(_ value: Double) -> String {
@@ -91,6 +93,28 @@ extension FoodAnalysisReviewDraft {
             proteinGrams: protein,
             carbsGrams: carbs,
             fatGrams: fat
+        )
+    }
+
+    /// Converts the current editable review values into the complete
+    /// estimate required by the stateless refinement contract.
+    public func refinementCurrentEstimate() -> FoodAnalysisRefinementCurrentEstimateDTO? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        guard let calories = Self.parseDecimal(calories), Bounds.calories.contains(calories) else { return nil }
+        guard let protein = Self.parseDecimal(protein), Bounds.macroGrams.contains(protein) else { return nil }
+        guard let carbs = Self.parseDecimal(carbs), Bounds.macroGrams.contains(carbs) else { return nil }
+        guard let fat = Self.parseDecimal(fat), Bounds.macroGrams.contains(fat) else { return nil }
+
+        return FoodAnalysisRefinementCurrentEstimateDTO(
+            foodName: trimmedName,
+            calories: calories,
+            proteinGrams: protein,
+            carbohydrateGrams: carbs,
+            fatGrams: fat,
+            confidence: confidence,
+            warnings: warnings,
+            assumptions: assumptions
         )
     }
 

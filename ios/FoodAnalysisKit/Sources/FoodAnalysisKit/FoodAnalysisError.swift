@@ -39,4 +39,33 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
             return false
         }
     }
+
+    public var userMessage: String {
+        switch self {
+        case .noConnection:
+            return "Keine Internetverbindung. Bitte überprüfe deine Verbindung und versuche es erneut."
+        case .timeout:
+            return "Die Analyse hat zu lange gedauert. Bitte versuche es erneut."
+        case .backendUnavailable:
+            return "Der Analysedienst ist derzeit nicht erreichbar. Bitte versuche es später erneut."
+        case .rateLimited:
+            return "Zu viele Anfragen. Bitte warte einen Moment und versuche es erneut."
+        case .unauthorized:
+            return "Die Analyse ist momentan nicht verfügbar."
+        case .invalidResponse:
+            return "Die Antwort konnte nicht verarbeitet werden. Bitte versuche es erneut."
+        case .analysisFailed:
+            return "Die Analyse ist fehlgeschlagen. Bitte versuche es erneut."
+        case .imageProcessingFailed:
+            return "Das Foto konnte nicht verarbeitet werden. Bitte wähle ein anderes Foto."
+        case .imageMissingOrEmpty:
+            return "Es wurde kein gültiges Foto übermittelt. Bitte wähle ein Foto aus."
+        case .unsupportedImageType:
+            return "Dieses Bildformat wird nicht unterstützt. Bitte verwende ein JPEG- oder PNG-Foto."
+        case .imageTooLarge:
+            return "Das Foto ist zu groß. Bitte wähle ein kleineres Foto."
+        case .authenticationRequired:
+            return "Anmeldung erforderlich. Bitte versuche es erneut."
+        }
+    }
 }

@@ -17,6 +17,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
     /// configuration failure rather than a request failure.
     @Published public private(set) var lastError: FoodAnalysisError?
     @Published public var reviewDraft: FoodAnalysisReviewDraft?
+    @Published public private(set) var reviewSession: FoodAnalysisReviewSession?
     /// The preprocessed (resized/JPEG-compressed/metadata-stripped) image
     /// ready for upload, if the user picked one. Held only in memory for
     /// the duration of this flow; never persisted.
@@ -81,7 +82,22 @@ public final class FoodAnalysisViewModel: ObservableObject {
             } else {
                 estimate = try await service.analyze(description: trimmed)
             }
-            reviewDraft = FoodAnalysisReviewDraft(estimate: estimate)
+            let sourceKind: FoodAnalysisSourceKind
+            if selectedImage != nil {
+                sourceKind = trimmed.isEmpty ? .image : .textAndImage
+            } else {
+                sourceKind = .text
+            }
+            reviewSession?.close()
+            let session = FoodAnalysisReviewSession(
+                originalDescription: trimmed.isEmpty ? nil : trimmed,
+                sourceKind: sourceKind,
+                initialEstimate: estimate,
+                service: service
+            )
+            reviewSession = session
+            // Kept as the stable sheet presentation item for the existing UI.
+            reviewDraft = session.currentDraft
         } catch let error as FoodAnalysisError {
             errorMessage = Self.userMessage(for: error)
             lastError = error
@@ -108,33 +124,14 @@ public final class FoodAnalysisViewModel: ObservableObject {
         selectedImage = nil
     }
 
+    public func closeReviewSession() {
+        reviewSession?.close()
+        reviewSession = nil
+        reviewDraft = nil
+    }
+
     public static func userMessage(for error: FoodAnalysisError) -> String {
-        switch error {
-        case .noConnection:
-            return "Keine Internetverbindung. Bitte überprüfe deine Verbindung und versuche es erneut."
-        case .timeout:
-            return "Die Analyse hat zu lange gedauert. Bitte versuche es erneut."
-        case .backendUnavailable:
-            return "Der Analysedienst ist derzeit nicht erreichbar. Bitte versuche es später erneut."
-        case .rateLimited:
-            return "Zu viele Anfragen. Bitte warte einen Moment und versuche es erneut."
-        case .unauthorized:
-            return "Die Analyse ist momentan nicht verfügbar."
-        case .invalidResponse:
-            return "Die Antwort konnte nicht verarbeitet werden. Bitte versuche es erneut."
-        case .analysisFailed:
-            return "Die Analyse ist fehlgeschlagen. Bitte versuche es erneut."
-        case .imageProcessingFailed:
-            return "Das Foto konnte nicht verarbeitet werden. Bitte wähle ein anderes Foto."
-        case .imageMissingOrEmpty:
-            return "Es wurde kein gültiges Foto übermittelt. Bitte wähle ein Foto aus."
-        case .unsupportedImageType:
-            return "Dieses Bildformat wird nicht unterstützt. Bitte verwende ein JPEG- oder PNG-Foto."
-        case .imageTooLarge:
-            return "Das Foto ist zu groß. Bitte wähle ein kleineres Foto."
-        case .authenticationRequired:
-            return "Anmeldung erforderlich. Bitte versuche es erneut."
-        }
+        error.userMessage
     }
 
     public static func userMessage(forConfigurationError error: APIConfigurationError) -> String {

@@ -24,6 +24,7 @@ public protocol AccessTokenProviding: Sendable {
 /// Public contract for the text food-analysis networking call.
 public protocol FoodAnalysisServicing: Sendable {
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate
+    func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate
     /// Uploads an already-preprocessed image (and optional text) via
     /// `multipart/form-data`. `description`, if non-nil/non-blank, is sent
     /// alongside the image.
@@ -67,6 +68,19 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         try await applyAuthorization(to: &request)
         request.timeoutInterval = timeoutInterval
         request.httpBody = try JSONEncoder().encode(FoodAnalysisRequestDTO(foodDescription: description))
+
+        return try await perform(request)
+    }
+
+    public func refine(
+        request refinementRequest: FoodAnalysisRefinementRequestDTO
+    ) async throws -> FoodAnalysisResponseDTO.Estimate {
+        var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        try await applyAuthorization(to: &request)
+        request.timeoutInterval = timeoutInterval
+        request.httpBody = try JSONEncoder().encode(refinementRequest)
 
         return try await perform(request)
     }

@@ -247,10 +247,15 @@ struct NutritionView: View {
             .sheet(item: $selectedEntryToEdit) { entry in
                 EditFoodEntryView(entry: entry)
             }
-            .sheet(item: $foodAnalysisViewModel.reviewDraft) { draft in
-                FoodAnalysisReviewView(draft: draft) {
-                    foodAnalysisViewModel.descriptionText = ""
-                    foodAnalysisViewModel.removeSelectedImage()
+            .sheet(item: $foodAnalysisViewModel.reviewDraft, onDismiss: {
+                foodAnalysisViewModel.closeReviewSession()
+            }) { _ in
+                if let session = foodAnalysisViewModel.reviewSession {
+                    FoodAnalysisReviewView(session: session) {
+                        foodAnalysisViewModel.descriptionText = ""
+                        foodAnalysisViewModel.removeSelectedImage()
+                        foodAnalysisViewModel.closeReviewSession()
+                    }
                 }
             }
             .onChange(of: photoPickerItem) { _, newItem in

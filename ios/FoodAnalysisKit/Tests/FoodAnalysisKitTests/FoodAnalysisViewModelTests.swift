@@ -21,6 +21,11 @@ private final class StubService: FoodAnalysisServicing {
         return try result.get()
     }
 
+    func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate {
+        callCount += 1
+        return try result.get()
+    }
+
     func analyzeImage(
         data: Data, mimeType: String, description: String?
     ) async throws -> FoodAnalysisResponseDTO.Estimate {
@@ -47,6 +52,13 @@ private final class GatedService: FoodAnalysisServicing {
         }
     }
 
+    func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate {
+        callCount += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
     func analyzeImage(
         data: Data, mimeType: String, description: String?
     ) async throws -> FoodAnalysisResponseDTO.Estimate {
@@ -59,6 +71,37 @@ private final class GatedService: FoodAnalysisServicing {
     func resume(with estimate: FoodAnalysisResponseDTO.Estimate) {
         continuation?.resume(returning: estimate)
         continuation = nil
+    }
+}
+
+@MainActor
+private final class ReplacementService: FoodAnalysisServicing {
+    var analysisResults: [FoodAnalysisResponseDTO.Estimate]
+    private var refinementContinuation: CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>?
+
+    init(analysisResults: [FoodAnalysisResponseDTO.Estimate]) {
+        self.analysisResults = analysisResults
+    }
+
+    func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
+        analysisResults.removeFirst()
+    }
+
+    func analyzeImage(
+        data: Data, mimeType: String, description: String?
+    ) async throws -> FoodAnalysisResponseDTO.Estimate {
+        analysisResults.removeFirst()
+    }
+
+    func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate {
+        try await withCheckedThrowingContinuation { continuation in
+            refinementContinuation = continuation
+        }
+    }
+
+    func completeRefinement(with estimate: FoodAnalysisResponseDTO.Estimate) {
+        refinementContinuation?.resume(returning: estimate)
+        refinementContinuation = nil
     }
 }
 
@@ -95,8 +138,49 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         await viewModel.analyze()
 
         XCTAssertEqual(viewModel.reviewDraft?.name, "Apfel")
+        XCTAssertEqual(viewModel.reviewSession?.currentDraft.name, "Apfel")
+        XCTAssertEqual(viewModel.reviewSession?.originalDescription, "Ein Apfel")
+        XCTAssertEqual(viewModel.reviewSession?.sourceKind, .text)
+        XCTAssertEqual(viewModel.reviewSession?.id, viewModel.reviewDraft?.id)
         XCTAssertNil(viewModel.errorMessage)
         XCTAssertFalse(viewModel.isAnalyzing)
+    }
+
+    func testReplacingReviewSessionIgnoresLateResponseFromPreviousSession() async {
+        let replacement = FoodAnalysisResponseDTO.Estimate(
+            foodName: "Banane",
+            calories: 105,
+            proteinGrams: 1.3,
+            carbohydrateGrams: 27,
+            fatGrams: 0.4,
+            confidence: 0.9
+        )
+        let service = ReplacementService(analysisResults: [makeEstimate(), replacement])
+        let viewModel = FoodAnalysisViewModel(service: service)
+        viewModel.descriptionText = "Ein Apfel"
+        await viewModel.analyze()
+        let oldSession = try! XCTUnwrap(viewModel.reviewSession)
+        oldSession.correctionText = "Nur die Hälfte"
+        let refinement = Task { await oldSession.refine() }
+        for _ in 0..<100 where !oldSession.isRefining { await Task.yield() }
+
+        viewModel.descriptionText = "Eine Banane"
+        await viewModel.analyze()
+        let replacementID = viewModel.reviewSession?.id
+        service.completeRefinement(with: FoodAnalysisResponseDTO.Estimate(
+            foodName: "Verspäteter Apfel",
+            calories: 1,
+            proteinGrams: 0,
+            carbohydrateGrams: 0,
+            fatGrams: 0,
+            confidence: 0.1
+        ))
+        await refinement.value
+
+        XCTAssertNotEqual(oldSession.id, replacementID)
+        XCTAssertEqual(oldSession.currentEstimate, makeEstimate())
+        XCTAssertEqual(viewModel.reviewSession?.currentEstimate, replacement)
+        XCTAssertEqual(viewModel.reviewDraft?.name, "Banane")
     }
 
     func testDescriptionTextIsPreservedAfterFailure() async {
@@ -203,6 +287,7 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         XCTAssertEqual(service.callCount, 1)
         XCTAssertNil(service.lastImageDescription)
         XCTAssertNotNil(viewModel.reviewDraft)
+        XCTAssertEqual(viewModel.reviewSession?.sourceKind, .image)
     }
 
     func testAnalyzeWithTextAndImageSendsBoth() async {
@@ -215,6 +300,7 @@ final class FoodAnalysisViewModelTests: XCTestCase {
 
         XCTAssertEqual(service.callCount, 1)
         XCTAssertEqual(service.lastImageDescription, "a bowl of pasta")
+        XCTAssertEqual(viewModel.reviewSession?.sourceKind, .textAndImage)
     }
 
     func testSelectedImageIsRetainedAfterAnalysisFailure() async {
