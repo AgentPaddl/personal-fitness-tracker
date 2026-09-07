@@ -122,6 +122,11 @@ class GatewayClient:
     def analyze_food_text(self, food_description: str) -> dict[str, Any]:
         return self._post_and_handle({"food_description": food_description})
 
+    def analyze_food_refinement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Forward an already validated, explicitly mapped refinement payload."""
+
+        return self._post_and_handle(payload)
+
     def analyze_food_image(
         self, image_bytes: bytes, mime_type: str, food_description: str | None = None
     ) -> dict[str, Any]:

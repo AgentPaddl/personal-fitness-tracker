@@ -9,7 +9,9 @@ construction because the mapping only ever reads the declared attributes.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: Conservative, end-to-end-verified image formats only. Matches the
 #: gateway's own accepted set (`ai-gateway/app/schemas/food_analysis.py`).
@@ -28,17 +30,10 @@ MAX_IMAGE_BYTES = 3 * 1024 * 1024
 #: matching the text-only contract's limit.
 MAX_FOOD_DESCRIPTION_LENGTH = 2000
 
+MAX_ESTIMATE_NOTES = 20
+MAX_ESTIMATE_NOTE_LENGTH = 500
 
-class FoodAnalysisPublicRequest(BaseModel):
-    food_description: str = Field(min_length=1, max_length=2000)
-
-    @field_validator("food_description")
-    @classmethod
-    def _reject_blank(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("food_description must not be blank.")
-        return stripped
+EstimateNote = Annotated[str, Field(min_length=1, max_length=MAX_ESTIMATE_NOTE_LENGTH)]
 
 
 class FoodAnalysisPublicEstimate(BaseModel):
@@ -48,11 +43,103 @@ class FoodAnalysisPublicEstimate(BaseModel):
     carbohydrate_grams: float = Field(ge=0, le=1_000)
     fat_grams: float = Field(ge=0, le=1_000)
     confidence: float = Field(ge=0, le=1)
-    warnings: list[str] = Field(default_factory=list, max_length=20)
+    warnings: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
+    assumptions: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
+
+
+class RefinementCurrentEstimate(FoodAnalysisPublicEstimate):
+    """Complete current review state required for a stateless refinement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    warnings: list[EstimateNote] = Field(max_length=MAX_ESTIMATE_NOTES)
+    assumptions: list[EstimateNote] = Field(max_length=MAX_ESTIMATE_NOTES)
+
+
+class FoodAnalysisPublicRefinement(BaseModel):
+    """Bounded text correction for one existing nutrition estimate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    correction_text: str = Field(min_length=1, max_length=1000)
+    current_estimate: RefinementCurrentEstimate
+    source_kind: Literal["text", "image", "text_and_image"]
+    iteration: int = Field(strict=True, ge=1, le=3)
+
+    @field_validator("correction_text")
+    @classmethod
+    def _reject_blank_correction(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("correction_text must not be blank.")
+        return stripped
+
+
+class FoodAnalysisPublicRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    food_description: str | None = Field(default=None, max_length=MAX_FOOD_DESCRIPTION_LENGTH)
+    refinement: FoodAnalysisPublicRefinement | None = None
+
+    @field_validator("food_description")
+    @classmethod
+    def _reject_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("food_description must not be blank.")
+        return stripped
+
+    @model_validator(mode="after")
+    def _validate_mode(self) -> "FoodAnalysisPublicRequest":
+        if self.refinement is None:
+            if self.food_description is None:
+                raise ValueError("food_description is required for an initial text analysis.")
+            return self
+
+        has_original_text = self.food_description is not None
+        if self.refinement.source_kind == "image" and has_original_text:
+            raise ValueError("source_kind 'image' must not include food_description.")
+        if self.refinement.source_kind in {"text", "text_and_image"} and not has_original_text:
+            raise ValueError(
+                f"source_kind '{self.refinement.source_kind}' requires the original food_description."
+            )
+        return self
 
 
 class FoodAnalysisPublicResponse(BaseModel):
     estimate: FoodAnalysisPublicEstimate
+
+
+def map_public_refinement_to_gateway(request: FoodAnalysisPublicRequest) -> dict:
+    """Map only validated, allow-listed public refinement fields."""
+
+    refinement = request.refinement
+    if refinement is None:
+        raise ValueError("A refinement request is required.")
+
+    estimate = refinement.current_estimate
+    payload = {
+        "refinement": {
+            "correction_text": refinement.correction_text,
+            "current_estimate": {
+                "food_name": estimate.food_name,
+                "calories": estimate.calories,
+                "protein_grams": estimate.protein_grams,
+                "carbohydrate_grams": estimate.carbohydrate_grams,
+                "fat_grams": estimate.fat_grams,
+                "confidence": estimate.confidence,
+                "warnings": estimate.warnings,
+                "assumptions": estimate.assumptions,
+            },
+            "source_kind": refinement.source_kind,
+            "iteration": refinement.iteration,
+        }
+    }
+    if request.food_description is not None:
+        payload["food_description"] = request.food_description
+    return payload
 
 
 def map_gateway_response_to_public(gateway_response: object) -> FoodAnalysisPublicResponse:

@@ -15,6 +15,7 @@ from schemas import (
     SUPPORTED_IMAGE_MIME_TYPES,
     FoodAnalysisPublicRequest,
     map_gateway_response_to_public,
+    map_public_refinement_to_gateway,
 )
 from security import caller_is_authenticated
 
@@ -73,13 +74,20 @@ def _handle_text_analysis(req: func.HttpRequest, request_id: str) -> func.HttpRe
         return _error_response(
             400,
             "invalid_request",
-            "food_description is required and must be a 1-2000 character string.",
+            "Request body is not a valid food analysis request.",
             request_id,
         )
 
     client = _make_gateway_client(request_id)
     try:
-        gateway_response = client.analyze_food_text(public_request.food_description)
+        if public_request.refinement is not None:
+            gateway_response = client.analyze_food_refinement(
+                map_public_refinement_to_gateway(public_request)
+            )
+        else:
+            # Initial JSON requests are validated to always contain text.
+            assert public_request.food_description is not None
+            gateway_response = client.analyze_food_text(public_request.food_description)
     except GatewayClientError as exc:
         logger.warning("gateway request failed request_id=%s code=%s", request_id, exc.code)
         return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds)
@@ -99,6 +107,16 @@ def _handle_image_analysis(req: func.HttpRequest, request_id: str) -> func.HttpR
     except Exception:
         return _error_response(
             400, "invalid_request", "Request body must be valid multipart/form-data.", request_id
+        )
+
+    unknown_file_fields = set(files.keys()) - {"image"} if files else set()
+    unknown_form_fields = set(form.keys()) - {"food_description"} if form else set()
+    if unknown_file_fields or unknown_form_fields:
+        return _error_response(
+            400,
+            "invalid_request",
+            "Multipart requests support only the image and food_description fields.",
+            request_id,
         )
 
     image_file = files.get("image") if files else None

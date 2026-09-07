@@ -16,6 +16,56 @@ def test_analyze_food_text_returns_gateway_json():
     assert result == {"estimate": {"food_name": "apple"}}
 
 
+def test_analyze_food_refinement_sends_exact_allow_listed_payload_without_image():
+    import json as jsonlib
+
+    captured = {}
+    payload = {
+        "food_description": "rice bowl",
+        "refinement": {
+            "correction_text": "I ate half.",
+            "current_estimate": {
+                "food_name": "rice bowl",
+                "calories": 620.0,
+                "protein_grams": 24.0,
+                "carbohydrate_grams": 86.0,
+                "fat_grams": 18.0,
+                "confidence": 0.72,
+                "warnings": [],
+                "assumptions": [],
+            },
+            "source_kind": "text",
+            "iteration": 1,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/food-analysis"
+        captured["body"] = jsonlib.loads(request.content)
+        return httpx.Response(200, json={"estimate": {"food_name": "rice bowl"}})
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    result = client.analyze_food_refinement(payload)
+
+    assert captured["body"] == payload
+    assert "image" not in captured["body"]
+    assert result == {"estimate": {"food_name": "rice bowl"}}
+
+
+def test_analyze_food_refinement_uses_existing_error_normalization():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(504, json={"error": {"code": "provider_timeout"}})
+
+    client = GatewayClient(base_url="http://gateway.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GatewayClientError) as excinfo:
+        client.analyze_food_refinement({"refinement": {}})
+
+    assert excinfo.value.code == "gateway_timeout"
+    assert excinfo.value.http_status == 504
+
+
 def test_analyze_food_text_preserves_provider_timeout_as_504(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

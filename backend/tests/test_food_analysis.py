@@ -34,6 +34,7 @@ def _multipart_request(
     mime_type: str = "image/jpeg",
     food_description: str | None = None,
     include_image_field: bool = True,
+    extra_form_fields: dict[str, str] | None = None,
 ) -> func.HttpRequest:
     if image_bytes is None:
         image_bytes = _VALID_JPEG_BYTES
@@ -49,6 +50,11 @@ def _multipart_request(
         parts.append(
             f'--{_BOUNDARY}\r\nContent-Disposition: form-data; name="food_description"\r\n\r\n'
             f"{food_description}\r\n".encode()
+        )
+    for name, value in (extra_form_fields or {}).items():
+        parts.append(
+            f'--{_BOUNDARY}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{value}\r\n".encode()
         )
     parts.append(f"--{_BOUNDARY}--\r\n".encode())
     raw_body = b"".join(parts)
@@ -161,7 +167,321 @@ def test_food_analysis_success_maps_to_public_contract(monkeypatch):
     response = food_analysis(_request({"food_description": "an apple"}))
 
     assert response.status_code == 200
-    assert json.loads(response.get_body()) == gateway_result
+    expected = gateway_result.copy()
+    expected["estimate"] = {**gateway_result["estimate"], "assumptions": []}
+    assert json.loads(response.get_body()) == expected
+
+
+def _refinement_request(
+    *,
+    source_kind: str = "text",
+    food_description: str | None = "Eine Schüssel Reis",
+    iteration: object = 1,
+) -> dict:
+    payload = {
+        "refinement": {
+            "correction_text": "Ich habe nur die Hälfte gegessen.",
+            "current_estimate": {
+                "food_name": "Reisschüssel",
+                "calories": 620,
+                "protein_grams": 24,
+                "carbohydrate_grams": 86,
+                "fat_grams": 18,
+                "confidence": 0.72,
+                "warnings": ["Portion unsicher"],
+                "assumptions": ["Reis wurde als gekocht interpretiert"],
+            },
+            "source_kind": source_kind,
+            "iteration": iteration,
+        }
+    }
+    if food_description is not None:
+        payload["food_description"] = food_description
+    return payload
+
+
+def test_food_analysis_valid_text_refinement_sends_exact_gateway_payload(monkeypatch):
+    captured = {}
+    gateway_result = _gateway_result()
+
+    def fake_refine(self, payload):
+        captured["payload"] = payload
+        return gateway_result
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", fake_refine)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    request_payload = _refinement_request()
+    response = food_analysis(_request(request_payload))
+
+    assert response.status_code == 200
+    assert captured["payload"] == request_payload
+    assert "image" not in captured["payload"]
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "food_description"),
+    [("image", None), ("text_and_image", "Eine Schüssel Reis")],
+)
+def test_food_analysis_accepts_non_text_refinement_sources_without_image_bytes(
+    monkeypatch, source_kind, food_description
+):
+    captured = {}
+
+    def fake_refine(self, payload):
+        captured["payload"] = payload
+        return _gateway_result()
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", fake_refine)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(
+        _request(_refinement_request(source_kind=source_kind, food_description=food_description))
+    )
+
+    assert response.status_code == 200
+    assert "image" not in captured["payload"]
+
+
+@pytest.mark.parametrize("iteration", [1, 3])
+def test_food_analysis_accepts_refinement_iteration_bounds(monkeypatch, iteration):
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", lambda self, payload: _gateway_result())
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request(_refinement_request(iteration=iteration)))
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("iteration", [0, 4, True, 1.5])
+def test_food_analysis_rejects_invalid_refinement_iteration(iteration):
+    response = food_analysis(_request(_refinement_request(iteration=iteration)))
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize("correction_text", ["", "   ", "x" * 1001])
+def test_food_analysis_rejects_invalid_correction_text(correction_text):
+    payload = _refinement_request()
+    payload["refinement"]["correction_text"] = correction_text
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 400
+
+
+def test_food_analysis_accepts_maximum_correction_length(monkeypatch):
+    payload = _refinement_request()
+    payload["refinement"]["correction_text"] = "x" * 1000
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", lambda self, payload: _gateway_result())
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "missing_field", ["correction_text", "current_estimate", "source_kind", "iteration"]
+)
+def test_food_analysis_requires_every_refinement_field(missing_field):
+    payload = _refinement_request()
+    del payload["refinement"][missing_field]
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "food_name",
+        "calories",
+        "protein_grams",
+        "carbohydrate_grams",
+        "fat_grams",
+        "confidence",
+        "warnings",
+        "assumptions",
+    ],
+)
+def test_food_analysis_requires_complete_refinement_estimate(missing_field):
+    payload = _refinement_request()
+    del payload["refinement"]["current_estimate"][missing_field]
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("field", ["warnings", "assumptions"])
+@pytest.mark.parametrize("value", [["x" * 501], ["note"] * 21, [""]])
+def test_food_analysis_validates_refinement_notes_independently(field, value):
+    payload = _refinement_request()
+    payload["refinement"]["current_estimate"][field] = value
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("calories", -0.1),
+        ("calories", 10_000.1),
+        ("protein_grams", -0.1),
+        ("protein_grams", 1_000.1),
+        ("carbohydrate_grams", -0.1),
+        ("carbohydrate_grams", 1_000.1),
+        ("fat_grams", -0.1),
+        ("fat_grams", 1_000.1),
+        ("confidence", -0.1),
+        ("confidence", 1.1),
+    ],
+)
+def test_food_analysis_rejects_each_numeric_value_outside_bounds(field, value):
+    payload = _refinement_request()
+    payload["refinement"]["current_estimate"][field] = value
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("calories", 0),
+        ("calories", 10_000),
+        ("protein_grams", 0),
+        ("protein_grams", 1_000),
+        ("carbohydrate_grams", 0),
+        ("carbohydrate_grams", 1_000),
+        ("fat_grams", 0),
+        ("fat_grams", 1_000),
+        ("confidence", 0),
+        ("confidence", 1),
+    ],
+)
+def test_food_analysis_accepts_each_numeric_boundary(monkeypatch, field, value):
+    payload = _refinement_request()
+    payload["refinement"]["current_estimate"][field] = value
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", lambda self, payload: _gateway_result())
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("field", ["warnings", "assumptions"])
+def test_food_analysis_accepts_note_count_and_length_boundaries(monkeypatch, field):
+    payload = _refinement_request()
+    payload["refinement"]["current_estimate"][field] = ["x" * 500] * 20
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", lambda self, payload: _gateway_result())
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 200
+
+
+def test_food_analysis_rejects_invalid_refinement_source_kind():
+    response = food_analysis(_request(_refinement_request(source_kind="video")))
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "food_description"),
+    [("text", None), ("text_and_image", None), ("image", "Eine Schüssel Reis")],
+)
+def test_food_analysis_rejects_contradictory_refinement_source(source_kind, food_description):
+    response = food_analysis(
+        _request(_refinement_request(source_kind=source_kind, food_description=food_description))
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload.update({"unexpected": "value"}),
+        lambda payload: payload["refinement"].update({"unexpected": "value"}),
+        lambda payload: payload["refinement"]["current_estimate"].update({"internal": "value"}),
+        lambda payload: payload.update({"image": {"data_base64": "not-allowed"}}),
+    ],
+)
+def test_food_analysis_rejects_unknown_or_image_fields_in_json_refinement(mutate):
+    payload = _refinement_request()
+    mutate(payload)
+
+    response = food_analysis(_request(payload))
+
+    assert response.status_code == 400
+
+
+def test_food_analysis_rejects_multipart_refinement_without_gateway_call(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("gateway must not be called")
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_image", fail_if_called)
+
+    response = food_analysis(
+        _multipart_request(extra_form_fields={"refinement": json.dumps(_refinement_request()["refinement"])})
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.get_body())["error"]["code"] == "invalid_request"
+
+
+def test_food_analysis_refinement_requires_authentication_before_gateway_call(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("gateway must not be called")
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", fail_if_called)
+
+    response = food_analysis(_request(_refinement_request()))
+
+    assert response.status_code == 401
+
+
+def test_food_analysis_refinement_forwards_request_id(monkeypatch):
+    captured = {}
+
+    def fake_refine(self, payload):
+        captured["request_id"] = self._headers["X-Request-Id"]
+        return _gateway_result()
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", fake_refine)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(
+        _request(_refinement_request(), headers={"X-Request-Id": "refinement-request-123"})
+    )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-Id"] == "refinement-request-123"
+    assert captured["request_id"] == "refinement-request-123"
+
+
+def test_food_analysis_refinement_normalizes_gateway_error(monkeypatch):
+    def fake_refine(self, payload):
+        raise GatewayClientError("gateway_timeout", 504)
+
+    monkeypatch.setattr(GatewayClient, "analyze_food_refinement", fake_refine)
+    monkeypatch.setattr(GatewayClient, "close", lambda self: None)
+
+    response = food_analysis(_request(_refinement_request()))
+
+    assert response.status_code == 504
+    assert json.loads(response.get_body())["error"]["code"] == "gateway_timeout"
 
 
 def test_food_analysis_drops_unknown_gateway_fields(monkeypatch):
@@ -175,7 +495,9 @@ def test_food_analysis_drops_unknown_gateway_fields(monkeypatch):
             "carbohydrate_grams": 25.0,
             "fat_grams": 0.3,
             "confidence": 0.8,
-            "warnings": [],
+            "warnings": ["warning"],
+            "assumptions": ["assumption"],
+            "internal_score": 99,
         },
         "provider": "fake",
         "model": "internal-test-model",
@@ -202,7 +524,10 @@ def test_food_analysis_drops_unknown_gateway_fields(monkeypatch):
         "fat_grams",
         "confidence",
         "warnings",
+        "assumptions",
     }
+    assert body["estimate"]["warnings"] == ["warning"]
+    assert body["estimate"]["assumptions"] == ["assumption"]
     serialized = json.dumps(body).lower()
     for leaked_term in ("provider", "model", "usage", "debug", "trace_id", "token"):
         assert leaked_term not in serialized
@@ -297,6 +622,7 @@ def _gateway_result() -> dict:
             "fat_grams": 10.0,
             "confidence": 0.6,
             "warnings": ["Portion size estimated from image only."],
+            "assumptions": [],
         }
     }
 

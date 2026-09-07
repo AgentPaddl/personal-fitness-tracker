@@ -52,3 +52,51 @@ def test_backend_reaches_fake_provider_through_gateway_in_process(monkeypatch):
     assert "grilled chicken breast" in estimate["food_name"]
     assert 0 <= estimate["confidence"] <= 1
     assert "fake" not in str(result).lower()
+
+
+def test_backend_refinement_contract_reaches_gateway_without_image_bytes(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("GATEWAY_DEV_AUTH_BYPASS", "true")
+    monkeypatch.setenv("AI_PROVIDER", "fake")
+    get_settings.cache_clear()
+    get_provider.cache_clear()
+
+    gateway_app = create_app()
+    gateway_test_client = TestClient(gateway_app, base_url="http://gateway.local")
+    client = GatewayClient(client=gateway_test_client)
+    payload = {
+        "refinement": {
+            "correction_text": "I ate only half.",
+            "current_estimate": {
+                "food_name": "rice bowl",
+                "calories": 620.0,
+                "protein_grams": 24.0,
+                "carbohydrate_grams": 86.0,
+                "fat_grams": 18.0,
+                "confidence": 0.72,
+                "warnings": [],
+                "assumptions": [],
+            },
+            "source_kind": "image",
+            "iteration": 1,
+        }
+    }
+
+    try:
+        result = client.analyze_food_refinement(payload)
+    finally:
+        client.close()
+        get_settings.cache_clear()
+        get_provider.cache_clear()
+
+    assert "image" not in payload
+    assert set(result["estimate"]) == {
+        "food_name",
+        "calories",
+        "protein_grams",
+        "carbohydrate_grams",
+        "fat_grams",
+        "confidence",
+        "warnings",
+        "assumptions",
+    }
