@@ -75,6 +75,46 @@ private func sessionEstimate(name: String = "Reis", calories: Double = 620) -> F
 
 @MainActor
 final class FoodAnalysisReviewSessionTests: XCTestCase {
+    func testRefinementButtonEligibilityForEmptyValidTooLongAndInvalidDraft() {
+        let service = RefinementStubService(results: [])
+        let session = makeSession(service: service)
+
+        XCTAssertFalse(session.canRefine)
+
+        session.correctionText = "   "
+        XCTAssertFalse(session.canRefine)
+
+        session.correctionText = "Es waren 250 g Reis."
+        XCTAssertTrue(session.canRefine)
+
+        session.correctionText = String(
+            repeating: "x",
+            count: FoodAnalysisReviewSession.correctionCharacterLimit + 1
+        )
+        XCTAssertFalse(session.canRefine)
+
+        session.correctionText = "Gültiger Kontext"
+        session.currentDraft.calories = "ungültig"
+        XCTAssertFalse(session.canRefine)
+    }
+
+    func testRefinementAndConfirmationAreDisabledWhileRequestIsInFlight() async {
+        let service = GatedRefinementService()
+        let session = makeSession(service: service)
+        session.correctionText = "Nur die Hälfte"
+
+        let task = Task { await session.refine() }
+        await waitUntil { session.isRefining }
+
+        XCTAssertFalse(session.canRefine)
+        XCTAssertFalse(session.canConfirmCurrentDraft)
+
+        service.succeed(with: sessionEstimate(calories: 310))
+        await task.value
+
+        XCTAssertTrue(session.canConfirmCurrentDraft)
+    }
+
     func testStableSessionIDAndThreeSuccessfulRoundsThenFourthIsBlocked() async {
         let results = (1...3).map {
             Result<FoodAnalysisResponseDTO.Estimate, Error>.success(
@@ -98,6 +138,9 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         XCTAssertEqual(service.requests.count, 3)
         XCTAssertEqual(session.successfulRefinementCount, 3)
         XCTAssertNil(session.nextIteration)
+        XCTAssertTrue(session.isRefinementLimitReached)
+        XCTAssertFalse(session.canRefine)
+        XCTAssertTrue(session.canConfirmCurrentDraft)
         XCTAssertNotNil(session.refinementErrorMessage)
     }
 
@@ -146,7 +189,16 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
 
     func testSuccessUpdatesCurrentEstimateOnlyAndPreservesSessionIdentity() async {
         let initial = sessionEstimate()
-        let refined = sessionEstimate(name: "Halbe Portion", calories: 310)
+        let refined = FoodAnalysisResponseDTO.Estimate(
+            foodName: "Halbe Portion",
+            calories: 310,
+            proteinGrams: 12.5,
+            carbohydrateGrams: 43.25,
+            fatGrams: 9.75,
+            confidence: 0.94,
+            warnings: ["Neue Warnung"],
+            assumptions: ["Neue Annahme"]
+        )
         let service = RefinementStubService(results: [.success(refined)])
         let session = makeSession(service: service, initialEstimate: initial)
         let id = session.id
@@ -159,9 +211,14 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         XCTAssertEqual(session.currentEstimate, refined)
         XCTAssertEqual(session.currentDraft.id, id)
         XCTAssertEqual(session.currentDraft.name, "Halbe Portion")
+        XCTAssertEqual(session.currentDraft.calories, "310")
+        XCTAssertEqual(session.currentDraft.protein, "12.5")
+        XCTAssertEqual(session.currentDraft.carbs, "43.2")
+        XCTAssertEqual(session.currentDraft.fat, "9.8")
         XCTAssertEqual(session.assumptions, refined.assumptions)
         XCTAssertEqual(session.warnings, refined.warnings)
         XCTAssertEqual(session.confidence, refined.confidence)
+        XCTAssertEqual(session.correctionText, "")
     }
 
     func testFailurePreservesEstimateDraftAndCorrection() async {
@@ -246,6 +303,77 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         XCTAssertEqual(first, .saved)
         XCTAssertEqual(second, .skipped)
         XCTAssertEqual(insertions, 1)
+    }
+
+    func testConfirmationAfterRefinementUsesFinalVisibleEstimateExactlyOnce() async throws {
+        let refined = FoodAnalysisResponseDTO.Estimate(
+            foodName: "250 g Reis",
+            calories: 325,
+            proteinGrams: 6.75,
+            carbohydrateGrams: 70.5,
+            fatGrams: 1.25,
+            confidence: 0.91,
+            warnings: [],
+            assumptions: ["gekochtes Gewicht"]
+        )
+        let service = RefinementStubService(results: [.success(refined)])
+        let session = makeSession(service: service)
+        session.correctionText = "Es waren 250 g Reis"
+        await session.refine()
+        let finalInput = try XCTUnwrap(session.currentDraft.validated())
+        var persistedInputs: [ValidatedFoodEntryInput] = []
+
+        let first = session.persistenceCoordinator.save(
+            insert: { persistedInputs.append(finalInput) },
+            persist: {},
+            rollback: {}
+        )
+        let second = session.persistenceCoordinator.save(
+            insert: { persistedInputs.append(finalInput) },
+            persist: {},
+            rollback: {}
+        )
+
+        XCTAssertEqual(first, .saved)
+        XCTAssertEqual(second, .skipped)
+        XCTAssertEqual(persistedInputs, [ValidatedFoodEntryInput(
+            name: "250 g Reis",
+            calories: 325,
+            proteinGrams: 6.8,
+            carbsGrams: 70.5,
+            fatGrams: 1.2
+        )])
+    }
+
+    func testClosingWithoutConfirmationDisablesActionsAndDoesNotPersist() {
+        let service = RefinementStubService(results: [])
+        let session = makeSession(service: service)
+
+        session.close()
+
+        XCTAssertFalse(session.canConfirmCurrentDraft)
+        XCTAssertFalse(session.canRefine)
+        XCTAssertFalse(session.persistenceCoordinator.isSaving)
+        XCTAssertFalse(session.persistenceCoordinator.hasCommitted)
+    }
+
+    func testManualEditingWithoutRefinementStillProducesConfirmableValues() throws {
+        let service = RefinementStubService(results: [])
+        let session = makeSession(service: service)
+        session.currentDraft.name = "Manuell angepasst"
+        session.currentDraft.calories = "450"
+        session.currentDraft.protein = "20,5"
+        session.currentDraft.carbs = "50"
+        session.currentDraft.fat = "12,25"
+
+        XCTAssertTrue(session.canConfirmCurrentDraft)
+        let input = try XCTUnwrap(session.currentDraft.validated())
+        XCTAssertEqual(input.name, "Manuell angepasst")
+        XCTAssertEqual(input.calories, 450)
+        XCTAssertEqual(input.proteinGrams, 20.5)
+        XCTAssertEqual(input.carbsGrams, 50)
+        XCTAssertEqual(input.fatGrams, 12.25)
+        XCTAssertTrue(service.requests.isEmpty)
     }
 
     private func makeSession(

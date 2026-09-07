@@ -6,6 +6,7 @@ import Foundation
 @MainActor
 public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
     public static let maximumSuccessfulRefinements = 3
+    public static let correctionCharacterLimit = 1_000
 
     public let id: UUID
     public let originalDescription: String?
@@ -45,6 +46,23 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
     public var assumptions: [String] { currentEstimate.assumptions }
     public var warnings: [String] { currentEstimate.warnings }
     public var confidence: Double { currentEstimate.confidence }
+    public var isRefinementLimitReached: Bool {
+        successfulRefinementCount >= Self.maximumSuccessfulRefinements
+    }
+    public var isCorrectionValid: Bool {
+        let trimmedCorrection = correctionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedCorrection.isEmpty && correctionText.count <= Self.correctionCharacterLimit
+    }
+    public var canRefine: Bool {
+        !isClosed
+            && !isRefining
+            && !isRefinementLimitReached
+            && isCorrectionValid
+            && currentDraft.refinementCurrentEstimate() != nil
+    }
+    public var canConfirmCurrentDraft: Bool {
+        !isClosed && !isRefining && currentDraft.validated() != nil
+    }
     public var nextIteration: Int? {
         guard successfulRefinementCount < Self.maximumSuccessfulRefinements else { return nil }
         return successfulRefinementCount + 1
@@ -60,7 +78,7 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
         }
 
         let trimmedCorrection = correctionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedCorrection.isEmpty, trimmedCorrection.count <= 1000 else {
+        guard !trimmedCorrection.isEmpty, correctionText.count <= Self.correctionCharacterLimit else {
             refinementErrorMessage = "Die Korrektur muss zwischen 1 und 1000 Zeichen lang sein."
             return
         }

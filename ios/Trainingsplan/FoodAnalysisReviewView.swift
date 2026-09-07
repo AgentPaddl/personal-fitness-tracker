@@ -36,37 +36,120 @@ struct FoodAnalysisReviewView: View {
 
                 Section("Ergebnis prüfen") {
                     TextField("Bezeichnung", text: $session.currentDraft.name)
-                        .disabled(isSaving)
+                        .disabled(isSaving || session.isRefining)
 
                     TextField("Kalorien", text: $session.currentDraft.calories)
                         .keyboardType(.numberPad)
-                        .disabled(isSaving)
+                        .disabled(isSaving || session.isRefining)
 
                     TextField("Protein in g", text: $session.currentDraft.protein)
                         .keyboardType(.decimalPad)
-                        .disabled(isSaving)
+                        .disabled(isSaving || session.isRefining)
 
                     TextField("Kohlenhydrate in g", text: $session.currentDraft.carbs)
                         .keyboardType(.decimalPad)
-                        .disabled(isSaving)
+                        .disabled(isSaving || session.isRefining)
 
                     TextField("Fett in g", text: $session.currentDraft.fat)
                         .keyboardType(.decimalPad)
-                        .disabled(isSaving)
+                        .disabled(isSaving || session.isRefining)
                 }
 
-                if draft.confidence < 1 || !draft.warnings.isEmpty {
-                    Section("Hinweise zur Schätzung") {
-                        Text("Konfidenz: \(Int((draft.confidence * 100).rounded())) %")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Section("Konfidenz") {
+                    Text("\(Int((session.confidence * 100).rounded())) %")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-                        ForEach(draft.warnings, id: \.self) { warning in
+                if !session.assumptions.isEmpty {
+                    Section("Annahmen") {
+                        ForEach(session.assumptions, id: \.self) { assumption in
+                            Text(assumption)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if !session.warnings.isEmpty {
+                    Section("Hinweise") {
+                        ForEach(session.warnings, id: \.self) { warning in
                             Text(warning)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+
+                Section("Schätzung verbessern") {
+                    Text("Ergänze Kontext, um die aktuell sichtbare Schätzung neu berechnen zu lassen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ZStack(alignment: .topLeading) {
+                        if session.correctionText.isEmpty {
+                            Text("Zum Beispiel: Es waren 250 g Reis oder ich habe nur die Hälfte gegessen.")
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 8)
+                                .allowsHitTesting(false)
+                        }
+
+                        TextEditor(text: $session.correctionText)
+                            .frame(minHeight: 90)
+                            .scrollContentBackground(.hidden)
+                            .disabled(isSaving || session.isRefining || session.isRefinementLimitReached)
+                            .accessibilityLabel("Zusätzlicher Kontext")
+                            .accessibilityHint("Beschreibe Mengen, Zutaten oder wie viel du gegessen hast.")
+                    }
+
+                    HStack {
+                        Text("\(session.successfulRefinementCount) von \(FoodAnalysisReviewSession.maximumSuccessfulRefinements) Überarbeitungen verwendet")
+                        Spacer()
+                        Text("\(session.correctionText.count)/\(FoodAnalysisReviewSession.correctionCharacterLimit)")
+                            .foregroundStyle(
+                                session.correctionText.count > FoodAnalysisReviewSession.correctionCharacterLimit
+                                    ? Color.red
+                                    : Color.secondary
+                            )
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    if session.correctionText.count > FoodAnalysisReviewSession.correctionCharacterLimit {
+                        Text("Bitte kürze den zusätzlichen Kontext auf höchstens 1000 Zeichen.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    if session.isRefinementLimitReached {
+                        Text("Die maximal drei Überarbeitungen wurden verwendet. Du kannst die Werte weiterhin manuell bearbeiten und übernehmen.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let refinementErrorMessage = session.refinementErrorMessage {
+                        Text(refinementErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    Button {
+                        Task {
+                            await session.refine()
+                        }
+                    } label: {
+                        if session.isRefining {
+                            HStack {
+                                ProgressView()
+                                Text("Wird neu berechnet …")
+                            }
+                        } else {
+                            Text("Neu berechnen")
+                        }
+                    }
+                    .disabled(!session.canRefine || isSaving)
+                    .accessibilityLabel("Schätzung neu berechnen")
                 }
 
                 if let saveErrorMessage {
@@ -95,7 +178,7 @@ struct FoodAnalysisReviewView: View {
                         Button("Übernehmen") {
                             save()
                         }
-                        .disabled(draft.validated() == nil)
+                        .disabled(!session.canConfirmCurrentDraft)
                     }
                 }
             }
