@@ -17,6 +17,7 @@ struct ExerciseBackup: Codable {
     let name: String
     let createdAt: Date
     let isArchived: Bool
+    var nextWeightIncreaseMarkedAtEpochSeconds: Double? = nil
 }
 
 struct WorkoutSessionBackup: Codable {

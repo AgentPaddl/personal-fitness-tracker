@@ -48,7 +48,8 @@ enum BackupService {
                 id: exercise.id,
                 name: exercise.name,
                 createdAt: exercise.createdAt,
-                isArchived: exercise.isArchived
+                isArchived: exercise.isArchived,
+                nextWeightIncreaseMarkedAtEpochSeconds: exercise.nextWeightIncreaseMarkedAt?.timeIntervalSince1970
             )
         }
 
@@ -261,7 +262,10 @@ enum BackupService {
                 id: exerciseBackup.id,
                 name: exerciseBackup.name,
                 createdAt: exerciseBackup.createdAt,
-                isArchived: exerciseBackup.isArchived
+                isArchived: exerciseBackup.isArchived,
+                nextWeightIncreaseMarkedAt: exerciseBackup.nextWeightIncreaseMarkedAtEpochSeconds.map {
+                    Date(timeIntervalSince1970: $0)
+                }
             )
 
             modelContext.insert(exercise)

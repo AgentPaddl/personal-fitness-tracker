@@ -33,8 +33,15 @@ struct ExercisePickerView: View {
                             Button {
                                 selectExercise(exercise)
                             } label: {
-                                Text(exercise.name)
-                                    .foregroundStyle(.primary)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(exercise.name)
+                                        .foregroundStyle(.primary)
+                                    if exercise.nextWeightIncreaseMarkedAt != nil {
+                                        Label("Mehr Gewicht", systemImage: "arrow.up.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
                             }
                         }
                     }

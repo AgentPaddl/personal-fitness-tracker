@@ -23,6 +23,9 @@ struct WorkoutSessionView: View {
     @State private var sessionPendingDiscard: WorkoutSession?
     @State private var discardError: String?
     @State private var deletionService = WorkoutSessionDeletionService()
+    @State private var weightIncreaseMarker = WeightIncreaseMarker()
+    @State private var isSavingMarker = false
+    @State private var markerSaveError: String?
     
     var body: some View {
         Form {
@@ -56,6 +59,21 @@ struct WorkoutSessionView: View {
                                         Text(exercise.name)
                                             .fontWeight(.semibold)
                                     }
+                                    Toggle(isOn: Binding(
+                                        get: { exercise.nextWeightIncreaseMarkedAt != nil },
+                                        set: { setWeightIncreaseMarker($0, for: exercise) }
+                                    )) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            if exercise.nextWeightIncreaseMarkedAt != nil {
+                                                Image(systemName: "arrow.up.circle.fill")
+                                                    .foregroundStyle(Color.accentColor)
+                                                    .accessibilityHidden(true)
+                                            }
+                                            Text("Beim nächsten Mal mehr Gewicht")
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    .disabled(isSavingMarker)
                                 } else {
                                     Text("Unbekannte Übung")
                                         .fontWeight(.semibold)
@@ -145,6 +163,40 @@ struct WorkoutSessionView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(discardError ?? "Bitte versuche es erneut.")
+        }
+        .alert(
+            "Erinnerung konnte nicht gespeichert werden",
+            isPresented: Binding(
+                get: { markerSaveError != nil },
+                set: { if !$0 { markerSaveError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(markerSaveError ?? "Bitte versuche es erneut.")
+        }
+    }
+
+    private func setWeightIncreaseMarker(_ isActive: Bool, for exercise: Exercise) {
+        guard !isSavingMarker else { return }
+        isSavingMarker = true
+        defer { isSavingMarker = false }
+
+        do {
+            try weightIncreaseMarker.setActive(
+                isActive,
+                currentValue: exercise.nextWeightIncreaseMarkedAt,
+                persist: { value in
+                    try ExerciseWeightIncreaseMarkerPersistence.save(
+                        value,
+                        for: exercise,
+                        in: modelContext
+                    )
+                },
+                publish: { exercise.nextWeightIncreaseMarkedAt = $0 }
+            )
+        } catch {
+            markerSaveError = "Die Erinnerung wurde nicht geändert. Bitte versuche es erneut."
         }
     }
     
