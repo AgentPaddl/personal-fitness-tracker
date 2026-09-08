@@ -37,6 +37,21 @@ struct TodayView: View {
                             .font(.title3)
                             .fontWeight(.semibold)
 
+                        if WeeklyActivityAchievement.hasEarnedStar(
+                            weeklyCompletedActivityCount: weeklyActivityCount,
+                            activitiesPerWeekGoal: weeklyActivityGoal
+                        ) {
+                            Label {
+                                Text("Wochenziel erreicht")
+                            } icon: {
+                                Image(systemName: "star.fill")
+                                    .foregroundStyle(Color.yellow)
+                            }
+                            .font(.subheadline)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Wochenziel erreicht. Ein Stern verdient.")
+                        }
+
                         Text("Aktivität: ca. \(weeklyActivityCalories) kcal")
                             .foregroundStyle(.secondary)
 

@@ -127,6 +127,90 @@ final class CompletedActivityProjectionTests: XCTestCase {
         XCTAssertEqual(items.map { $0.id.value }, ["newest", "middle", "oldest"])
     }
 
+    func testWeeklyStarUsesCombinedSummaryAndIgnoresIncompleteWorkout() {
+        let reference = date(2026, 9, 2, 12)
+        let activities = [freeActivity(id: "activity", date: reference)]
+        let completed = workout(id: "completed", startedAt: reference, endedAt: reference)
+        let incomplete = workout(id: "incomplete", startedAt: reference, endedAt: nil, isCompleted: false)
+
+        let withoutIncomplete = weeklyTotals(activities: activities, workouts: [completed], reference: reference)
+        let withIncomplete = weeklyTotals(activities: activities, workouts: [completed, incomplete], reference: reference)
+        XCTAssertEqual(withoutIncomplete, withIncomplete)
+        XCTAssertEqual(withIncomplete.count, 2)
+        XCTAssertFalse(WeeklyActivityAchievement.hasEarnedStar(
+            weeklyCompletedActivityCount: withIncomplete.count,
+            activitiesPerWeekGoal: 3
+        ))
+
+        let anotherCompleted = workout(id: "another", startedAt: reference, endedAt: reference)
+        let totals = weeklyTotals(activities: activities, workouts: [completed, incomplete, anotherCompleted], reference: reference)
+        XCTAssertEqual(totals.count, 3)
+        XCTAssertTrue(WeeklyActivityAchievement.hasEarnedStar(
+            weeklyCompletedActivityCount: totals.count,
+            activitiesPerWeekGoal: 3
+        ))
+    }
+
+    func testDeletingEitherActivityKindRemovesStarThroughSummaryRecalculation() {
+        let reference = date(2026, 9, 2, 12)
+        let activities = [freeActivity(id: "activity", date: reference)]
+        let workouts = [
+            workout(id: "first", startedAt: reference, endedAt: reference),
+            workout(id: "second", startedAt: reference, endedAt: reference)
+        ]
+        let before = weeklyTotals(activities: activities, workouts: workouts, reference: reference)
+        XCTAssertEqual(before.count, 3)
+        XCTAssertTrue(WeeklyActivityAchievement.hasEarnedStar(
+            weeklyCompletedActivityCount: before.count,
+            activitiesPerWeekGoal: 3
+        ))
+
+        let afterFreeActivityDeletion = weeklyTotals(activities: [], workouts: workouts, reference: reference)
+        let afterWorkoutDeletion = weeklyTotals(activities: activities, workouts: Array(workouts.dropLast()), reference: reference)
+        for totals in [afterFreeActivityDeletion, afterWorkoutDeletion] {
+            XCTAssertEqual(totals.count, 2)
+            XCTAssertFalse(WeeklyActivityAchievement.hasEarnedStar(
+                weeklyCompletedActivityCount: totals.count,
+                activitiesPerWeekGoal: 3
+            ))
+        }
+    }
+
+    func testStarUsesOnlyLocalMondayThroughSundayAndDoesNotCarryIntoNextWeek() {
+        let activities = [
+            freeActivity(id: "previous-sunday", date: date(2026, 8, 30, 23, 59)),
+            freeActivity(id: "monday", date: date(2026, 8, 31, 0)),
+            freeActivity(id: "sunday", date: date(2026, 9, 6, 23, 59)),
+            freeActivity(id: "next-monday", date: date(2026, 9, 7, 0))
+        ]
+        let thisWeek = weeklyTotals(activities: activities, workouts: [], reference: date(2026, 9, 2, 12))
+        let nextWeek = weeklyTotals(activities: activities, workouts: [], reference: date(2026, 9, 7, 0))
+        XCTAssertEqual(thisWeek.count, 2)
+        XCTAssertEqual(nextWeek.count, 1)
+        XCTAssertTrue(WeeklyActivityAchievement.hasEarnedStar(
+            weeklyCompletedActivityCount: thisWeek.count,
+            activitiesPerWeekGoal: 2
+        ))
+        XCTAssertFalse(WeeklyActivityAchievement.hasEarnedStar(
+            weeklyCompletedActivityCount: nextWeek.count,
+            activitiesPerWeekGoal: 2
+        ))
+    }
+
+    private func weeklyTotals(
+        activities: [CompletedFreeActivity<String>],
+        workouts: [WorkoutSessionActivity<String>],
+        reference: Date
+    ) -> CompletedActivityTotals {
+        let items = CompletedActivityProjection.project(activities: activities, workoutSessions: workouts)
+        let weeklyItems = CompletedActivityProjection.items(
+            items,
+            inWeekContaining: reference,
+            calendar: CompletedActivityProjection.mondayThroughSundayCalendar(timeZone: timeZone)
+        )
+        return CompletedActivityProjection.totals(for: weeklyItems)
+    }
+
     private func freeActivity(
         id: String,
         date: Date,
