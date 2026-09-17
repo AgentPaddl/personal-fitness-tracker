@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from decimal import Decimal
 
 import pytest
 
 from app.errors import ProviderOutputInvalidError, ProviderTimeoutError, ProviderUnavailableError
-from app.providers.base import StructuredGenerationRequest, StructuredGenerationResult, StructuredGenerationProvider
+from app.providers.base import GenerationMetadata, TokenUsage, StructuredGenerationRequest, StructuredGenerationResult, StructuredGenerationProvider
 from app.schemas.food_analysis import FoodAnalysisRequest, ImageAttachment
 from app.use_cases.food_analysis import FoodAnalysisUseCase
 from tests.image_fixtures import make_valid_jpeg_bytes, make_valid_png_bytes
@@ -81,6 +82,23 @@ def test_execute_rejects_invalid_provider_output():
 
     with pytest.raises(ProviderOutputInvalidError):
         asyncio.run(use_case.execute(_food_request()))
+
+
+def test_business_validation_keeps_internal_metadata_but_not_sensitive_error_context():
+    metadata = GenerationMetadata(
+        "azure_openai", "deployment-test", "model-test", "request-test", 1.0, "success",
+        TokenUsage(10, 2), Decimal("0.001"), "prices-v1",
+    )
+
+    class Provider(StructuredGenerationProvider):
+        async def generate(self, request):
+            return StructuredGenerationResult(data={**_VALID_DATA, "calories": -1}, metadata=metadata)
+
+    use_case = FoodAnalysisUseCase(Provider(), 1, "purpose-test")
+    with pytest.raises(ProviderOutputInvalidError) as caught:
+        asyncio.run(use_case.execute(_food_request()))
+    assert caught.value.metadata is metadata
+    assert caught.value.__suppress_context__ is True
 
 
 @pytest.mark.parametrize("field", ["warnings", "assumptions"])

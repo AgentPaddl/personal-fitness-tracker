@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.providers.pricing import PriceTable
 
 #: Providers implemented today. "copilot" is the real GitHub Copilot SDK
 #: adapter (see app/providers/github_copilot.py); "fake" is deterministic
 #: and credential-free.
-SUPPORTED_PROVIDERS = frozenset({"fake", "copilot"})
+SUPPORTED_PROVIDERS = frozenset({"fake", "copilot", "azure_openai"})
 
 #: Fail-closed by default: only "development" may ever enable the dev auth
 #: bypass. "test" is for the automated test suite; "production" is the
@@ -47,6 +49,11 @@ class Settings(BaseSettings):
     ai_provider: str = Field(default="fake", alias="AI_PROVIDER")
     # Default to production-recommended 90s in production; 10s for fast local tests/dev
     ai_provider_timeout_seconds: float = Field(default=10.0, alias="AI_PROVIDER_TIMEOUT_SECONDS")
+    ai_provider_max_output_tokens: int = Field(default=2000, alias="AI_PROVIDER_MAX_OUTPUT_TOKENS")
+    azure_openai_endpoint: str = Field(default="", alias="AZURE_OPENAI_ENDPOINT")
+    azure_openai_api_key: SecretStr | None = Field(default=None, alias="AZURE_OPENAI_API_KEY", repr=False)
+    azure_openai_model_routes_json: str = Field(default="", alias="AZURE_OPENAI_MODEL_ROUTES_JSON")
+    azure_openai_prices_json: str = Field(default="", alias="AZURE_OPENAI_PRICES_JSON")
 
     # Server-side, opaque model-routing key for the food-text generation
     # purpose. Never exposed through the public API; changing it must not
@@ -140,6 +147,21 @@ class Settings(BaseSettings):
                         "A model is never silently substituted."
                     )
 
+        if self.ai_provider == "azure_openai":
+            from app.providers.openai_api import validate_endpoint
+
+            if self.app_env == "production":
+                raise ValueError("AI_PROVIDER=azure_openai is local-only until the production migration is approved.")
+            validate_endpoint(self.azure_openai_endpoint)
+            if self.azure_openai_api_key is None or not self.azure_openai_api_key.get_secret_value().strip():
+                raise ValueError("AZURE_OPENAI_API_KEY is required for the Azure adapter.")
+            routes = self.azure_openai_model_routes()
+            if any(purpose not in routes for purpose in (self.food_text_model_purpose, self.food_image_model_purpose)):
+                raise ValueError("AZURE_OPENAI_MODEL_ROUTES_JSON must map every configured purpose.")
+            if not 1 <= self.ai_provider_max_output_tokens <= 32768:
+                raise ValueError("AI_PROVIDER_MAX_OUTPUT_TOKENS must be between 1 and 32768.")
+            self.azure_openai_prices()
+
         if not (1 <= self.ai_provider_max_concurrency <= 20):
             raise ValueError("AI_PROVIDER_MAX_CONCURRENCY must be between 1 and 20.")
 
@@ -179,6 +201,40 @@ class Settings(BaseSettings):
                 "seconds when APP_ENV=production to preserve the timeout hierarchy: "
                 "provider < backend (100s) < iOS (110s)."
             )
+
+    @staticmethod
+    def _azure_json(raw: str) -> dict:
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Duplicate configuration key.")
+                result[key] = value
+            return result
+
+        try:
+            parsed = json.loads(raw, object_pairs_hook=unique_object)
+            if not isinstance(parsed, dict):
+                raise ValueError()
+            return parsed
+        except (ValueError, TypeError):
+            raise ValueError("Invalid Azure JSON configuration.") from None
+
+    def azure_openai_model_routes(self) -> dict[str, str]:
+        from app.providers.openai_api import _identifier
+
+        routes = self._azure_json(self.azure_openai_model_routes_json)
+        if not routes or any(not _identifier(key) or not _identifier(value) for key, value in routes.items()):
+            raise ValueError("AZURE_OPENAI_MODEL_ROUTES_JSON requires explicit purpose/deployment identifiers.")
+        return routes
+
+    def azure_openai_prices(self) -> PriceTable | None:
+        if not self.azure_openai_prices_json.strip():
+            return None
+        try:
+            return PriceTable.model_validate(self._azure_json(self.azure_openai_prices_json))
+        except ValueError:
+            raise ValueError("Invalid AZURE_OPENAI_PRICES_JSON; expected a versioned USD deployment price table.") from None
 
     def copilot_model_routes(self) -> dict[str, str]:
         """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.

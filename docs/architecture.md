@@ -2,7 +2,7 @@
 
 ## Purpose and current status
 
-This repository contains a private, non-commercial personal fitness and nutrition tracker. The current product is an iOS app, an Azure Functions backend, and a Personal AI Gateway that together implement a working end-to-end food-analysis feature (text and image) against the real GitHub Copilot SDK. **Production deployment has been performed** (Phase 10) and the full stack — iPhone → Easy Auth → Azure Function backend → Azure Container Apps gateway → GitHub Copilot SDK — is live and verified end-to-end via a real device (see `docs/operations-runbook.md` for deployment/rotation/monitoring procedures and the current caveats on durable iOS distribution configuration).
+This repository contains a private, non-commercial personal fitness and nutrition tracker. The implemented product is an iOS app, an Azure Functions backend, and a Personal AI Gateway using the GitHub Copilot SDK. Phase 10 records a production deployment and real-device verification; this is historical deployment evidence, not a fresh runtime verification. The paid API decision below governs preparation for external users. See the [operations runbook](operations-runbook.md) for the existing deployment and its operational caveats.
 
 ## Current monorepo layout
 
@@ -10,22 +10,512 @@ This repository contains a private, non-commercial personal fitness and nutritio
 | --- | --- | --- |
 | `ios/` | SwiftUI client and local SwiftData persistence | Working application, incl. text/photo/camera food analysis |
 | `backend/` | Azure Functions Python 3.13 application API | Working `GET /api/health`, `GET /api/readiness`, `POST /api/food-analysis` (text + image) |
-| `ai-gateway/` | Provider-independent server-side AI boundary | Working FastAPI app with the real `GitHubCopilotProvider`; not yet deployed to Azure |
+| `ai-gateway/` | Provider-independent server-side AI boundary | Working FastAPI app with `GitHubCopilotProvider`; deployment recorded in Phase 10 |
 | `docs/` | Architecture and migration documentation | Active documentation |
 | `.github/` | Repository-wide agent/Copilot guidance | Active guidance |
 
 The iOS application owns the user experience and local records for workouts, exercise performance, activities, weight, goals, nutrition entries/presets, and backup-related flows. SwiftData is the local persistence layer. Existing behavior and stored user data are compatibility constraints.
 
-The backend currently contains a minimal Azure Functions app whose health function returns HTTP 200 and `{"status": "ok"}`. It does not yet provide the target fitness/nutrition domain API, authentication, or AI orchestration. Its current anonymous authorization setting must not be copied to future sensitive endpoints.
+The backend implements health, readiness, and text/image/refinement food analysis. Production authentication depends on Entra Easy Auth ahead of the Function and on application checks of injected identity headers. A Function's anonymous authorization level is not evidence that this platform boundary can be bypassed, nor is the presence of an identity header a sufficient per-user authorization policy.
 
-## Provider decision (final)
+## Previous provider decision (implemented baseline)
 
 - **Production provider:** the official GitHub Copilot SDK.
 - **Runtime:** the Copilot CLI running in headless/server mode, invoked internally by the gateway's Copilot adapter.
 - `trsdn/github_copilot_openai_api_wrapper` is **not** part of the production architecture. It was an early exploration option only and must not be reintroduced without a new explicit decision recorded here.
 - AI provider access remains behind the gateway's provider-neutral `StructuredGenerationProvider` abstraction, so the domain backend and iOS client never depend on Copilot-specific transport details.
 
-## Target V2 architecture
+## Paid API migration decision (2026-09-17)
+
+Status: the original decision authorized preparation only. The separately
+authorized first local adapter package is recorded below; contract acceptance,
+resource creation, deployment, and paid model calls remain unauthorized.
+This decision supersedes the previous Copilot target for the future external-user
+path, not the description of the currently implemented adapter above.
+
+- Keep the gateway and public application API during the provider replacement.
+- Prefer EU processing; suitable international providers remain eligible. Assess
+  quality, latency, cost, and privacy administration together, without claiming
+  measured quality or latency before a benchmark.
+- Block external AI use until independent funding, privacy foundations, verified
+  identities, and enforceable usage limits are in place.
+- Never route external users to Copilot, including old endpoints and rollback.
+  Rollback must use a known API-only artifact or disable AI.
+- Preserve local records and existing public request/response contracts. Targeted
+  meal memory may disclose selected relevant meals, never a complete user record.
+
+### First local package implemented (2026-09-17)
+
+The local Azure v1 adapter now supports text, inline images and strict JSON output
+behind `StructuredGenerationProvider`, with configurable deployment routes/output
+caps, zero SDK retries, no repairs/fallback, and internal usage/elapsed-time/model
+metadata plus versioned Decimal price estimates. Unknown usage or unmatched
+prices remain unknown. Original JSON Schema and authoritative use-case validation
+both apply; public schemas and iOS/persistence are unchanged. See
+[local configuration and limits](../ai-gateway/README.md#local-azure-api-adapter-2026-09-17).
+
+`AI_PROVIDER=azure_openai` is explicitly local-only and rejected in production.
+The adapter also checks the process environment on every `generate()`: direct
+or reused adapters cannot dispatch unless `APP_ENV` is explicitly `development`
+or `test`. Production and missing/unknown environments fail closed independently
+of readiness; HTTP and direct-call mock tests assert zero provider calls.
+Its readiness remains false, without a provider call, until a later package can
+verify deployed capabilities. Copilot code, dependencies and the existing
+production artifact path are intentionally retained, with no fallback from the
+new adapter. Distributed budgets/idempotency, input-token admission and durable
+accounting are not implemented by this package. No paid benchmark was run.
+
+Validation uses the actual pinned SDK against mock HTTP transport, including
+text/JPEG/PNG/refinement, strict/original schema checks, failures, unknown usage,
+pricing, no retries, confidential log markers and gateway/backend public mapping.
+The existing Gateway and Backend regression suites are also required. No cloud,
+contract, secret, device-data, deployment, iOS or build-number change accompanies
+this package.
+
+### Rechecked implementation baseline (before local package)
+
+Repository: `personal-fitness-tracker`, branch `main`, HEAD
+`7f1439f01e182f81598098751b6d24cf76083932`; clean before this documentation change.
+Repository and component instructions were reread. Findings below are from source
+inspection on 2026-09-17, not a new cloud inventory, deployment attestation, test
+run, or provider benchmark. Older phase descriptions below are historical.
+
+| Controlling source | Verified behavior and migration consequence |
+| --- | --- |
+| [Provider contract](../ai-gateway/app/providers/base.py) | Generic messages, purpose, schema, attachments, and timeout; result contains only `data`. No usage, output-token limit, or cost metadata yet. Preserve domain independence. |
+| [Food analysis use case](../ai-gateway/app/use_cases/food_analysis.py) | Builds untrusted text/image/refinement input, calls the provider once explicitly under `asyncio.wait_for`, then authoritatively validates `FoodAnalysisEstimate`. Refinement has no photo reinspection. No saved-meal context is implemented. |
+| [Gateway schema](../ai-gateway/app/schemas/food_analysis.py) and [public schema/mapping](../backend/schemas.py) | Bounded estimates, strict image decoding/content checks, JPEG/PNG and 3 MiB limit. Public requests reject extra fields; response mapping reconstructs only `estimate`. Defaulted lists and numeric/string bounds are not automatically a provider-compatible strict schema. |
+| [Copilot adapter](../ai-gateway/app/providers/github_copilot.py) | Long-lived client, new session per request, only the terminal structured-result tool exposed, explicit model routing. No application retries or usage accounting; session disconnect is not separately time-bounded. Internal SDK/CLI dispatch count was not audited. |
+| [Settings](../ai-gateway/app/config.py), [factory](../ai-gateway/app/dependencies.py), [requirements](../ai-gateway/requirements.txt), [Dockerfile](../ai-gateway/Dockerfile) | Only `fake`/`copilot`; fake prohibited in production. Copilot credentials and SDK 1.0.11 remain in the production path; the image downloads the CLI runtime. A provider flag alone does not remove the dependency. |
+| [Backend security](../backend/security.py), [gateway security](../ai-gateway/app/security.py) | Backend checks Easy Auth enabled plus nonempty principal ID, not a verified user allowlist. Gateway validates a shared service token, not end-user identity. Trust requires platform validation and removal of caller-supplied identity headers. |
+| [Concurrency limiter](../ai-gateway/app/concurrency.py) | Process-local counter and lock only; not a cross-worker daily/monthly limit, budget, or idempotency store. |
+| [Backend handler](../backend/api/food_analysis.py) and [gateway client](../backend/gateway_client.py) | One explicit synchronous HTTP POST per request, service token and correlation ID, normalized errors, client closed in `finally`. No identity/operation reservation forwarded. Transport timeouts are not a propagated wall-clock deadline. |
+| [iOS service](../ios/FoodAnalysisKit/Sources/FoodAnalysisKit/FoodAnalysisService.swift) and [review session](../ios/FoodAnalysisKit/Sources/FoodAnalysisKit/FoodAnalysisReviewSession.swift) | Public endpoint and estimate contract remain provider-neutral. The 110-second client timeout and local per-attempt UUID are not server idempotency or proof of end-to-end cancellation. |
+
+The existing timeout hierarchy recommends 90 seconds at the provider, 100 at the
+backend, and 110 on iOS. These are not all default field values and do not account
+for every preparation, cold-start, transport, and cleanup phase. Existing body
+size checks also do not prove that the hosting worker never buffers an oversized
+HTTP body. Both risks need boundary-specific checks before external use.
+
+### Provider selection
+
+**First integration candidate: Azure OpenAI, `gpt-4.1-mini` version
+`2025-04-14`, EU `DataZoneStandard`.** This matches the EU-processing preference,
+the existing Azure operating environment, and the current small text/image/JSON
+workload. It does not require assuming approval for OpenAI's separate European
+image-residency offering. Keep the gateway; consolidating it into Functions is
+not part of this migration.
+
+This is a provisional integration choice, not a measured quality/latency winner
+or permission to use the existing subscription's funding. Its main disadvantage
+is lifecycle: the model is already **Legacy**, with retirement on **2027-04-14**.
+Legacy currently permits new deployments until deprecation; actual subscription
+access, EU capacity, quota, and price must still be checked. Reassess by
+2026-12-15 and complete a replacement benchmark well before retirement. No
+automatic model, region, Global deployment, or provider substitution is allowed.
+
+**Closest comparison and reasoned alternative: direct OpenAI
+`gpt-4.1-mini-2025-04-14`.** It offers the same model family with less deployment
+administration and slightly lower published token rates. It is suitable if the
+owner accepts a documented international processing/transfer arrangement, or
+obtains the required regional approvals. The two services' quality and latency
+must still be measured separately. Paid Gemini `gemini-2.5-flash` is the third,
+independent-model comparison; no Vertex AI or free-tier equivalence is assumed.
+
+Published standard on-demand prices, USD per million tokens, checked 2026-09-17;
+not account-specific quotes, tax-inclusive prices, Batch, or Priority rates:
+
+| Service and pinned candidate | Input / cached input / output | Capabilities and availability | Operational tradeoff |
+| --- | --- | --- | --- |
+| Direct OpenAI `gpt-4.1-mini-2025-04-14` | 0.40 / 0.10 / 1.60 | Text and image input; text output; structured outputs. Listed model, no retirement entry found in the checked deprecation list. Account access/tier unverified. | Small adapter and no Azure model deployment, but separate account/billing/privacy administration. European photo processing has approval prerequisites. |
+| Azure OpenAI `gpt-4.1-mini`, `2025-04-14`, EU DataZoneStandard | 0.44 / 0.11 / 1.76 | Text/image and structured outputs; GA v1 API supported. Legacy; retirement 2027-04-14. Region, subscription quota and deployability remain gates. | Explicit EU inference zone, existing Azure operations; resource/deployment setup and earlier model replacement work. |
+| Gemini API Paid Services `gemini-2.5-flash` | 0.30 / 0.03 / 2.50 | Stable model, text/image input and structured text output. No shutdown date announced on checked schedule. Paid project/tier/quota unverified. | Lower input but higher output price; thinking is billable. No Developer API EU-processing setting established; service-specific subprocessor mapping unresolved. |
+
+Prices alone do not establish the cheapest provider: image tokenization, prompt
+length, output/thinking, refusals, and successful-result rate matter. Explicit
+Gemini caching also has storage charges; do not enable it for this pilot. Do not
+budget cache discounts, free tiers, trial credits, or negotiated rates.
+
+### Standard contracts and privacy assessment
+
+Standard DPAs exist for all three candidates, but the intended independently paid
+account, contracting entity, terms incorporation, and acceptance evidence are
+**not verified**. No terms were accepted during this preparation. A published
+DPA is not the legal basis for processing health-related data and is not a
+guarantee of compliance. Assess controller responsibilities, Article 6 and, where
+applicable, Article 9 GDPR, notices/consent, deletion, and whether a DPIA is needed.
+Do not assume a household exemption or equate GDPR health data with US HIPAA PHI.
+Keep the service an ordinary nutrition estimate, not diagnosis or medical advice.
+
+| Question | Direct OpenAI API | Azure OpenAI | Gemini API Paid Services |
+| --- | --- | --- | --- |
+| Standard DPA and actual service scope | Services Agreement effective 2026-01-01 explicitly covers APIs for business/developer customers and incorporates the DPA in section 5.3. DPA effective 2026-01-01; EEA/Swiss customers contract with OpenAI Ireland Ltd. Confirm the private developer account falls under this agreement, not merely consumer ChatGPT terms. | Foundry privacy documentation explicitly places Azure OpenAI / models sold by Azure under Microsoft DPA. Licensing portal lists May 2026 DPA. Full current contractual attachment and incorporation for the intended subscription remain to be obtained and reviewed. Not direct OpenAI's DPA. | Paid API terms effective 2026-03-23 incorporate Google Data Processing Terms, version 10 dated 2026-05-07. Google's service list explicitly names Gemini API Paid Services for personal data in submitted prompts/responses. Cloud Billing does not make it Vertex AI. |
+| Training and secondary processing | API content is not used to train/improve models unless explicitly opted in. Leave sharing off. Account, billing, support, and system data have separate processing purposes. | Prompts/results are not provided to OpenAI and are not used to train base models or improve products without permission/instruction. Microsoft operates the service. | Paid prompts, images and responses are not used to improve Google products. Account/auth/billing/usage/operational data are subject to separate controller terms/privacy rules. EEA/UK/Swiss API clients must use paid services. |
+| Default retention and review | Abuse logs normally up to 30 days, with legal/safety exceptions. `store=false` does not disable abuse logging or all caching. ZDR/MAM require approval; flagged images can still be retained for manual safety review. | Automated abuse review does not store reviewed prompts/results in that system. Flagged samples can undergo Microsoft human review in a separate resource-scoped store. Exact human-review retention duration was not established from the checked pages; obtain it before personal-data use. Modified monitoring is approval-based, not assumed. | Usage policy specifies 55-day abuse retention for prompts, context and output, with possible authorized human review. Paid/no-training is not zero retention. Confirm image/context treatment, deletion limitations and legal exceptions for the actual service. |
+| EU processing and limits | `eu.api.openai.com` supports eligible regional storage/inference in **EEA + Switzerland**, not strictly EU. Non-US residency requires abuse-monitoring approval and a Modified Retention amendment; images require enhanced ZDR/MAM approval. Endpoint/model/organization eligibility remains unverified. System data, including structured-output schemas, are excluded from residency. | Select an EU resource and EU DataZoneStandard, not GlobalStandard. Inference can occur throughout the EU zone, not just Germany. Geography/zone controls do not establish EU-only account/support/telemetry/subprocessor processing. Avoid optional stateful features and review service exceptions. | Paid terms allow processing where Google/agents operate worldwide. No EU pinning for this Developer API was verified. A GCP region or a Vertex AI promise cannot be substituted for this service. |
+| Subprocessors and transfers | Official list identifies API subprocessors including Cloudflare, Microsoft, CoreWeave, Oracle, Google and AWS across countries. DPA provides SCCs or Article 45 adequacy routes; select the mechanism for actual recipients. Regional TLS termination uses Cloudflare Regional Services. List changes/objections are covered by the DPA; archive the applicable list and subscribe later. No recipient-specific DPF assessment completed. | Microsoft's published EU model-clauses guidance includes Azure and SCCs through the DPA. The current service-specific subprocessor list/version was not obtained in this review; obtain it through the official contractual/Trust Center channel. EU DataZone does not remove that transfer assessment. | DPA Appendix 3A provides DPF for covered certified US entities and SCC fallback, depending on entities/roles. The DPA-linked subprocessor page, dated 2025-12-12, lists Workspace/RCS but no Gemini mapping. This is an unresolved service-chain question, not evidence of no subprocessors; do not borrow a Workspace/Vertex list. |
+
+For the first adapter, use foreground stateless Chat Completions with static,
+content-free JSON schema, inline image input, `store=false`, and no tools,
+grounding, Files, Threads, background jobs, or persisted conversation objects.
+For a later Gemini comparison use stateless `generateContent`, not Interactions,
+with inline images and no Files, explicit cache resources, or Search/Maps tools.
+These choices reduce optional state; they do not override provider retention.
+
+Before any personal-data dispatch, retain an owner-reviewed record of the exact
+service/account, DPA version and incorporation, subprocessors/countries,
+applicable transfer mechanism and supplementary measures, content and metadata
+retention/deletion, support access, settings, and any required approval. Resolve
+service restrictions for this nutrition use case, including Gemini's age and
+medical-use restrictions. Do not request negotiated terms as a prerequisite if
+the documented standard terms suffice, but do not invent coverage where unclear.
+
+### Implementation package plan
+
+Package 1 has the local implementation recorded above; the following remains
+the decision's package specification, not a claim that later packages are done.
+Each later package needs separate implementation authorization. Keep public
+`POST /api/food-analysis`, JSON/multipart bodies, estimate fields, and normalized
+error envelopes stable. Internal gateway contracts may gain execution metadata;
+provider names, model IDs, tokens, prices, and raw errors must not reach iOS.
+
+**1. Azure adapter, strict schema, and internal usage, offline first.**
+
+- Add a domain-neutral adapter under `ai-gateway/app/providers/` (proposed new
+  `openai_api.py`) using an explicitly pinned official async OpenAI client and
+  the Azure v1 endpoint/deployment. Extend the existing provider base request
+  with a server-chosen output cap and the result with optional execution
+  metadata. Wire settings and factory in the existing configuration modules;
+  no endpoint/model defaults or silent fallback. Add direct API mode only when
+  its comparison is authorized; do not build three adapter frameworks upfront.
+- Translate a copy of the use case's JSON schema into the supported provider
+  subset: all properties required, `additionalProperties=false` recursively,
+  references handled, defaults and unsupported bounds removed only from the
+  transport schema. Missing warnings/assumptions are not silently accepted from
+  a strict provider result. Preserve all authoritative Pydantic business bounds
+  and public defaults; reject refusal, truncation, non-object, extra/missing
+  properties, and invalid nutrition values. No repair generation or coercive
+  JSON extraction from prose.
+- Set `max_completion_tokens=2000`, one completion, and `max_retries=0` explicitly.
+  The OpenAI SDK otherwise retries selected errors twice. Keep an outer deadline
+  and bounded client cleanup; no synchronous network work in the async adapter.
+  Later Gemini uses `maxOutputTokens=2000`, one candidate and `thinkingBudget=0`;
+  its output cap includes thinking, and truncation is failure, not cheap success.
+- Internal metadata: provider/deployment, requested and returned model version,
+  provider request/response ID, correlation ID, duration, completion status,
+  input/cache/output/thinking counts when supplied, usage-known flag, and a
+  versioned USD price estimate. Record usage before business validation rejects
+  a paid result. Carry sanitized metadata on failure too; missing usage is
+  unknown, never zero. Retain pessimistic reservations when uncertain.
+- Normalize OpenAI/Azure cache counts as a subset of prompt tokens and reasoning
+  as a subset of completion tokens. Gemini prompt counts include cached tokens;
+  account for candidate and thought tokens without double counting total usage.
+  Keep modality breakdown only when reported; do not fabricate an image-token
+  split. Reconcile estimates against billing, not vice versa.
+- Touch [base contract](../ai-gateway/app/providers/base.py),
+  [config](../ai-gateway/app/config.py), [factory](../ai-gateway/app/dependencies.py),
+  [use case](../ai-gateway/app/use_cases/food_analysis.py),
+  [errors](../ai-gateway/app/errors.py), [requirements](../ai-gateway/requirements.txt)
+  and adapter-focused tests. Reuse existing `test_config.py`,
+  `test_dependencies.py`, `test_model_routing.py`, `test_use_case.py`, and
+  `test_production_hardening.py`; add one mock adapter test module when needed.
+  Mock text/image/refinement, exact request schema/caps, refusal/truncation,
+  timeout, usage-on-invalid-output, no retries, and client close. No paid tests.
+
+Acceptance: unchanged public fixture responses and normalized errors, one mocked
+dispatch at most, schema bounds still enforced, and no content in logs. This
+package alone is not deployable for external use; the external gate stays shut.
+
+**2. API-only production packaging and rollback artifact.**
+
+Remove Copilot from production factory/config, requirements and container runtime
+download; remove or retire the adapter and Copilot-specific tests as a coherent
+change, including opt-in live tests. Retain fake only for development/tests.
+Update [gateway documentation](../ai-gateway/README.md) and the
+[operations runbook](operations-runbook.md) in that implementation package.
+An `AI_ENABLED=false` path must return a normalized unavailable response without
+building a provider; liveness remains available, readiness must not claim AI is
+ready. No key, quota exhaustion, invalid config, or provider failure may activate
+Copilot or fake in production. Inspect the built artifact/dependencies and run
+mock process/health/security checks. Prepare a known API-only rollback artifact
+before any paid rollout, not a rollback to the current Copilot image.
+
+**3. Verified identity and one distributed admission authority.**
+
+- Extend [backend security](../backend/security.py) and
+  [configuration](../backend/config.py) to derive a trusted immutable identity
+  from validated Easy Auth claims and an explicit tenant/object-ID allowlist.
+  Check tenant/issuer, API audience, allowed client application and delegated
+  scope at the responsible platform/application boundary. An allowed app is
+  not an allowed person; email/display name and user-supplied headers are not
+  identity proof. Validate direct/bypass paths and guest identities deliberately.
+- [Backend handler](../backend/api/food_analysis.py) and
+  [gateway client](../backend/gateway_client.py) forward a minimal authenticated
+  internal identity, operation ID and deadline, never the user's bearer token
+  or profile. [Gateway security](../ai-gateway/app/security.py) and
+  [routes](../ai-gateway/app/api/routes.py) reject missing/untrusted execution
+  context. Evaluate ingress restrictions; an undisclosed URL is not protection.
+- Place the single authoritative reserve/dispatch/reconcile controller in the
+  gateway immediately before generation. Proposed shared persistence: Azure
+  Table Storage, one pilot partition holding global/person counters and operation
+  records, with atomic transactions/ETags. Backend must not independently debit
+  the same call. A new store/resource or use of existing storage needs approval
+  and least-privilege managed-identity access; none is created by this plan.
+- Atomically reserve worst-case cost, request count and concurrency before any
+  dispatch. Count initial analysis, correction, retry attempts and unknown paid
+  outcomes. Enforce short-window, UTC daily/monthly, per-person and global limits;
+  count reservations against money caps. Store failure, stale policy, pricing
+  uncertainty or exhausted budget means no dispatch. Keep the process limiter
+  only as secondary local protection. Provider budget alerts are not hard caps.
+- Suggested owner-approval starting values: 2 attempts/minute, 10/day and
+  100/month per person; globally 6/minute, 20/day, 150/month; concurrency 1/person
+  and 2/global; USD 5/month model spend ceiling. Also require server-side input,
+  output, image-dimension/byte and total-request caps. These are proposals, not
+  enabled limits or an infrastructure-cost ceiling.
+
+Test fake-store atomic conflicts, two workers/processes, two people, restart,
+period rollover, concurrency release, stale leases, missing usage and unavailable
+storage. Existing backend/gateway security and production-hardening tests are the
+home for HTTP admission tests; add focused store tests when implemented. A real
+storage integration check is a later approved gate, not part of this doc change.
+
+**4. Logical operations, errors and end-to-end deadlines.**
+
+- Use a stable client operation UUID across retries of the same logical action;
+  a corrected/new request gets a new ID. Scope it to verified identity and bind
+  it to a canonical payload HMAC including image digest, refinement and any
+  future selected-meal context. Do not hash multipart boundary bytes. Keep HMACs
+  in the protected ledger, not logs; they remain pseudonymous sensitive data.
+- Persist reserved/dispatched/succeeded/failed/unknown states before advancing.
+  Only the transaction winner may dispatch; duplicate keys with changed payload
+  fail, and duplicates in progress/unknown never redispatch. After possible
+  dispatch, lease expiry or client cancellation does not prove no charge.
+  Conservatively lose a result/reservation rather than silently repeat a call.
+  There is no exactly-once guarantee across the database/provider network hop.
+- Initially store metadata, not meal results. A successful duplicate whose
+  response was lost therefore cannot replay an estimate; return a normalized
+  non-success and require explicit confirmation of a new, separately budgeted
+  operation. Define supported retry and retention windows before implementation
+  (proposal: retry at most 24 hours, ledger/tombstones 30 days); never promise
+  indefinite deduplication after records are deleted. Encrypted short-lived
+  result caching would be a separate retention decision, not implicit scope.
+- The current public body has no operation field. Preserve it; agree an additive
+  idempotency header and coordinated iOS transport update. This is a new admission
+  requirement, not transparent compatibility for old clients. Keep external use
+  closed until supported clients send it; legacy requests must fail in the
+  existing error envelope, never enter an unmetered bypass. Do not disguise the
+  operation ID as the existing correlation ID or local stale-response token.
+- Reuse [iOS service](../ios/FoodAnalysisKit/Sources/FoodAnalysisKit/FoodAnalysisService.swift),
+  [view model](../ios/FoodAnalysisKit/Sources/FoodAnalysisKit/FoodAnalysisViewModel.swift),
+  [review session](../ios/FoodAnalysisKit/Sources/FoodAnalysisKit/FoodAnalysisReviewSession.swift)
+  and their existing service/retry/review tests. Preserve review-before-save and
+  [persistence coordinator](../ios/FoodAnalysisKit/Sources/FoodAnalysisKit/FoodEntryPersistenceCoordinator.swift)
+  behavior. No SwiftData/bundle-ID/backup migration, reinstall or restore is
+  required. Sign-in must not be represented as account-partitioning local data;
+  do not add cross-user memory access on a shared local store.
+- Propagate a server-owned remaining deadline through backend, gateway and
+  provider, using monotonic elapsed time within each process. Include admission,
+  serialization, network and cleanup margins under the existing client timeout;
+  no queue or retries. The client timeout starts after token acquisition in the
+  current service, so measure the full UI action separately. Cancellation aborts
+  local work best-effort, not necessarily provider computation or billing.
+- Extend existing error mapping without raw SDK details: provider 429 and local
+  quota denial become bounded rate-limit responses, disabled/unavailable service
+  stays 503, deadline 504, invalid/refused/truncated output a normalized failure.
+  Preserve existing envelopes and distinguish retry eligibility in the client;
+  never automatically retry ambiguous paid outcomes. Test the complete mocked
+  backend/gateway path and ledger state after each failure phase.
+
+**5. Controlled rollout, then only selected-meal memory.**
+
+After owner/privacy/funding approval, run the synthetic benchmark below through
+the same admission controls with a dedicated operator identity and budget. This
+does not admit other users. Before external onboarding, verify effective claims,
+allowlist, store atomicity, quotas, logs, deployed model/version/zone and artifact
+identity. Close old endpoints/revision URLs and service-token paths, stop Copilot
+revisions and remove their credential references/credentials under an approved
+change. Confirm no old backend can still reach Copilot. Rollback permits only an
+approved API-only artifact that retains the controls, or AI disabled; never simply
+reactivate a historical revision. No cloud commands are authorized here.
+
+Meal memory is a later feature, not an extra field silently added by the adapter:
+select at most three relevant, user-confirmed meals locally, with explicit user
+control/preview and a bounded field/token allowlist. Send only necessary meal
+names, portions, confirmed values and relevant corrections as untrusted reference
+context, not as truth about the current plate. No whole diary, workout/weight
+history, health goals, identity, historical photos, or cross-user records. Bound
+this context within the same input/cost limit; allow omission/deletion and keep
+current instructions/corrections authoritative. The strict current public schema
+has no such field: agree an additive/versioned contract before implementation,
+not a diary dump inside `food_description`. No cloud diary or embedding store is
+a prerequisite for provider replacement.
+
+### Synthetic benchmark specification
+
+Preparation only: no private descriptions/photos/records, paid generations,
+LLM judges, generated fixture purchases, or provider uploads were performed.
+Create fixtures locally during an authorized implementation package: fabricated
+German text, staged food without people/background identifiers, and locally
+rendered labels. Use documented recipe weights and fixed nutrition references;
+invented images alone do not establish true nutrition. Keep fixture provenance,
+prompt/schema version, model settings, and reference tolerances in the existing
+test structure rather than adding a parallel benchmark application.
+
+| Cases | Count | Fixed input and expected behavior |
+| --- | --- | --- |
+| T1-T2 | 2 | Weighed single food and simple mixed recipe; declared portions and offline reference arithmetic preserved. |
+| T3-T4 | 2 | Missing portion and contradictory/ambiguous description; explicit assumptions/uncertainty, no invented exact serving. |
+| T5-T6 | 2 | German units/decimal comma and instruction-like text embedded in food input; correct interpretation, schema/instruction boundary preserved. |
+| P1-P2 | 2 | Staged single food and weighed mixed plate; plausible reference range, no precision beyond visible evidence. |
+| P3-P4 | 2 | Poor light/occlusion and no portion scale; warnings and lower confidence, no unsupported certainty. |
+| P5-P6 | 2 | Non-food control and image containing instruction-like label text; no fabricated confident meal or obedience to image instructions. |
+| R1-R2 | 2 | Fixed baseline estimate plus portion/ingredient correction; update only justified values, current correction wins. |
+| R3-R4 | 2 | Image-origin estimate corrected without image, and contradictory/repeated correction at iteration 3; never claim reinspection or compound a correction twice. |
+| L1-L2 | 2 | Locally rendered per-100-g and per-portion labels with known consumed weights; correct unit/portion arithmetic, identify ambiguity. |
+
+18 cases x 3 repeats x 3 providers = **162 maximum billable attempts**, 54 per
+provider. Refinement uses fixed baseline fixtures, not additional setup calls.
+Failures/refusals count; no retries, repairs, extra warmups or replacement cases.
+Randomize/interleave provider order. Record cold/warm state without paid warmup,
+queue/admission/provider/total duration, schema validity, warnings, refusal,
+truncation, usage completeness and price version. p50/p95 are descriptive at
+this sample size, not production latency guarantees. Synthetic/staged coverage
+does not establish performance on every real user's food.
+
+Keep future meal-memory tests **offline/mock-only and outside these 162 calls**:
+relevant selected meal, irrelevant candidate omitted, current correction
+overriding memory, excessive context rejected, another user's record excluded,
+and instruction-like saved text treated as data. Real memory-quality evaluation
+needs its own approved contract, case extension and recomputed budget.
+
+Proposed acceptance and ranking, agreed before any run:
+
+- Hard gates: privacy/service coverage and funding approved for the run; zero
+  content leakage, unauthorized dispatch, duplicate dispatch in supported retry
+  windows, automatic retries or provider/model fallback. Any failure blocks
+  release, regardless of average score.
+- At least 95% usable, schema-valid estimates across the 51 food-estimation
+  attempts per provider; refusals/timeouts/truncation on these tasks count as
+  failures. The three P5 non-food attempts are separate controls: require a
+  correct abstention or explicit no-food result without fabricated nutrition,
+  not a successful meal estimate. Include their spend in total costs but not
+  their responses in the usable-estimate denominator. All three repeats of both
+  label cases must preserve units and be within 5% of reference calories and
+  within the larger of 1 g or 5% for each macro. Portion corrections within 5%
+  of reference arithmetic. No false photo reinspection. Human reviewers check
+  these explicitly; all estimates accepted by the application must validate.
+- For weighed recipe/photo cases, preregister plausible ranges (initial target
+  calories within 25%, macros within the larger of 5 g or 30%). Uncertain cases
+  are graded for honest assumptions, not made-up ground truth. Score portion
+  handling, nutrition plausibility, correction adherence and uncertainty from
+  0 to 4: 0 unusable, 1 major unsupported claims, 2 partial with material errors,
+  3 meets the preregistered case criteria, 4 also communicates all relevant
+  limitations clearly. Exclude inapplicable dimensions before the run; require
+  mean at least 3/4 and no critical failure.
+- Usability target: end-to-end p95 at most 30 seconds warm, and no attempt beyond
+  the enforced server deadline. Report cold-start results separately; don't
+  discard their failures. Revise a failed target explicitly, not after silently
+  removing slow results.
+- Among candidates passing all gates, weight quality 50%, latency 20%, cost 15%,
+  privacy administration 15%. Normalize quality from the rubric; latency against
+  the agreed 30-second target; cost by spend per usable result (zero usable
+  results disqualifies). Score privacy administration 0-4 from documented service
+  coverage, outstanding approvals, transfer/retention work and renewal burden.
+  Record the human rationale, not a legal-compliance score. If close, prefer the
+  EU-processing candidate; do not buy a cheaper failure rate.
+
+**Enforceable cost assumptions:** at most 10,000 billable input tokens per call,
+including all instructions, schema, text and image charges; at most 2,000 output
+tokens including any thinking; one candidate; no tools, paid cache storage,
+Batch, retries or separate setup generations. Prove each fixture's input upper
+bound before dispatch using provider-specific token/image accounting and fixed
+dimensions. A 3 MiB image limit is not a token limit. Unknown tokenization or a
+required paid counting call blocks the run until the calculation is revised.
+
+| Provider | Per-call maximum under these caps (USD) | 54-attempt maximum (USD) |
+| --- | --- | --- |
+| Direct OpenAI | 0.00720 | 0.38880 |
+| Azure EU DataZone | 0.00792 | 0.42768 |
+| Gemini Paid, thinking disabled | 0.00800 | 0.43200 |
+| Total for the fixed matrix | | **1.24848** |
+
+Calculation: `attempts * (input_tokens * input_rate + output_tokens * output_rate)
+/ 1,000,000`, without cache discounts. Applying the highest input rate (0.44)
+and highest output rate (2.50) to all 162 attempts gives **USD 1.52280**, rounded
+up to **USD 1.53** as the conservative cross-provider model-cost bound. Propose a
+separately authorized **USD 5 benchmark budget**, with atomic worst-case reserve
+before every call and at most 162 attempts; that budget does not authorize extra
+calls. Abort on price/model change or usage exceeding the asserted caps.
+
+These are conditional model-service bounds, not a universal billing guarantee.
+They exclude Azure hosting/storage/telemetry, tax, currency conversion and any
+new metered service. Approve an independent infrastructure budget and account
+payment method; inspect billing reconciliation after the run. Unknown outcomes
+keep their maximum reservation rather than making room for replacement calls.
+
+### Owner decisions and release gates
+
+The owner must select the privately controlled paid account/subscription and
+contracting party, confirm funding independent of Copilot/employer benefits,
+approve the benchmark and monthly model budgets plus infrastructure budget, and
+name the initial allowed identities. No account creation, login, billing change,
+contract acceptance, resource provisioning or deployment is part of this record.
+
+Before external use, all of the following must be evidenced, not just configured
+in a draft: applicable standard terms/DPA and legal basis; recipient/transfer and
+retention review; approved region/service/model and lifecycle follow-up; securely
+stored credentials/least privilege; verified identities and allowlist; shared
+fail-closed limits and reservations; supported-client idempotency; bounded
+payloads/deadlines with retries disabled; content-free logging and retention;
+benchmark acceptance; API-only/AI-disabled rollback with old Copilot paths closed.
+Usage metadata is not automatically anonymous: restrict access and define
+retention for pseudonymous identifiers and operation records. Ordinary logs must
+not contain prompts, images, meal values, raw SDK errors, HMACs or bearer tokens.
+
+Open points at this decision date: no funded target account or quota verified;
+no contracts accepted; Microsoft DPA attachment/service-specific subprocessors
+and human-review retention still need review; OpenAI target-account/residency
+eligibility unverified; Gemini service-specific subprocessor chain unresolved;
+no measured quality/latency; no distributed store or client operation protocol
+implemented. The additive header/admission policy needs explicit agreement.
+The new adapter rejects production selection, but does not install distributed
+controls or close the old Copilot paths. External AI use remains unauthorized.
+
+### Official source register
+
+Accessed 2026-09-17. These are public provider statements, not proof of the
+target account's agreement, approval, quota or deployed settings. Recheck before
+funding/deployment and on lifecycle or contractual changes.
+
+- OpenAI: [model and price](https://developers.openai.com/api/docs/models/gpt-4.1-mini),
+  [deprecations](https://developers.openai.com/api/docs/deprecations),
+  [Services Agreement](https://openai.com/policies/services-agreement/),
+  [DPA](https://openai.com/policies/data-processing-addendum/),
+  [subprocessors](https://openai.com/policies/sub-processor-list/),
+  [data controls and residency](https://developers.openai.com/api/docs/guides/your-data),
+  [Chat Completions caps/usage](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+  [SDK retry defaults](https://github.com/openai/openai-python#retries).
+- Azure: [standard prices](https://azure.microsoft.com/en-us/pricing/details/azure-openai/),
+  [retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule),
+  [lifecycle definitions](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirements),
+  [structured outputs and Azure schema subset](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/structured-outputs),
+  [service privacy/DPA scope](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy),
+  [abuse monitoring](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/abuse-monitoring),
+  [Microsoft DPA versions](https://www.microsoft.com/licensing/docs/view/Microsoft-Products-and-Services-Data-Protection-Addendum-DPA),
+  [SCC scope](https://learn.microsoft.com/en-us/compliance/regulatory/offering-eu-model-clauses).
+- Google: [model](https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash),
+  [paid prices](https://ai.google.dev/gemini-api/docs/pricing?hl=en),
+  [deprecations](https://ai.google.dev/gemini-api/docs/deprecations?hl=en),
+  [paid service terms](https://ai.google.dev/gemini-api/terms),
+  [processor terms and transfer appendix](https://business.safety.google/processorterms/),
+  [DPA service list](https://business.safety.google/services/),
+  [DPA-linked subprocessor information](https://business.safety.google/subprocessors/),
+  [55-day abuse policy](https://ai.google.dev/gemini-api/docs/usage-policies),
+  [thinking/output limits](https://ai.google.dev/gemini-api/docs/generate-content/thinking?hl=en),
+  [GenerateContent schema/usage reference](https://ai.google.dev/api/generate-content?hl=en).
+
+## Implemented V2 architecture (before paid API migration)
 
 ```text
 iOS client
@@ -65,7 +555,7 @@ Personal AI Gateway
 
 - Provides our authenticated, server-side AI API to the domain backend (FastAPI app under `ai-gateway/`).
 - Owns AI schema validation, provider/model routing, timeouts, limits, and normalized errors.
-- Uses replaceable provider adapters behind the `StructuredGenerationProvider` interface. The deterministic `FakeProvider` is implemented for local development and tests. `GitHubCopilotProvider` (Phase 3) wraps the official GitHub Copilot SDK via the Copilot CLI in headless/server mode and is implemented for local use; production deployment/authentication is not decided yet.
+- Uses replaceable provider adapters behind the `StructuredGenerationProvider` interface. `FakeProvider` serves local development/tests; `GitHubCopilotProvider` is the implemented production baseline recorded in Phase 10. The paid API decision above replaces that future target, not the running implementation through documentation alone.
 - Keeps provider-specific transport details behind the adapter boundary; the public gateway API never exposes provider or model identifiers.
 - Is not a public proxy. Any future Copilot CLI process must never be exposed directly to the public internet and should be reachable only through controlled server-side networking.
 
@@ -87,7 +577,7 @@ Planned use cases are:
 3. Add activity and training assistance.
 4. Support other personal AI services through separate application-level contracts.
 
-These are roadmap items, not current capabilities. Persistence of AI output should be an explicit domain action, normally after user review or confirmation.
+Text/image analysis and text-only refinement are implemented. Activity/training and other AI services remain roadmap items. Persistence of AI output is an explicit domain action after user review or confirmation.
 
 ## Security and privacy assumptions
 
@@ -100,7 +590,12 @@ These are roadmap items, not current capabilities. Persistence of AI output shou
 - Apply request size/rate limits, timeouts, output schema validation, and safe error handling at server boundaries.
 - AI output is an estimate and is not authoritative health or medical advice.
 
-## Phased roadmap
+## Historical phased roadmap
+
+The following entries record decisions and verification at each phase, including
+then-current deployment/configuration gaps. They are not a fresh status report
+or authorization to reuse Copilot for external users. The dated paid API decision
+above takes precedence for that migration and its rollback policy.
 
 ### Phase 0 — baseline (current)
 

@@ -12,6 +12,17 @@ from app.use_cases.food_analysis import FoodAnalysisUseCase
 
 
 def _build_provider(settings: Settings) -> StructuredGenerationProvider:
+    if settings.ai_provider == "azure_openai":
+        from app.providers.openai_api import AzureOpenAIProvider
+
+        settings.validate()
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key.get_secret_value(),
+            model_routes=settings.azure_openai_model_routes(),
+            max_output_tokens=settings.ai_provider_max_output_tokens,
+            prices=settings.azure_openai_prices(),
+        )
     if settings.ai_provider == "fake":
         return FakeProvider()
     if settings.ai_provider == "copilot":
@@ -46,4 +57,5 @@ def get_food_analysis_use_case() -> FoodAnalysisUseCase:
         model_purpose=settings.food_text_model_purpose,
         image_model_purpose=settings.food_image_model_purpose,
         concurrency_limiter=get_concurrency_limiter(),
+        max_output_tokens=settings.ai_provider_max_output_tokens if settings.ai_provider == "azure_openai" else None,
     )

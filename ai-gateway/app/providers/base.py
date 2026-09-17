@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Literal
 
 #: A single generation instruction/message. "system" carries task framing,
@@ -61,6 +62,32 @@ class StructuredGenerationRequest:
     output_json_schema: dict[str, Any]
     timeout_seconds: float
     attachments: list[Attachment] = field(default_factory=list)
+    max_output_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class GenerationMetadata:
+    provider: str
+    requested_deployment: str | None
+    returned_model: str | None
+    provider_request_id: str | None
+    duration_ms: float
+    status: str
+    usage: TokenUsage | None = None
+    estimated_cost_usd: Decimal | None = None
+    price_version: str | None = None
+
+    @property
+    def usage_known(self) -> bool:
+        return self.usage is not None
 
 
 @dataclass(frozen=True)
@@ -73,6 +100,7 @@ class StructuredGenerationResult:
     """
 
     data: dict[str, Any]
+    metadata: GenerationMetadata | None = None
 
 
 class StructuredGenerationProvider(ABC):

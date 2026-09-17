@@ -64,12 +64,14 @@ class FoodAnalysisUseCase:
         model_purpose: str,
         image_model_purpose: str = "food_image_v1",
         concurrency_limiter: ConcurrencyLimiter | None = None,
+        max_output_tokens: int | None = None,
     ):
         self._provider = provider
         self._timeout_seconds = timeout_seconds
         self._model_purpose = model_purpose
         self._image_model_purpose = image_model_purpose
         self._concurrency_limiter = concurrency_limiter
+        self._max_output_tokens = max_output_tokens
 
     async def execute(self, request: FoodAnalysisRequest) -> FoodAnalysisResponse:
         if self._concurrency_limiter is not None:
@@ -107,14 +109,17 @@ class FoodAnalysisUseCase:
             output_json_schema=FoodAnalysisEstimate.model_json_schema(),
             timeout_seconds=self._timeout_seconds,
             attachments=self._build_attachments(request),
+            max_output_tokens=self._max_output_tokens,
         )
 
         result = await self._generate_with_timeout(generation_request)
 
         try:
             estimate = FoodAnalysisEstimate.model_validate(result.data)
-        except ValidationError as exc:
-            raise ProviderOutputInvalidError() from exc
+        except ValidationError:
+            error = ProviderOutputInvalidError()
+            error.metadata = result.metadata
+            raise error from None
 
         return FoodAnalysisResponse(estimate=estimate)
 

@@ -4,6 +4,24 @@ Practical, sanitized procedures for operating the deployed production stack. No
 secret values appear anywhere in this document — only resource names, setting
 *names*, and commands with placeholders for anything sensitive.
 
+## Paid API migration boundary (2026-09-17)
+
+The procedures below describe the existing Copilot deployment. The
+[paid API migration decision](architecture.md#paid-api-migration-decision-2026-09-17)
+governs preparation for external users; no deployment or credential change is
+authorized by that decision. The first local Azure adapter package now rejects
+production selection and does not claim readiness; it changes no deployed
+configuration. Its configuration and offline tests are documented in the
+[gateway README](../ai-gateway/README.md#local-azure-api-adapter-2026-09-17).
+
+Before external AI use, replace the Copilot runtime and close its old endpoint,
+revision and credential paths, with independently funded API access, privacy
+foundations, verified allowed identities and distributed usage controls in place.
+The generic previous-revision rollback procedures in sections 2 and 4 must **not**
+be used to route external users back to Copilot. For that rollout, prepare and
+verify a known API-only rollback artifact that retains the admission controls,
+or disable AI. Keep public contracts and local device data intact.
+
 ## 1. Deployment architecture (as actually deployed)
 
 ```text

@@ -2,9 +2,12 @@
 
 This is the server-side, provider-independent AI boundary. It exposes a small FastAPI application under `app/` with a provider-neutral `StructuredGenerationProvider` interface and the first use case: text food analysis.
 
-Two providers are implemented:
+Three providers are implemented:
 
 - **`FakeProvider`** — deterministic, schema-driven, credential-free. Used for local development by default and for all normal automated tests.
+- **`AzureOpenAIProvider`** - local-only Azure v1 Chat Completions adapter. Text,
+  inline JPEG/PNG images and strict structured output, tested through mocked SDK
+  HTTP transport. No Copilot fallback; production selection is rejected.
 - **`GitHubCopilotProvider`** — the real provider, wrapping the official [GitHub Copilot SDK for Python](https://github.com/github/copilot-sdk) (`github-copilot-sdk`), which drives the Copilot CLI in headless/server mode. Both are selected purely through server-side configuration (`AI_PROVIDER`); the public API never exposes which one is active, or any model/provider identifier. `trsdn/github_copilot_openai_api_wrapper` is not part of the production architecture and is not used.
 
 ## Local development (FakeProvider — no credentials)
@@ -25,7 +28,115 @@ and available regardless of configuration. See `.env.example` for all
 settings, including the server-side `FOOD_TEXT_MODEL_PURPOSE` model-routing
 key (never exposed through the public API).
 
-## Using the real GitHub Copilot provider
+## Local Azure API adapter (2026-09-17)
+
+This is the first local package from the
+[paid API decision](../docs/architecture.md#paid-api-migration-decision-2026-09-17),
+not a production switch or authorization for paid/personal-data calls. Existing
+Copilot dependencies, container runtime and production routing remain for the
+later migration package. The new adapter cannot fall back to them.
+
+Configuration is explicit and server-only:
+
+| Setting | Local Azure behavior |
+| --- | --- |
+| `AI_PROVIDER` | Set `azure_openai` explicitly. No automatic selection or substitution. |
+| `APP_ENV` | Only `development` or `test`; `production` rejects this adapter. Existing gateway authentication still applies. |
+| `AZURE_OPENAI_ENDPOINT` | Required Azure HTTPS resource endpoint, such as `https://RESOURCE.openai.azure.com`; normalized to `/openai/v1/`. Only public Azure OpenAI/Foundry resource domains; no credentials, query, fragment, arbitrary proxy or deployment URL. |
+| `AZURE_OPENAI_API_KEY` | Required only for a separately authorized real call. Tests inject a non-secret dummy key and mock transport. Never paste real credentials into logs, chat or tracked files. No ambient OpenAI API key fallback. |
+| `AZURE_OPENAI_MODEL_ROUTES_JSON` | Required purpose-to-deployment mapping for both configured text/image purposes, e.g. `{"food_text_v1":"text-deployment","food_image_v1":"vision-deployment"}`. Values are deployment names, not a hard-coded model family. Missing, malformed, blank or duplicate mappings fail closed. |
+| `AI_PROVIDER_MAX_OUTPUT_TOKENS` | Default 2000, local safety range 1-32768. Request-level caps may lower, never raise it. The chosen deployment must support the configured cap. |
+| `AI_PROVIDER_TIMEOUT_SECONDS` | Existing timeout setting, forwarded to SDK and bounded by async deadline; the use case retains its outer timeout. |
+| `AZURE_OPENAI_PRICES_JSON` | Optional versioned USD table below. Malformed configured prices fail closed; absence, unmapped deployment or a returned-model mismatch produces unknown cost. |
+
+Price table shape (illustrative server configuration, not a verified account quote):
+
+```json
+{
+  "version": "azure-eu-standard-2026-09-17",
+  "currency": "USD",
+  "deployments": {
+    "text-deployment": {
+      "model": "gpt-4.1-mini-2025-04-14",
+      "input_per_million": "0.44",
+      "cached_input_per_million": "0.11",
+      "output_per_million": "1.76"
+    }
+  }
+}
+```
+
+Each price entry binds a deployment to the **exact returned model string**.
+Confirm that string and the deployment's region/SKU/rates before relying on the
+estimate; the example does not assume what Azure will return. No alias guessing
+or default prices. Estimates use `Decimal`: noncached input plus cached input
+plus all completion tokens. Reasoning tokens are a subset of completion tokens,
+not an additional charge. Missing/inconsistent usage, missing cache breakdown,
+missing returned model or unknown price returns `estimated_cost_usd=None`, not
+zero. `usage_known` describes valid input/output totals, not necessarily all
+optional details. Actual provider billing remains authoritative.
+
+The adapter derives a separate closed, all-required schema from the caller's
+schema. It supports the current object/array/scalar, nullable/`anyOf`, and local
+`$defs`/`$ref` shapes; unsupported constructs fail before dispatch. Provider-only
+schema relaxation removes Azure-unsupported numeric/string/array bounds and
+defaults without mutating the original. After parsing strictly (no prose
+extraction, duplicate keys, non-finite numbers or repair generation), it validates
+both the transport structure and the original JSON schema. `FoodAnalysisUseCase`
+still performs authoritative Pydantic validation. Public schemas, estimate
+envelope, input modes and refinement prompts are unchanged.
+
+One adapter invocation makes at most one SDK/HTTP attempt: `max_retries=0`,
+`n=1`, no redirects, no tools, `store=false`, no streaming or stateful API objects.
+Refusals/content filtering, truncation, invalid data, timeouts, authentication,
+unavailable deployment and rate limits map to existing public-safe errors.
+Missing usage does not invalidate an otherwise valid estimate, but its cost is
+unknown. No model/provider fallback or additional repair call occurs.
+
+`StructuredGenerationResult.metadata` and normalized errors carry internal
+deployment/model/request identifiers, elapsed time, status, usage and versioned
+price estimate when available. Usage is processed before output validation, so
+invalid paid output is not silently treated as free. The use case preserves
+metadata on its own validation error; success metadata is not serialized into
+the public response. External cancellation is re-raised and recorded as unknown
+usage; it does not prove provider computation/billing stopped.
+
+Logs contain only status/duration, token counts and cost/price version, alongside
+the existing request logs. No inputs, corrections, images, output values or raw
+SDK exceptions. The SDK's payload-capable `openai._base_client` logger is disabled
+process-wide by this adapter, including DEBUG mode; do not re-enable it. Internal
+metadata is not a durable accounting ledger or cross-request idempotency record.
+
+Production protection is independent of readiness: settings/factory reject
+`AI_PROVIDER=azure_openai` in production before constructing an SDK client.
+Additionally, every `generate()` checks the process's current `APP_ENV`; only
+explicit `development` or `test` permits dispatch. Missing/unknown environments
+and `production` raise the normalized `service_not_ready` error before handling
+input or calling the SDK, including directly constructed or reused adapters.
+A production POST with invalid Azure configuration is rejected by the existing
+configuration error boundary (`500 internal_error`); even if that factory boundary
+is bypassed with an existing adapter, dispatch is rejected (`503 service_not_ready`).
+Both paths are tested without a preceding readiness request.
+
+`check_ready()` deliberately returns false without network access: this local
+package does not claim a verified account, quota, model/vision capability or
+regional deployment. `/readyz` therefore stays 503 for Azure; `/healthz` remains
+the existing liveness check. Client shutdown is bounded to one second. Enabling
+real readiness, funding, privacy approval, token-input budgeting, distributed
+admission/idempotency and API-only rollback belong to later approved work.
+
+Offline verification with the installed gateway test dependencies:
+
+```bash
+RUN_COPILOT_INTEGRATION_TESTS=0 .venv/bin/python -m pytest -q
+```
+
+The Azure tests use the real pinned `openai` serializer with `httpx2.MockTransport`;
+they never read a real key or contact Azure. Backend regression tests also cover
+the mocked Azure path through the existing public mapping. No iOS or persistence
+change is needed for this package.
+
+## Using the real GitHub Copilot provider (existing deployment)
 
 ### One-time local authentication
 

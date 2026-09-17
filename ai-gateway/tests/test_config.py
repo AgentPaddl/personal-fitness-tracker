@@ -3,6 +3,47 @@ import pytest
 from app.config import Settings, get_settings
 
 
+def _azure_settings(**overrides):
+    return Settings(**{
+        "app_env": "test", "ai_provider": "azure_openai",
+        "azure_openai_endpoint": "https://example.openai.azure.com",
+        "azure_openai_api_key": "not-a-real-key",
+        "azure_openai_model_routes_json": '{"food_text_v1":"text-deployment","food_image_v1":"image-deployment"}',
+        **overrides,
+    })
+
+
+def test_azure_explicit_local_configuration_and_unknown_price():
+    settings = _azure_settings(ai_provider_max_output_tokens=4321)
+    settings.validate()
+    assert settings.azure_openai_model_routes()["food_image_v1"] == "image-deployment"
+    assert settings.azure_openai_prices() is None
+    assert "not-a-real-key" not in repr(settings)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"app_env": "production"},
+    {"azure_openai_api_key": None},
+    {"azure_openai_api_key": " "},
+    {"azure_openai_endpoint": "http://example.openai.azure.com"},
+    {"azure_openai_endpoint": "https://example.invalid/openai/v1/"},
+    {"azure_openai_endpoint": "https://user:password@example.openai.azure.com"},
+    {"azure_openai_endpoint": "https://example.openai.azure.com/?secret=example"},
+    {"azure_openai_model_routes_json": ""},
+    {"azure_openai_model_routes_json": "[]"},
+    {"azure_openai_model_routes_json": '{"food_text_v1":"only-text"}'},
+    {"azure_openai_model_routes_json": '{"food_text_v1":"a","food_text_v1":"b"}'},
+    {"azure_openai_model_routes_json": '{"food_text_v1":3,"food_image_v1":"b"}'},
+    {"ai_provider_max_output_tokens": 0},
+    {"ai_provider_max_output_tokens": 32769},
+    {"azure_openai_prices_json": '{"version":"v1","currency":"EUR","deployments":{}}'},
+    {"azure_openai_prices_json": '{"version":"v1","currency":"USD","deployments":{"test":{"model":"test","input_per_million":-1,"cached_input_per_million":0,"output_per_million":1}}}'},
+])
+def test_azure_bad_configuration_fails_closed(overrides):
+    with pytest.raises(ValueError):
+        _azure_settings(**overrides).validate()
+
+
 def test_default_settings_fail_closed():
     # No env vars: APP_ENV defaults to "production" and AI_PROVIDER defaults
     # to "fake", which is an intentionally invalid combination (fake must

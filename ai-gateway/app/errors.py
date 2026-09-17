@@ -8,11 +8,17 @@ catch-all boundary that normalizes anything else.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.providers.base import GenerationMetadata
+
 
 class GatewayError(Exception):
     """Base class for normalized, public-safe gateway errors."""
 
     code = "gateway_error"
+    metadata: GenerationMetadata | None = None
     http_status = 500
     #: Small, sanitized hint (seconds) for a caller-facing Retry-After
     #: header. Never provider-specific timing - only ever a small fixed
