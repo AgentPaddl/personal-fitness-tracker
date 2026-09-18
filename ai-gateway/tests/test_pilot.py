@@ -234,12 +234,11 @@ def test_offline_benchmark_manifest_has_18_single_dispatch_attempts(monkeypatch)
     import hmac
     import io
     import httpx2
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image
     from app import pilot_access
     from app.pilot import canonical
     from app.schemas.food_analysis import FoodAnalysisRequest
     from app.use_cases.food_analysis import FoodAnalysisUseCase
-    from tests.image_fixtures import make_valid_jpeg_bytes
     from tests.test_openai_api import _profile_provider, _profile_completion, _food_data
 
     manifest = json.loads((Path(__file__).parent / "fixtures/gpt54-mini-benchmark.v1.json").read_text())
@@ -282,18 +281,20 @@ def test_offline_benchmark_manifest_has_18_single_dispatch_attempts(monkeypatch)
                 if case["mode"] == "refinement":
                     payload["refinement"] = {**case["refinement"], "current_estimate": manifest["baseline"]}
                 elif case["mode"] in {"image", "label"}:
+                    asset = case["asset"]
+                    encoded = (Path(__file__).parent / "fixtures" / asset["file"]).read_bytes()
+                    assert hashlib.sha256(encoded).hexdigest() == asset["sha256"]
+                    assert len(encoded) <= 3 * 1024 * 1024
+                    with Image.open(io.BytesIO(encoded)) as photo:
+                        photo.load()
+                        assert list(photo.size) == asset["size"]
+                        assert max(photo.size) <= 1024 and not photo.getexif()
+                        assert photo.format == ("JPEG" if case["mode"] == "image" else "PNG")
                     if case["mode"] == "image":
-                        assert case["asset"]["required_before_live"]
-                        encoded = make_valid_jpeg_bytes()
+                        assert "expected" not in case
                         media_type = "image/jpeg"
                     else:
-                        label = Image.new("RGB", (800, 500), "white")
-                        draw = ImageDraw.Draw(label)
-                        draw.multiline_text((30, 30), "\n".join(case["label_lines"]), fill="black",
-                                            font=ImageFont.load_default(size=30), spacing=14)
-                        buffer = io.BytesIO()
-                        label.save(buffer, format="PNG")
-                        encoded, media_type = buffer.getvalue(), "image/png"
+                        media_type = "image/png"
                     payload["image"] = {"media_type": media_type, "data_base64": base64.b64encode(encoded).decode()}
                 identifier = operation(sequence=sequence)
                 envelope = {"aud": "fitness-gateway-pilot-v1", "issued": int(time.time()),

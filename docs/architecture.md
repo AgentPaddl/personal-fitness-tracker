@@ -137,9 +137,18 @@ model/deployment/price/cap binding; SDK responses with a different model/tier ar
 rejected, and raw-JSON usage avoids coerced token counts. The model-input maximum
 of 272,000 yields USD 0.2343 reserve, without claiming a tighter image bound.
 The [18-case offline manifest](../ai-gateway/tests/fixtures/gpt54-mini-benchmark.v1.json)
-and existing test suites exercise the path with mocks only. Six staged photo
-assets still require preparation/review; placeholder images prove transport, not
-nutrition quality. See the [isolated benchmark gates](operations-runbook.md#gpt-54-mini-local-profile-implementation-2026-09-18).
+and existing test suites exercise the path with mocks only. Six licensed public
+photo derivatives and two synthetic labels are now frozen with hashes and
+[provenance/uncertainty notes](../ai-gateway/tests/fixtures/gpt54-mini-assets/README.md).
+Three source photos do not constitute six independent meals or weighed nutrition
+ground truth. An Entra-only local runner, durable case mapping, restricted result
+artifacts, ARM attestation, opt-in real Table tests and isolated ARM lifecycle
+scripts are now implemented and offline-tested. Actual cloud authorization/ledger
+validation and any paid run still require separate approval. The runner is not a
+production provider activation or deployed HTTP-auth test; changing `APP_ENV` alone
+cannot satisfy its resource/identity/dataset checks. See the [execution procedure](../infra/benchmark/README.md)
+and [isolated benchmark gates](operations-runbook.md#gpt-54-mini-local-profile-implementation-2026-09-18)
+and [minimal resource proposal](operations-runbook.md#minimal-resource-proposal-for-approval-2026-09-18).
 Production denial, negative readiness, privacy/funding gates and variant B
 backend-only authorization prerequisites are unchanged. No paid run is approved.
 

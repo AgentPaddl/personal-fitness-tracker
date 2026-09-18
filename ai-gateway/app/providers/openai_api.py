@@ -10,6 +10,7 @@ import math
 import os
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -97,13 +98,18 @@ def _invalid_constant(value: str) -> None:
 
 class AzureOpenAIProvider(StructuredGenerationProvider):
     def __init__(
-        self, *, endpoint: str, api_key: str, model_routes: dict[str, str],
+        self, *, endpoint: str, api_key: str | None = None, model_routes: dict[str, str],
         max_output_tokens: int = 2000, prices: PriceTable | None = None,
         profile_bindings: dict[str, str] | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
+        token_provider: Callable[[], Awaitable[str]] | None = None,
+        dispatch_guard: Callable[[], None] | None = None,
     ):
         base_url = validate_endpoint(endpoint)
-        if not api_key.strip() or not model_routes or any(
+        if ((token_provider is None and (not isinstance(api_key, str) or not api_key.strip()))
+                or token_provider is not None and (api_key is not None or dispatch_guard is None)):
+            raise ValueError("Exactly one credential source and an Entra dispatch guard are required.")
+        if not model_routes or any(
             not _identifier(purpose) or not _identifier(deployment)
             for purpose, deployment in model_routes.items()
         ):
@@ -112,9 +118,11 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             raise ValueError("Output token limit must be between 1 and 32768.")
         self._profile_bindings = dict(profile_bindings or {})
         self._profiles = resolve_profiles(self._profile_bindings, model_routes, prices, max_output_tokens)
+        self._dispatch_guard = dispatch_guard
+        self._entra = token_provider is not None
         logging.getLogger("openai._base_client").disabled = True
         self._client = AsyncOpenAI(
-            api_key=api_key, base_url=base_url, max_retries=0,
+            api_key=token_provider if token_provider is not None else api_key, base_url=base_url, max_retries=0,
             organization="", project="",
             http_client=httpx2.AsyncClient(
                 transport=transport, follow_redirects=False, trust_env=False,
@@ -157,6 +165,10 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             if not math.isfinite(request.timeout_seconds) or request.timeout_seconds <= 0:
                 raise ProviderOutputInvalidError()
             effective_limit = min(limit or self._max_output_tokens, self._max_output_tokens)
+            if self._entra:
+                if not enabled() or profile is None:
+                    raise ServiceNotReadyError()
+                self._dispatch_guard()
             if enabled():
                 consume_permit(request, deployment=deployment, profile_id=profile.identifier if profile else None,
                                max_output_tokens=effective_limit,

@@ -1,0 +1,14 @@
+{
+  "subscription_id": "REPLACE_WITH_APPROVED_SUBSCRIPTION_UUID",
+  "tenant_id": "REPLACE_WITH_APPROVED_TENANT_UUID",
+  "operator_id": "REPLACE_WITH_SIGNED_IN_USER_OBJECT_UUID",
+  "run_id": "screening-01",
+  "account_name": "pftbenchREPLACE",
+  "storage_name": "pftbenchREPLACE",
+  "egress_ipv4": "REPLACE_WITH_SINGLE_PUBLIC_IPV4",
+  "created_at": 0,
+  "expires_at": 0,
+  "manifest_sha256": "e808a8ffc0545a213b37a82b36b3157abedafa69542abd88f2490b40ecf195c6",
+  "price_version": "azure-sweden-dz-2026-09-18-v1",
+  "capacity": 10
+}

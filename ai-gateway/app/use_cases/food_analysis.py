@@ -83,10 +83,10 @@ class FoodAnalysisUseCase:
                 await self._concurrency_limiter.release()
         return await self._execute_unlimited(request)
 
-    async def _execute_unlimited(self, request: FoodAnalysisRequest) -> FoodAnalysisResponse:
+    def build_generation_request(self, request: FoodAnalysisRequest) -> StructuredGenerationRequest:
         has_image = request.image is not None
         is_refinement = request.refinement is not None
-        generation_request = StructuredGenerationRequest(
+        return StructuredGenerationRequest(
             model_purpose=self._image_model_purpose if has_image else self._model_purpose,
             messages=[
                 GenerationMessage(
@@ -112,7 +112,8 @@ class FoodAnalysisUseCase:
             max_output_tokens=self._max_output_tokens,
         )
 
-        result = await self._generate_with_timeout(generation_request)
+    async def _execute_unlimited(self, request: FoodAnalysisRequest) -> FoodAnalysisResponse:
+        result = await self._generate_with_timeout(self.build_generation_request(request))
 
         try:
             estimate = FoodAnalysisEstimate.model_validate(result.data)

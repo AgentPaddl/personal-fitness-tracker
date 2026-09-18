@@ -1,0 +1,125 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "runId": {"type": "string", "minLength": 1, "maxLength": 24},
+    "accountName": {"type": "string"},
+    "storageName": {"type": "string"},
+    "operatorId": {"type": "string"},
+    "egressIPv4": {"type": "string"},
+    "expiresAt": {"type": "string"},
+    "manifestSha256": {"type": "string", "allowedValues": ["e808a8ffc0545a213b37a82b36b3157abedafa69542abd88f2490b40ecf195c6"]},
+    "capacity": {"type": "int", "minValue": 1, "maxValue": 10}
+  },
+  "variables": {
+    "groupName": "[concat('rg-pft-mini-bench-', parameters('runId'))]",
+    "tags": {
+      "purpose": "pft-public-benchmark",
+      "benchmarkRun": "[parameters('runId')]",
+      "manifestSha256": "[parameters('manifestSha256')]",
+      "expiresAt": "[parameters('expiresAt')]"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('groupName')]",
+      "location": "swedencentral",
+      "tags": "[variables('tags')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "[concat('pft-bench-', parameters('runId'))]",
+      "resourceGroup": "[variables('groupName')]",
+      "dependsOn": ["[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('groupName'))]"],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {"scope": "inner"},
+        "parameters": {
+          "accountName": {"value": "[parameters('accountName')]"},
+          "storageName": {"value": "[parameters('storageName')]"},
+          "operatorId": {"value": "[parameters('operatorId')]"},
+          "egressIPv4": {"value": "[parameters('egressIPv4')]"},
+          "capacity": {"value": "[parameters('capacity')]"},
+          "tags": {"value": "[variables('tags')]"}
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "accountName": {"type": "string"}, "storageName": {"type": "string"},
+            "operatorId": {"type": "string"}, "egressIPv4": {"type": "string"},
+            "capacity": {"type": "int"}, "tags": {"type": "object"}
+          },
+          "resources": [
+            {
+              "type": "Microsoft.CognitiveServices/accounts", "apiVersion": "2024-10-01",
+              "name": "[parameters('accountName')]", "location": "swedencentral", "kind": "OpenAI",
+              "sku": {"name": "S0"}, "tags": "[parameters('tags')]",
+              "properties": {
+                "customSubDomainName": "[parameters('accountName')]", "disableLocalAuth": true,
+                "publicNetworkAccess": "Enabled",
+                "networkAcls": {"defaultAction": "Deny", "bypass": "None", "virtualNetworkRules": [],
+                                "ipRules": [{"value": "[parameters('egressIPv4')]"}]}
+              }
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/deployments", "apiVersion": "2024-10-01",
+              "name": "[concat(parameters('accountName'), '/mini-bench')]",
+              "dependsOn": ["[resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName'))]"],
+              "sku": {"name": "DataZoneStandard", "capacity": "[parameters('capacity')]"},
+              "properties": {"model": {"format": "OpenAI", "name": "gpt-5.4-mini", "version": "2026-03-17"},
+                             "versionUpgradeOption": "NoAutoUpgrade"}
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts", "apiVersion": "2023-05-01",
+              "name": "[parameters('storageName')]", "location": "swedencentral", "kind": "StorageV2",
+              "sku": {"name": "Standard_LRS"}, "tags": "[parameters('tags')]",
+              "properties": {
+                "allowSharedKeyAccess": false, "allowBlobPublicAccess": false,
+                "supportsHttpsTrafficOnly": true, "minimumTlsVersion": "TLS1_2", "publicNetworkAccess": "Enabled",
+                "encryption": {"keySource": "Microsoft.Storage", "services": {"table": {"enabled": true, "keyType": "Account"}}},
+                "networkAcls": {"defaultAction": "Deny", "bypass": "None", "virtualNetworkRules": [],
+                                "ipRules": [{"value": "[parameters('egressIPv4')]", "action": "Allow"}]}
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices", "apiVersion": "2023-05-01",
+              "name": "[concat(parameters('storageName'), '/default')]", "properties": {},
+              "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts', parameters('storageName'))]"]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables", "apiVersion": "2023-05-01",
+              "name": "[concat(parameters('storageName'), '/default/MiniBenchmark')]", "properties": {},
+              "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageName'), 'default')]"]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('operatorId'), 'benchmark-reader')]",
+              "properties": {"principalId": "[parameters('operatorId')]", "principalType": "User",
+                             "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')]"}
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('operatorId'), 'benchmark-inference')]",
+              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName'))]",
+              "dependsOn": ["[resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName'))]"],
+              "properties": {"principalId": "[parameters('operatorId')]", "principalType": "User",
+                             "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]"}
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('operatorId'), 'benchmark-ledger')]",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageName'), 'default', 'MiniBenchmark')]",
+              "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageName'), 'default', 'MiniBenchmark')]"],
+              "properties": {"principalId": "[parameters('operatorId')]", "principalType": "User",
+                             "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')]"}
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

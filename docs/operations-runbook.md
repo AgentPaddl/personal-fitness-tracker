@@ -458,12 +458,16 @@ remain supported, but are not authorization for this 18-attempt benchmark.
 #### Offline preparation and isolated real-run prerequisites
 
 The [versioned manifest](../ai-gateway/tests/fixtures/gpt54-mini-benchmark.v1.json)
-fixes 6 text, 6 staged-image, 4 refinement and 2 rendered-label cases, references,
+fixes 6 text, 6 public-photo, 4 refinement and 2 rendered-label cases, references,
 tolerances and result fields. Refinements use a fixed baseline, never a paid setup
-call. The offline test renders labels locally and substitutes existing synthetic
-image bytes for P1-P6 solely for transport checks. **Those six reviewed staged
-photos and their hashes are still required before a quality benchmark.** Freeze
-all fixture/prompt/schema hashes, dimensions and label readability before funding.
+call. All eight image assets are now local and hash-bound; the offline test checks
+their full decode, format, dimensions and missing EXIF and uses their real bytes.
+See [sources, attribution, transformations and nutrition uncertainty](../ai-gateway/tests/fixtures/gpt54-mini-assets/README.md).
+The six photo inputs derive from three public photos, not six independent meals.
+Their weights/recipes are unknown, so they have **no numeric nutrition ground
+truth**. Numerical scoring is restricted to declared text/refinement/label
+references. Assets and labels were visually inspected, not evaluated by a model.
+Freeze final manifest/prompt/schema hashes and obtain owner approval before funding.
 
 Offline check, from `ai-gateway/`, with the existing test environment:
 
@@ -478,8 +482,10 @@ duplicate rejection, rejection of a 19th attempt, and summed reserves of
 real identity authorization, photo quality, nutrition quality or latency.
 
 A later genuine benchmark must use a **separately authorized, isolated nonproduction
-environment**, not relabel a production service as development. Preserve the
-regular authenticated backend -> gateway -> Coordinator -> adapter path:
+environment**, not relabel a production service as development. The existing
+supported service topology preserves the regular authenticated backend -> gateway
+-> Coordinator -> adapter path. The local-only runner below is implemented but
+not cloud-approved and cannot be enabled through test dependency overrides:
 
 1. Obtain resource/funding/privacy approval and review endpoint, exact deployed
    version, Sweden Central DataZoneStandard, ordinary tier, all rates and expiring
@@ -516,6 +522,116 @@ regular authenticated backend -> gateway -> Coordinator -> adapter path:
    reasoning, usage completeness, actual known cost and retained reserve separately;
    include failures in spend and cost per usable estimate. Unknown is never zero.
    No result or measured-quality claim is supplied by this offline package.
+
+#### Minimal resource proposal for approval (2026-09-18)
+
+**Implemented locally, not authorized for cloud execution:** this one-owner
+screening CLI uses normal Microsoft Entra login, the existing use-case request
+builder/Coordinator/adapter and real Azure Table transactions. See the
+[exact setup, run, review and cleanup procedure](../infra/benchmark/README.md).
+It needs no hosted backend, Functions, Container Apps, ACR, Foundry project,
+Application Insights, Log Analytics or VM. It is not a deployed API/end-to-end
+Easy Auth benchmark. Production, iOS, build numbers and readiness remain unchanged.
+If the full authenticated HTTP chain must be measured, retain the service topology
+above and approve its additional hosting separately; do not claim the CLI tests it.
+
+Microsoft documents [developer-account AzureCliCredential authentication](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/local-development-dev-accounts),
+[Entra bearer-token providers for the Azure OpenAI v1 endpoint](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/switching-endpoints)
+and [user/MI Table access with table-scoped RBAC](https://learn.microsoft.com/en-us/azure/storage/tables/authorize-access-azure-active-directory).
+The new local runner uses an explicitly bound AzureCliCredential with a token
+callback, without stored application credentials. The ordinary server settings
+still require their existing credentials, and `AzureTableStore.connect` retains
+ManagedIdentityCredential. The runner constructs its separate checked Entra client;
+it does not override server dependencies or impersonate Easy Auth. Do not paste an
+access token into the API-key setting, use connection strings/SAS, fake Easy Auth
+headers, set auth bypass flags, or use MemoryCAS against a paid provider.
+
+Proposed inventory (names are suggestions; availability and policy unchecked):
+
+| Resource | Proposed configuration |
+| --- | --- |
+| Resource group | `rg-pft-mini-bench-<run_id>`, Sweden Central, isolated from all app/production resources; purpose/run/manifest/expiry tags |
+| Azure OpenAI account | One `Microsoft.CognitiveServices/accounts`, kind `OpenAI`, S0, unique custom subdomain, local/key authentication disabled |
+| Model deployment | One deployment `mini-bench`, `gpt-5.4-mini` version `2026-03-17`, `DataZoneStandard`, ordinary/default tier, no PTU reservation; pin version and disable automatic upgrade where supported |
+| Deployment quota | Propose capacity 10 units, subject to current ARM model metadata, minimum/increment rules and subscription quota; record the actual TPM/RPM conversion. It is a throughput allocation, not a spend cap; do not silently increase or switch SKU/region/model |
+| Ledger storage | One StorageV2 `Standard_LRS` account with a unique name, Sweden Central, one `MiniBenchmark` Azure Storage Table, TLS 1.2+, HTTPS only, Shared Key and public blob access disabled, Microsoft-managed encryption |
+| Data permissions | The approved Entra operator gets `Cognitive Services OpenAI User` at this account, `Storage Table Data Contributor` at this table, and resource-group Reader for attestation; no new subscription-wide role. Provisioning permissions are separate. Review inherited privileges; an owner can override client-side controls |
+| Network | Both data endpoints default-deny; allow only the operator's current single public IPv4 address, no trusted-service blanket bypass. No inbound laptop listener or public application API |
+
+The network option needs **explicit approval as an isolated benchmark exception**
+to any private-only requirement. [Storage IP rules](https://learn.microsoft.com/en-us/azure/storage/common/storage-network-security-ip-address-range)
+and [Azure OpenAI network ACLs](https://learn.microsoft.com/en-us/azure/ai-services/cognitive-services-virtual-networks)
+support this, but it is still a public service endpoint with restricted ingress,
+not Private Link. Use an individual-address rule, not a `/32` range; stop on an
+egress-IP change, never broaden the rule automatically. If private-only access is
+mandatory, stop this proposal and separately cost a VNet, Table/OpenAI private
+endpoints, DNS and a VPN/existing private route or temporary MI compute. Those
+resources are not implicitly approved here.
+
+Implemented: pinned dataset/asset verification, real-resource/price attestation,
+checked Entra identity/token callbacks, atomic initialization of 18 immutable
+case/UUIDv7 mappings, exclusive durable claims, lifetime Coordinator limits,
+exclusive fsynced local results and structured human-review sidecars. A restarted
+or competing runner cannot take over a `busy` case, and all earlier result hashes
+must still be present. Unknowns and errors halt the run. No reset, replacement-ID,
+automatic retry or tombstone cleanup is exposed by the runner. Normal server
+authentication, production denial and negative readiness are unchanged.
+
+Remaining live gates: owner topology/cost/privacy approval; completed immutable
+approval JSON and real Entra login; actual ARM/quota/network/RBAC validation;
+the separately enabled real Table suite (no model calls); one-time approved
+ledger initialization; then separate authorization for the first paid manifest
+case, including live model/tier/usage confirmation within the 18-attempt limit.
+Offline tests do not establish live Azure availability or nutrition quality.
+
+All existing admission rules still apply: one approved operator, global/person
+limits at most 18, concurrency 1, output cap 2,000, lifetime reserve at most
+USD 4.2174, no retries, repairs, replacement cases, warmups or LLM judge. Schedule
+serially within the attested RPM/TPM; a 429 is not permission for a replacement
+attempt. The first real manifest case is also the compatibility check and consumes
+one of the 18 attempts. Approve an admission window of at most 24 hours and an
+expiring deployment attestation; never extend it automatically. If compatibility
+or cost metadata fails, stop without trying to finish all 18.
+
+**Costs, separately approved:**
+
+| Category | Planning amount and limit |
+| --- | --- |
+| One-time model reserve | USD **4.2174** = 18 x 0.2343 under the pinned rates/input/output bounds, not expected actual consumption or an Azure invoice spending limit. Actual valid usage is settled once; reasoning is part of output and images part of input |
+| Table Standard LRS retail example | EUR 0.0386/GB-month and EUR 0.0003/10K for each read/write/batch-write/delete/list/scan meter. A deliberately generous 1 GB-month plus 10K of each operation category is **EUR 0.0404** |
+| Account-encrypted LRS alternative meters | EUR 0.0502/GB-month; read 0.0056, write 0.0279, batch 0.0837, delete 0, list/scan 0.1005 each per 10K. The same generous example is **EUR 0.3684**. Confirm which encryption-meter SKU applies before approval; encryption at rest is required in either case |
+| Other charges | Storage transactions for preflight/initialization/reconciliation, retained ledger capacity and outbound network transfer; no hosted compute, registry, VPN/private endpoint or log-ingestion resource in this option. Do not assume free bandwidth tiers or omit retained storage |
+| Proposed ancillary envelope | **EUR 1** for this run and at least 31 days of tiny ledger retention after closure, subject to final SKU/network quote. This is an operator planning allowance, not an Azure hard stop; Cost Management alerts are delayed and not enforcement |
+
+Storage figures were read from the public Azure Retail Prices API on 2026-09-18:
+`currencyCode='EUR'`, region `swedencentral`, service `Storage`, product `Tables`,
+Consumption, Standard LRS / Account Encrypted LRS (complete response, no next page).
+Standard capacity meter `93e9cbca-b51e-5af9-bea0-269793096797`, read meter
+`12da282f-7e96-49e2-983a-9a65da2a4866`, batch meter
+`b9e5e77c-a0b3-4a2c-9b8b-57fa54f31c52`; effective 2021-06-08.
+Revalidate at approval. Public retail examples are not the subscription's invoice
+quote. USD model amounts and EUR infrastructure amounts must not be added without
+the applicable billing exchange rate; tax, FX and contractual adjustments are
+separate. No model quality/latency or measured cost claim is made.
+
+**Cleanup:** close admission on completion, any stop condition or expiry; remove
+inference permission and delete the model deployment/account after collecting
+nonsecret attestation evidence. Retain the ledger, run identity, consumed attempt
+totals and unknown reservations for reconciliation. Restrict the retained account
+to the approved owner/reviewer; this local topology uses the same principal for
+running and review. Do not blanket-delete the RG
+while it contains unresolved operations. At the approved retention boundary,
+reconcile or explicitly approve archival/destruction with a permanently closed
+run record; if unknowns remain, extend retention/cost approval, not the attempt
+budget. Only then remove the Table/storage, remaining RBAC/network rules and RG.
+Destroy local temporary auth material through normal logout/credential handling;
+never print it. Keep licensed public fixtures and nonsecret review documentation.
+
+Approval must cover the local-only auth/topology exception, IP restriction, exact
+resources/roles, final attestation, 18-attempt manifest and expiry, USD model and
+EUR ancillary envelopes, and retention/cleanup. Local implementation and offline
+validation are complete; cloud provisioning and the paid run require explicit
+authorization. **No resources or paid calls were created by this preparation.**
 
 ### Atomicity, operations and failures
 

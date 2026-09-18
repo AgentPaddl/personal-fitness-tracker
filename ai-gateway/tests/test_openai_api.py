@@ -27,6 +27,46 @@ def _local_adapter_environment(monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
 
 
+def test_entra_requires_independent_dispatch_guard():
+    async def token():
+        pytest.fail("Credential must not be requested")
+
+    with pytest.raises(ValueError):
+        AzureOpenAIProvider(endpoint="https://benchmark.openai.azure.com", model_routes={"text": "mini"},
+                            token_provider=token)
+
+
+@pytest.mark.parametrize("environment", ["production", "development"])
+def test_entra_cannot_dispatch_by_renaming_environment(monkeypatch, environment):
+    monkeypatch.setenv("APP_ENV", environment)
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    calls = []
+
+    async def token():
+        calls.append("token")
+        return "not-a-real-token"
+
+    def denied():
+        raise ServiceNotReadyError()
+
+    async def run():
+        provider = AzureOpenAIProvider(
+            endpoint="https://benchmark.openai.azure.com", model_routes={"purpose-test": "mini"},
+            token_provider=token, dispatch_guard=denied,
+            prices=PriceTable(version=GPT_54_MINI.price_version, currency="USD", deployments={"mini": GPT_54_MINI.price}),
+            profile_bindings={"mini": GPT_54_MINI.identifier},
+            transport=httpx2.MockTransport(lambda request: calls.append("dispatch")),
+        )
+        try:
+            with pytest.raises(ServiceNotReadyError):
+                await provider.generate(_request())
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert calls == []
+
+
 @pytest.mark.parametrize("app_env", ["production", None, "staging"])
 @pytest.mark.parametrize("profile", [False, True])
 def test_direct_generation_enforces_local_only_guard(monkeypatch, app_env, profile):
