@@ -133,6 +133,249 @@ def test_table_sdk_calls_budget_before_transport(monkeypatch, tmp_path):
     asyncio.run(run())
 
 
+def test_benchmark_table_preserves_safe_auth_diagnostic(caplog):
+    from azure.core.exceptions import HttpResponseError
+    from app.benchmark_azure import BenchmarkTableStore
+    from app.benchmark_diagnostics import BenchmarkDiagnostics
+
+    class Client:
+        async def get_entity(self, *args, **kwargs):
+            error = HttpResponseError(message="private-token-and-resource")
+            error.status_code = 403
+            raise error
+
+    async def run():
+        diagnostics = BenchmarkDiagnostics()
+        store = BenchmarkTableStore(Client(), diagnostics=diagnostics)
+        with pytest.raises(PilotError) as failed:
+            await store.read("ledger")
+        assert failed.value.code == "pilot_unavailable"
+        assert diagnostics.snapshot()["failures"] == [{
+            "stage": "preflight", "action": "table_read", "target": "ledger",
+            "category": "http_auth", "http_status": 403}]
+        assert "private-token-and-resource" not in json.dumps(diagnostics.snapshot())
+    asyncio.run(run())
+    assert "private-token-and-resource" not in caplog.text
+
+
+@pytest.mark.parametrize("failure,category,attempts", [
+    ("read403", "http_auth", 0), ("read429", "http_throttled", 0),
+    ("read_timeout", "timeout", 0), ("read_payload", "table_local_error", 0),
+    ("write503", "http_service", 0), ("cas409", "cas_exhausted", 0),
+    ("cas412", "cas_exhausted", 0), ("lost_ack", "transport", 1),
+])
+def test_benchmark_admission_diagnostics_and_reserves(tmp_path, failure, category, attempts, caplog):
+    from azure.core.exceptions import HttpResponseError, ResourceNotFoundError, ServiceResponseError
+    from app.benchmark_diagnostics import BenchmarkTableStore
+
+    class Entity(dict):
+        pass
+
+    class Client:
+        def __init__(self):
+            self.memory = MemoryCAS()
+            self.injected = False
+            self.reserve_writes = 0
+
+        def http_failure(self, status):
+            error = HttpResponseError(message="private-resource-and-token")
+            error.status_code = status
+            return error
+
+        async def get_entity(self, partition, key, **kwargs):
+            if key == "ledger" and failure.startswith("read") and not self.injected:
+                self.injected = True
+                if failure == "read_timeout":
+                    raise TimeoutError("private-resource-and-token")
+                if failure == "read_payload":
+                    return Entity(data="not-json-private-resource-and-token")
+                raise self.http_failure(int(failure[-3:]))
+            data, etag = await self.memory.read(key)
+            if data is None:
+                raise ResourceNotFoundError()
+            entity = Entity(data=json.dumps(data))
+            entity.metadata = {"etag": etag}
+            return entity
+
+        async def submit_transaction(self, operations, **kwargs):
+            changes = [(item[1]["RowKey"], json.loads(item[1]["data"]),
+                        item[2]["etag"] if len(item) > 2 else None) for item in operations]
+            reserving = any(data.get("state") == "pending" for _, data, _ in changes)
+            if reserving:
+                self.reserve_writes += 1
+                if failure.startswith("cas") or failure == "write503":
+                    raise self.http_failure(int(failure[-3:]))
+            await self.memory.commit(changes)
+            if reserving and failure == "lost_ack":
+                raise ServiceResponseError("private-resource-and-token")
+
+    class Provider:
+        calls = 0
+
+        async def generate(self, request):
+            self.calls += 1
+            raise AssertionError("No provider invocation permitted")
+
+    async def run():
+        client, provider, config = Client(), Provider(), approval()
+        store = BenchmarkTableStore(client)
+        _, cases = load_cases()
+        state = RunState(store, make_coordinator(store, config), config, cases)
+        await state.initialize()
+        result = await run_one(state, provider, {}, tmp_path / "results")
+        assert provider.calls == 0
+        assert result["status"] == "halted" and result["error"] == "pilot_unavailable"
+        assert result["provider_invoked"] is False
+        assert result["reserve_exposure_usd"] == "0.2343"
+        assert result["diagnostics"]["failures"][-1]["category"] == category
+        assert result["diagnostics"]["failures"][-1]["stage"] == "reserve"
+        assert client.reserve_writes == (3 if failure.startswith("cas") else 0 if failure.startswith("read") else 1)
+        ledger, _ = await client.memory.read("ledger")
+        assert ledger["benchmark"]["attempts"] == attempts
+        if failure == "lost_ack":
+            assert ledger["active"] and result["retained_reserve_usd"] == "0.2343"
+        with pytest.raises(PilotError):
+            await state.claim()
+        assert "private-resource-and-token" not in json.dumps(result)
+    asyncio.run(run())
+    assert "private-resource-and-token" not in caplog.text
+
+
+def test_credential_failure_diagnostic_is_bounded_and_private(monkeypatch):
+    from app.benchmark_azure import CheckedCredential
+    from app.benchmark_diagnostics import BenchmarkDiagnostics
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    monkeypatch.setenv("AZURE_CONFIG_DIR", "/offline-unused")
+
+    class Credential:
+        async def get_token(self, *args, **kwargs):
+            raise RuntimeError("private-tenant-token")
+
+    diagnostics = BenchmarkDiagnostics()
+    credential = CheckedCredential(Credential(), approval(), diagnostics=diagnostics)
+
+    async def run():
+        for _ in range(12):
+            with pytest.raises(PilotError):
+                await credential.get_token("https://storage.azure.com/.default")
+    asyncio.run(run())
+    record = diagnostics.snapshot()
+    assert record["failure_count"] == 12 and len(record["failures"]) == 8
+    assert all(item["category"] == "credential_acquisition" and item["target"] == "storage"
+               for item in record["failures"])
+    assert "private-tenant-token" not in json.dumps(record)
+
+
+def test_table_deadline_diagnostic_does_not_hide_cancellation(monkeypatch):
+    from app.benchmark_diagnostics import BenchmarkTableStore
+    from app import pilot_table
+
+    class Client:
+        async def get_entity(self, *args, **kwargs):
+            await asyncio.Future()
+
+    timeout = asyncio.timeout
+    monkeypatch.setattr(pilot_table.asyncio, "timeout", lambda seconds: timeout(.001))
+
+    async def run():
+        store = BenchmarkTableStore(Client())
+        with pytest.raises(PilotError):
+            await store.read("ledger")
+        assert store.diagnostics.snapshot()["failures"][-1]["category"] == "cancelled_or_deadline"
+    asyncio.run(run())
+
+
+def test_benchmark_table_disables_implicit_auth_challenge(monkeypatch, tmp_path):
+    from app.benchmark_azure import AzureBenchmark
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    monkeypatch.setenv("AZURE_CONFIG_DIR", "/offline-unused")
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+
+    async def run():
+        async with AzureBenchmark(approval()) as azure:
+            azure.attested_at = time.monotonic()
+            store = azure.store()
+            try:
+                policies = [getattr(item, "_policy", item)
+                            for item in store.client._client._client._pipeline._impl_policies]
+                auth = next(policy for policy in policies if type(policy).__name__ == "_FixedBearerTokenPolicy")
+                assert not any(type(policy).__name__ == "AsyncBearerTokenChallengePolicy" for policy in policies)
+                assert await auth.on_challenge(None, None) is False
+            finally:
+                await store.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", [401, 403, 503])
+def test_benchmark_sdk_sends_once_and_records_status(tmp_path, monkeypatch, status, caplog):
+    from azure.core.credentials import AccessToken
+    from azure.core.pipeline.transport import AsyncHttpResponse, AsyncHttpTransport
+    from app.benchmark_azure import TableRequestBudget
+    from app.benchmark_diagnostics import BenchmarkTableClient, BenchmarkTableStore
+    from app.pilot_table import _sdk_logger
+
+    class Credential:
+        calls = 0
+
+        async def get_token(self, *args, **kwargs):
+            self.calls += 1
+            return AccessToken("synthetic-private-token", 2000000000)
+
+    class Response(AsyncHttpResponse):
+        def __init__(self, request):
+            super().__init__(request, None)
+            self.status_code = status
+            self.reason = "synthetic-private-diagnostic"
+            self.headers = {"Content-Type": "application/json", "WWW-Authenticate":
+                            'Bearer authorization_uri="https://login.microsoftonline.com/private-tenant", resource_id="https://storage.azure.com"'}
+            self.content_type = "application/json"
+
+        def body(self):
+            return b'{"odata.error":{"code":"Synthetic","message":{"value":"synthetic-private-body"}}}'
+
+        async def load_body(self):
+            pass
+
+    class Transport(AsyncHttpTransport):
+        calls = 0
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            pass
+
+        async def __aexit__(self, *args):
+            await self.close()
+
+        async def send(self, request, **kwargs):
+            self.calls += 1
+            return Response(request)
+
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval())
+    budget.initialize()
+    credential, transport = Credential(), Transport()
+    caplog.set_level(logging.DEBUG)
+
+    async def run():
+        async with BenchmarkTableClient("https://offline.table.core.windows.net", "MiniBenchmark", credential=credential,
+                                        transport=transport, retry_total=0, redirect_max=0, raw_request_hook=budget,
+                                        logger=_sdk_logger, logging_enable=False, tracing_enable=False) as client:
+            store = BenchmarkTableStore(client)
+            with pytest.raises(PilotError):
+                await store.read("ledger")
+            diagnostic = store.diagnostics.snapshot()
+            assert diagnostic["failures"][-1]["http_status"] == status
+            assert "private" not in json.dumps(diagnostic)
+    asyncio.run(run())
+    assert credential.calls == transport.calls == 1
+    assert budget.filename.read_text().splitlines()[1:] == ["1"]
+    assert "synthetic-private" not in caplog.text and "private-tenant" not in caplog.text
+
+
 @pytest.mark.parametrize("failure", ["missing", "truncated", "permissions", "hardlink", "symlink", "limit", "locked"])
 def test_table_budget_never_resets_or_dispatches_invalid_counter(monkeypatch, tmp_path, failure):
     import fcntl
@@ -179,6 +422,106 @@ def test_frozen_public_requests_are_complete():
     assert len(cases) == manifest["max_attempts"] == 18
     assert sum(bool(request.attachments) for case, request in cases) == 8
     assert all(request.max_output_tokens == 2000 for case, request in cases)
+
+
+@pytest.fixture
+def closed_benchmark_evidence(monkeypatch, tmp_path):
+    import hashlib
+    from app import benchmark
+    from app.providers.base import GenerationMetadata, StructuredGenerationResult, TokenUsage
+    from tests.test_openai_api import _food_data
+
+    clock = [time.time()]
+    monkeypatch.setattr(benchmark.time, "time", lambda: clock[0])
+    config = approval().model_copy(update={"expires_at": int(clock[0]) + 86399})
+    directory = tmp_path / "evidence"
+    directory.mkdir(mode=0o700)
+    (directory / "approval.json").write_text(config.model_dump_json())
+
+    class Provider:
+        async def generate(self, request):
+            data = {**_food_data(), "protein_grams": 20.2}
+            return StructuredGenerationResult(data, GenerationMetadata(
+                "azure_openai", "mini-bench", GPT_54_MINI.price.model, None, 1, "success", TokenUsage(100, 20, 0, 0),
+                price_version=GPT_54_MINI.price_version, profile_id=GPT_54_MINI.identifier, service_tier="default"))
+
+    async def run():
+        store = MemoryCAS()
+        _, cases = load_cases()
+        control = make_coordinator(store, config)
+        control.clock = lambda: clock[0]
+        state = RunState(store, control, config, cases)
+        await state.initialize()
+        for _ in range(4):
+            await run_one(state, Provider(), {}, directory / "results" / config.run_id)
+            clock[0] += 61
+
+        async def denied(*args, **kwargs):
+            raise PilotError()
+
+        monkeypatch.setattr(control, "reserve", denied)
+        await run_one(state, Provider(), {}, directory / "results" / config.run_id)
+        run, run_etag = await store.read("benchmark")
+        ledger, ledger_etag = await store.read("ledger")
+        run.update(state="closed", closed_at=int(clock[0]), purge_after=int(clock[0]) + 2678400)
+        ledger["blocked"] = True
+        await store.commit([("benchmark", run, run_etag), ("ledger", ledger, ledger_etag)])
+        records = [{"key": key, "data": data} for key, (data, _) in sorted(store.rows.items())]
+        (directory / "closed-ledger-snapshot.json").write_text(json.dumps({"records": records}))
+        return state.binding
+
+    binding = asyncio.run(run())
+    (directory / "control").mkdir()
+    (directory / "control/offline-table-requests.log").write_text(benchmark.sha(config.model_dump(mode="json")) + "\n100\n1\n")
+    hashes = {str(filename.relative_to(directory)): hashlib.sha256(filename.read_bytes()).hexdigest()
+              for filename in directory.rglob("*") if filename.is_file()}
+    (directory / "analysis-baseline.json").write_text(json.dumps({
+        "artifact_sha256": hashes, "binding": binding, "code_hash": benchmark.code_hash()}))
+    return directory
+
+
+@pytest.mark.parametrize("mutation", ["none", "result", "counter_truncated", "counter_exhausted", "attempt_reset", "t2_reclassified"])
+def test_continuation_plan_carries_parent_limits(closed_benchmark_evidence, mutation):
+    import hashlib
+    from app.benchmark_continuation import PRIORITY, continuation_plan
+    directory = closed_benchmark_evidence
+    counter = directory / "control/offline-table-requests.log"
+    if mutation == "result":
+        (directory / "results/offline/T5.json").write_text("{}")
+    elif mutation == "counter_truncated":
+        counter.write_text(counter.read_text().splitlines()[0] + "\n")
+    elif mutation == "counter_exhausted":
+        with counter.open("a") as output:
+            output.write("1000\n" * 40)
+    elif mutation in {"attempt_reset", "t2_reclassified"}:
+        name = "closed-ledger-snapshot.json" if mutation == "attempt_reset" else "results/offline/T2.json"
+        filename = directory / name
+        data = json.loads(filename.read_text())
+        if mutation == "attempt_reset":
+            next(record["data"] for record in data["records"] if record["key"] == "ledger")["benchmark"]["attempts"] = 0
+        else:
+            data["quality"]["arithmetic"]["protein_grams"] = True
+        filename.write_text(json.dumps(data))
+        baseline_file = directory / "analysis-baseline.json"
+        baseline = json.loads(baseline_file.read_text())
+        baseline["artifact_sha256"][name] = hashlib.sha256(filename.read_bytes()).hexdigest()
+        baseline_file.write_text(json.dumps(baseline))
+    if mutation != "none":
+        with pytest.raises(PilotError):
+            continuation_plan(directory)
+        return
+    with counter.open("a") as output:
+        output.write("1\n")
+    plan = continuation_plan(directory)
+    assert plan["execution_authorized"] is False and plan["original_run_must_remain_closed"] is True
+    assert plan["aggregate"]["consumed_case_slots"] == 5
+    assert plan["aggregate"]["max_additional_cases"] == 13
+    assert plan["aggregate"]["t5_held_reserve_usd"] == "0.2343"
+    assert plan["aggregate"]["total_budget_eur"] == "10.00"
+    assert plan["aggregate"]["technical_reserve_usd"] == "1.1715"
+    assert [item["case_id"] for item in plan["queue"]] == list(PRIORITY)
+    assert len({item["case_id"] for item in plan["queue"]}) == 13
+    assert plan["table_counter"]["requests"] == 3
 
 
 def test_claim_race_restart_and_reinitialization_fail_closed():

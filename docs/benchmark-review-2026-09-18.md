@@ -7,7 +7,62 @@ were made for this review. Production, iOS, use-case prompts and the frozen
 Original approval, resource identifiers, requests/results and live control data
 remain outside Git in the private run directory.
 
-## T5: no dispatch, exact admission error unresolved
+## T5: revised evidence assessment
+
+This reassessment supersedes the earlier unconditional no-dispatch conclusion and
+local reserve release. Original private results and the first reconciliation stay
+unchanged. Planning again holds **USD 0.2343 for T5** and five consumed case slots.
+
+### Direct historical evidence
+
+- The closed snapshot has four attempts, USD 0.9372 lifetime reservation, four
+  settled operations, no active operation and a finished T5. T5 records
+  `pilot_unavailable`, no provider metadata and no operation record.
+- Its times are 264.686 ms admission and 264.683 ms total. No explicit historical
+  provider-entry marker, Table HTTP status or token-failure category was captured.
+- The append-only Table log has 429 admissions / 15,720 weighted units. Entries
+  338-354, 355-372, 373-391 and 392-411 match the complete successful T1-T4 sequences.
+  T5's tail is seven point requests, one batch, five point requests, one batch
+  (412-425), followed by closure/snapshot (426-429). These are weights, not URLs,
+  request IDs, response codes or timestamps.
+- Original artifact hashes and archived source still match the baseline. These
+  establish consistency, not externally signed provenance or an independent
+  audit of every possible out-of-band action.
+
+### Code-based conclusions
+
+The bound Coordinator requires an acknowledged atomic ledger increment/operation
+creation, followed by `mark_dispatched`, before provider entry. Settlement and
+closure never reduce lifetime attempts. Under the documented no-reset/no-cleanup
+history, four retained attempts are independent evidence against a fifth dispatch
+through this code, not merely an absent response or operation record.
+
+Assuming the documented single-writer sequence, entry 419 maps to T5 claim, 420
+to the first admission read, 421-424 to accounting/finish reads and 425 to finish.
+There is no reservation or dispatch-marker batch. This supports failure around
+ledger read/validation or before a subsequent request reached its hook. It is a
+sequence reconstruction, not a directly recorded URL. Three actual HTTP CAS
+conflicts would require three batches and do not fit the preserved sequence.
+
+The monotonic timing argument below corroborates these independent control and
+counter observations; the **0.003-ms difference is not the sole basis**. It is not
+treated as a packet receipt or a provider-issued no-dispatch statement.
+
+### Reproduction and uncertainty
+
+Archived-code replay reproduced the timing relation with zero fake-provider calls
+before entry and one after entry. In-memory admission from the saved state passed
+with only the closure block removed. New fault injection covers Table 403/429,
+timeout, malformed entity, 503 write, 409/412 exhaustion and lost acknowledgement
+after a committed reservation. The latter retains its attempt/reserve without
+provider entry. These prove implementation behavior, not Azure's historical reply.
+
+Conclusion: pre-provider admission failure is strongly supported. An independent
+historical transport audit and a request-correlated Table response are unavailable,
+and the log interpretation assumes the documented writer history. Retain T5's full
+reserve for future planning instead of claiming independently measured zero cost.
+
+### Earlier timing analysis (historical)
 
 The previous report conservatively retained USD 0.2343 because T5 had neither
 provider metadata nor an operation record. Those absences alone are insufficient
@@ -32,12 +87,10 @@ to conclude no dispatch. The additional positive evidence is:
    with zero calls. An error after adapter entry records admission <= total and
    one fake call. The actual requests are never sent anywhere.
 
-Together these exclude entry into the model adapter for T5 under the verified
-runtime/evidence, rather than infer it from missing billing or response data.
-The derived `analysis-reconciliation.json` releases only the **local USD 0.2343
-exposure allowance**. It does not edit the original T5 result, approval, ledger,
-case state or counters. Four model dispatches remain confirmed; T5 remains a
-failed, consumed technical case with no answer, not a successful zero-cost result.
+The first derived `analysis-reconciliation.json` released the local USD 0.2343
+allowance on this reasoning. That decision is superseded above without rewriting
+the artifact. Four dispatches remain confirmed; T5 stays a failed consumed case
+with a full prospective uncertainty allowance again in the continuation plan.
 
 ### Cause boundaries
 
@@ -48,14 +101,23 @@ failed, consumed technical case with no answer, not a successful zero-cost resul
 | Local Table quota | Entire preserved log, including later closure, totals 429 requests / 15,720 units, below 2,500 / 40,000 normal limits. Quota exhaustion is unsupported; the log has no per-request status or timestamps. |
 | Request/profile/identity/UUID | Exact T5 request and policy binding reconstruct successfully; input/output bounds and UUID age validate. In-memory reservation using the saved ledger with only the closure block removed succeeds. This tests configuration, not the historical service response. |
 | Approval/deadline | T5 attestation is 16:15:40 UTC; approval expires 20:03:49 UTC. Ledger `last_time` is 16:14:19.829401 UTC. Ordinary expiry is excluded by observed times; an unsampled backwards wall-clock jump during reservation cannot be strictly excluded. |
-| ARM/model authentication | Fresh ARM/resource/price attestation returned before claim. Model-token acquisition and adapter dispatch guards were never entered. The earlier CLI tenant-plus-subscription incompatibility had been fixed before initialization, and four calls subsequently succeeded. |
-| Table access/auth/transaction | A transient read/commit failure, storage-token/RBAC/network failure, or exhausted CAS conflict loop remains possible. Table exceptions were reduced to `pilot_unavailable`; no HTTP status or failing-step evidence survives. |
+| ARM/model authentication | Fresh ARM/resource/price attestation returned before claim. Under the bound-code inference, model-token acquisition and adapter dispatch guards were not entered. The earlier CLI tenant-plus-subscription incompatibility had been fixed before initialization, and four calls subsequently succeeded. |
+| Table access/auth/transaction | Read/response/decode/guard failure or pre-hook auth failure is compatible. Three actual HTTP CAS conflicts do not fit the batch sequence under the documented writer history. No historical status/response survives. |
 
-The failure is before provider entry, in Coordinator admission/reservation. No T5
+The evidence points before provider entry, in Coordinator admission/reservation. No T5
 reservation survived in the preserved closed ledger; its operation was neither
-aged out nor cleaned up. Missing operation evidence corroborates the timing proof
+aged out nor cleaned up. Missing operation evidence corroborates the control-flow inference
 but does not replace it. The exact Table/control failure is **not recoverable**
 from these artifacts, and increasing limits would not be an evidence-based fix.
+
+The installed SDK exposed a separate reproducible risk: `retry_total=0` does not
+disable its automatic 401 bearer challenge. That policy can pass `tenant_id` into
+a subscription-bound CLI credential, reintroducing the known tenant/subscription
+conflict. This is a plausible mechanism, **not proof T5 received 401**. Initial
+auth precedes the request hook; failure on a subsequent challenge can leave only
+one logged request. A benchmark-only fixed-scope, no-challenge policy now prevents
+this path. Real-SDK/fake-transport tests verify one request/token acquisition for
+401, 403 and 503. Production's Table client is unchanged.
 
 ## T2: supplied values and arithmetic
 
@@ -117,14 +179,20 @@ order, fractional scaling, sums, replacement and ambiguous inputs, not one meal.
 - Closed an archive gap: initialized runs with more finished cases than operations
   now block destruction, even if operation count matches ledger attempts. A
   no-dispatch reconciliation is a separate review, not a missing-record shortcut.
+- Added bounded benchmark-only diagnostics before Table errors are normalized:
+  phase, action, target class, allowlisted category and numeric HTTP status. No
+  URLs, IDs, tenants, tokens, bodies or exception text are saved. Last eight
+  failures plus total count enter private results; pre-result failures emit the
+  same safe structure on stderr. Cancellation is still propagated. Shared
+  production Coordinator/Table code and all existing security limits are unchanged.
 
 Focused regression tests cover before/after-provider failure, timing, retained
 exposure, stopped-run behavior, counter integrity/limits/locks, offline exclusive
 initialization and incomplete archives. Existing real Table integration tests were
 not rerun in this offline review. All live artifacts and the analysis program stay
 private; only generic code, tests, this review and procedure updates belong in Git.
-Validation: 52 focused benchmark tests passed; the complete offline gateway suite
-reported 452 passed and 6 skipped, with the live benchmark Table test file explicitly
+Reassessment validation: 73 focused benchmark tests passed; the complete offline gateway suite
+reported 473 passed and 6 skipped, with the live benchmark Table test file explicitly
 excluded and external sockets blocked (loopback allowed for local HTTP smoke tests).
 Editor diagnostics, Python syntax validation and diff whitespace checks passed.
 
@@ -142,20 +210,23 @@ The closed run stays closed. Plan conservatively with **five consumed technical
 slots and at most thirteen further cases**, despite only four paid dispatches.
 Prioritize P1-P6, L1-L2 and R1-R4 (twelve cases), then T6. Do not rerun T1-T4 or
 reuse T5 automatically. Releasing its local financial allowance does not grant a
-replacement case or a fresh attempt budget. If dispatch evidence were disputed,
-retain the fifth reserve and slot until resolved.
+replacement case or a fresh attempt budget. The revised plan retains the fifth
+reserve and slot until the remaining evidence uncertainty is resolved.
 
 Any future continuation needs explicit execution approval and a reviewed durable
 aggregate checkpoint linking old results, code/approval hashes, attempts, unknowns,
 lifetime reserve and the existing ancillary counter. A new run ID by itself is
 not that checkpoint; the current CLI does not implement cross-run enforcement or
 resuming a closed matrix. No new resources or continuation ledger were created.
+The [executable offline plan and live implementation contract](../infra/benchmark/README.md#completed-screening-continuation-preparation)
+specify the prioritized queue, single-read diagnostic, parent-CAS rules and
+pre-execution regression gates. The generated proposal is not a live permit.
 
 The authorization remains **EUR 10 total**, including earlier work and later
 retention/cleanup. Known usage-priced cost is USD 0.003774375, not invoice cost.
-After the local T5 release, reserving the full EUR 2 ancillary allowance plus
-known cost at 1.20 EUR/USD and 1.50 tax gives EUR 2.006793875. Thirteen hypothetical
-new calls at USD 0.2343 maximum each would raise that projection to EUR 7.489413875,
+Restoring T5's USD 0.2343 allowance, full EUR 2 ancillary reserve plus known cost
+at 1.20 EUR/USD and 1.50 tax gives EUR 2.428533875. Thirteen hypothetical new calls
+at USD 0.2343 maximum each would raise that projection to EUR 7.911153875,
 not create a new EUR 10 allowance. Reconcile actual billing, FX, taxes and all
 retention costs before any future authorization; unavailable billing is not zero.
 
@@ -163,6 +234,6 @@ The OpenAI account/deployment remain deleted; the closed Table is retained. Earl
 retention review remains **2026-10-19 16:15:59 UTC**. No cleanup scheduler was added.
 The strengthened archive gate rejects this historical five-finished/four-operation
 snapshot. The old report's destroy command must not be treated as automatic
-permission: review the private no-dispatch proof and arrange a separately approved,
+permission: review the private evidence and arrange a separately approved,
 evidence-preserving cleanup procedure. Do not change case states/counters to make
 the predicate pass. Retain the archive and reconciliation after eventual deletion.

@@ -10,10 +10,10 @@ import subprocess
 import tempfile
 import time
 
-from azure.data.tables.aio import TableClient
 from azure.identity.aio import AzureCliCredential
 
 from app.benchmark import Approval, MANIFEST_HASH, ROOT, sha, write_result
+from app.benchmark_diagnostics import BenchmarkTableClient
 from app.benchmark_azure import CheckedCredential, TableRequestBudget, local_guard
 from app.pilot import PilotError, canonical
 from app.pilot_table import AzureTableStore, _sdk_logger
@@ -77,7 +77,7 @@ def check_group(approval):
 async def close_or_archive(approval, archive=None):
     raw = AzureCliCredential(subscription=str(approval.subscription_id))
     credential = CheckedCredential(raw, approval, ledger_cleanup=True)
-    client = TableClient(f"https://{approval.storage_name}.table.core.windows.net", "MiniBenchmark",
+    client = BenchmarkTableClient(f"https://{approval.storage_name}.table.core.windows.net", "MiniBenchmark",
                          credential=credential, retry_total=0, logging_enable=False, logger=_sdk_logger,
                          raw_request_hook=TableRequestBudget(approval, cleanup=True), retry_to_secondary=False,
                          redirect_max=0,

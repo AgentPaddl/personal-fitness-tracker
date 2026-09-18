@@ -94,6 +94,124 @@ budget under an existing authorization. This workflow has no cross-run aggregate
 enforcement or continuation command; a continuation needs a separately reviewed
 aggregate checkpoint carrying all earlier attempts, reserves and ancillary costs.
 
+## Completed screening: continuation preparation
+
+The [reassessed review](../../docs/benchmark-review-2026-09-18.md) separates direct
+historical observations from code inference and reproduction. The earlier local
+T5 reserve release is superseded for planning: retain USD 0.2343 and five consumed
+case slots. Original results, approval, closure snapshot and reconciliation remain
+immutable. T2 remains a failed quality case, not a reason to rerun or change prompts.
+
+An executable **offline** command creates an exclusive owner-only proposal:
+
+```sh
+.venv/bin/python -B -m app.benchmark continuation-plan --evidence "$EVIDENCE" --output "$PLANS"
+```
+
+`$EVIDENCE` is the existing private run directory containing the original approval,
+results, closed snapshot, counter and `analysis-baseline.json`; `$PLANS` is an
+external 0700 directory. This command never loads credentials, attests resources,
+creates cloud state or calls a provider. It verifies baseline hashes, parent/run
+binding, all 18 request hashes, four settled operations, five finished cases and
+T2's failed protein check. It rejects altered evidence, counter truncation or
+exhaustion. Append-only counter growth is accepted and carried forward. The
+baseline is local operator evidence, not a signature or execution authority.
+
+The proposal explicitly has `execution_authorized=false`. It carries:
+
+- 18 aggregate case slots; 5 already consumed; no more than 13 additional cases.
+- USD 0.003774375 known model cost plus USD 0.2343 uncertain T5 allowance.
+- USD 1.1715 conservative technical allocation for the first five slots; add at
+  most USD 3.0459 for thirteen further slots, never exceed USD 4.2174 lifetime.
+- EUR 2 shared ancillary/retention/cleanup allowance, not a new allowance per child.
+  Projection: EUR 2.428533875 before new calls, EUR 7.911153875 for all thirteen,
+  using 1.20 EUR/USD and 1.50 tax reserve. Actual billing remains unknown.
+- Original counter consumption (at review: 429 requests / 15,720 units). Normal
+  remaining headroom: 2,071 requests / 24,280 units; cumulative cleanup ceiling
+  remains 3,000 / 50,000. Never initialize another counter for the continuation.
+- Queue: P1, L1, R1, P2, L2, R2, P3, P4, R3, R4, P5, P6, T6. Requests retain the
+  original hashes; T1-T5 are not replayed. Photos/labels/refinements come first.
+
+### Smallest later Table diagnostic
+
+Not authorized or performed by this offline review. After specific permission:
+
+1. Use the original approval, retained Storage account/Table, same restricted IP,
+  tenant/user and original counter. No model account, deployment or new role is
+  needed. Use the cleanup-mode `CheckedCredential` solely to allow expired
+  approval for **storage tokens only**, but the **normal**, not cleanup, Table
+  request allowance. Record a create-once local probe-start marker before access.
+2. Construct `BenchmarkTableClient` with `retry_total=0`, `redirect_max=0`, the
+  original `TableRequestBudget`, disabled SDK logger and 2s connect/3s read limits.
+  Wrap it in `BenchmarkTableStore`, with the same diagnostics instance as the
+  credential. Perform exactly one `read("ledger")` in the original benchmark
+  partition (outer 5s timeout), then close client/credential. No scan, writes,
+  case claim, retry, model token or provider construction.
+3. Save an exclusive private receipt containing safe diagnostics and whether the
+  canonical ledger hash matches the preserved closed snapshot. Do not print
+  ledger contents, request IDs, tokens or exception text. Missing or mismatching
+  ledger stops work; do not repair/reset it. Even failures consume any admitted
+  request units. If the process dies, its started marker prohibits an automatic
+  retry. The local probe must not call `prepare-control`.
+4. A success establishes current read access only; it cannot retroactively prove
+  what T5 returned or test CAS writes. A 401/403, acquisition, claim-validation,
+  transport, timeout, decode/local or counter failure is now distinguishable.
+  Only if that result leaves a demonstrated transaction issue should a separately
+  approved, bounded create/read/ETag-conflict/delete test in a disposable `test-`
+  partition follow. Never experiment on the closed benchmark records.
+
+### Required parent ledger before live continuation
+
+This is a concrete implementation contract, not an already enabled live runner.
+`init`/`next` cannot consume the proposal. Do not use fresh approvals/run IDs with
+the old CLI to bypass that missing enforcement. Implement and review this gate
+before requesting model/resource execution:
+
+1. Create-once parent authorization record in the retained Table, in a dedicated
+  single partition shared by all continuation control records. Bind the original
+  approval hash, closed snapshot/result hashes, reviewed evidence, plan digest,
+  allowed thirteen case/request hashes and exactly one approved child allocation.
+  Seed consumed slots=5, technical allocation=1.1715 USD, known cost and full T5
+  allowance. Closed parent-run rows are never reopened or modified.
+2. In one ETag/CAS transaction, reserve the next unique case plus increment parent
+  slots/lifetime allocation and set parent in-flight. Child run IDs are metadata,
+  not counter partitions. An unlisted child/request, second initialization, stale
+  ETag, missing parent, >=18 slots, >4.2174 USD technical allocation, exhausted
+  original Table quota or >10 EUR total exposure rejects admission before permit.
+  Admission must fail if the reviewed code/request/price/approval hashes changed.
+3. Only that acknowledged parent transaction can authorize the existing single-use
+  provider permit. Retain ordinary minute/day/month/concurrency/output/attestation
+  and identity gates as additional restrictions. A lost reserve/dispatch/settle
+  acknowledgement remains consumed and blocks further calls. No retries or
+  takeover after unknown state. Settlement can replace financial allowance with
+  known usage, never reduce slot count or lifetime technical allocation.
+4. Reconcile current resources and billing/FX/tax/retention before allocation.
+  Existing storage and its eventual cleanup belong to this same budget; the model
+  account is deleted and would require separately approved isolated provisioning.
+  If the two-account/extended-retention projection no longer fits EUR 2 ancillary
+  or EUR 10 total, stop rather than opening another budget. Earlier billing
+  queries remain consumed; no unbounded polling or new query allowance.
+5. Regression gates before execution: competing children cannot oversubscribe the
+  13 slots; lost acknowledgements/restarts/month rollover never refill slots;
+  changing child ID cannot obtain credit; unknown usage retains reserve; prior
+  artifact mutation and changed request/model policy reject; original closed
+  rows are unchanged. Finish/stop the child, delete its model resource, and retain
+  the shared authorization/evidence without lowering counters.
+
+Until those gates and explicit execution permission exist, the executable output
+is preparation only. The read probe above also needs its own approval. No Cloud
+operation is implied by generating or inspecting the local plan.
+
+### Separate quality work package
+
+After the comparison measurement is closed, implement and validate a deterministic
+quantity/nutrition calculator for structured, provenance-bound known facts. Cover
+g/kg, per-100-g/known-portion scaling, fractional quantities, sums and explicit
+component changes using Decimal with final-boundary rounding. Treat unknown
+portions, raw/cooked conversion and uncertain OCR as unresolved inputs. Keep T2's
+original failure. Version and benchmark the later behavior separately; do not
+change prompts, schema, analysis behavior, tolerances or model settings mid-comparison.
+
 ## Separately authorized cloud setup
 
 Do not run this until resource creation is approved:

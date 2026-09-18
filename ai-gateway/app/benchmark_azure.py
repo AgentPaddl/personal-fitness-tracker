@@ -10,12 +10,12 @@ import time
 from urllib.parse import urlsplit
 
 import httpx2
-from azure.data.tables.aio import TableClient
 from azure.identity.aio import AzureCliCredential
 
 from app.benchmark import MANIFEST_HASH, result_directory, sha
+from app.benchmark_diagnostics import BenchmarkDiagnosticError, BenchmarkDiagnostics, BenchmarkTableClient, BenchmarkTableStore
 from app.pilot import PilotError
-from app.pilot_table import AzureTableStore, _sdk_logger
+from app.pilot_table import _sdk_logger
 from app.providers.openai_api import AzureOpenAIProvider
 from app.providers.pricing import GPT_54_MINI
 
@@ -28,7 +28,7 @@ def local_guard():
                 "WEBSITE_INSTANCE_ID", "CONTAINER_APP_NAME", "IDENTITY_ENDPOINT", "MSI_ENDPOINT",
                 "KUBERNETES_SERVICE_HOST", "AZURE_CLIENT_SECRET", "AZURE_OPENAI_API_KEY",
             ))):
-        raise PilotError()
+        raise BenchmarkDiagnosticError("local_guard")
 
 
 def token_identity(token, approval, scope):
@@ -45,25 +45,38 @@ def token_identity(token, approval, scope):
                 or claims.get("exp", 0) <= time.time() + 120 or token.expires_on <= time.time() + 120):
             raise ValueError()
     except Exception:
-        raise PilotError() from None
+        raise BenchmarkDiagnosticError("credential_claims") from None
 
 
 class CheckedCredential:
-    def __init__(self, credential, approval, *, ledger_cleanup=False):
+    def __init__(self, credential, approval, *, ledger_cleanup=False, diagnostics=None):
         self.credential, self.approval = credential, approval
         self.ledger_cleanup = ledger_cleanup
+        self.diagnostics = diagnostics if diagnostics is not None else BenchmarkDiagnostics()
 
     async def get_token(self, *scopes, **kwargs):
+        target = {"https://storage.azure.com/.default": "storage", "https://ai.azure.com/.default": "model",
+                  "https://management.azure.com/.default": "arm"}.get(scopes[0] if len(scopes) == 1 else "", "other")
+        try:
+            return await self._get_token(*scopes, **kwargs)
+        except Exception as exc:
+            self.diagnostics.record("credential", target, exc)
+            raise
+
+    async def _get_token(self, *scopes, **kwargs):
         local_guard()
         if not self.ledger_cleanup:
             self.approval.check_window()
         if self.ledger_cleanup and scopes != ("https://storage.azure.com/.default",):
-            raise PilotError()
+            raise BenchmarkDiagnosticError("credential_scope")
         if len(scopes) != 1 or scopes[0] not in {
             "https://management.azure.com/.default", "https://storage.azure.com/.default", "https://ai.azure.com/.default"
         }:
-            raise PilotError()
-        token = await self.credential.get_token(*scopes, **kwargs)
+            raise BenchmarkDiagnosticError("credential_scope")
+        try:
+            token = await self.credential.get_token(*scopes, **kwargs)
+        except Exception:
+            raise BenchmarkDiagnosticError("credential_acquisition") from None
         token_identity(token, self.approval, scopes[0])
         return token
 
@@ -142,26 +155,37 @@ class TableRequestBudget:
             os.close(descriptor)
 
     def __call__(self, request):
+        try:
+            return self._admit(request)
+        except BlockingIOError:
+            raise BenchmarkDiagnosticError("counter_locked") from None
+        except OSError:
+            raise BenchmarkDiagnosticError("counter_io") from None
+        except UnicodeError:
+            raise BenchmarkDiagnosticError("counter_integrity") from None
+
+    def _admit(self, request):
         route = urlsplit(request.http_request.url)
         units = 100 if route.path.endswith("/$batch") else 1000 if (
             request.http_request.method == "GET" and "PartitionKey=" not in route.path) else 1
         try:
             descriptor = os.open(self.filename, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
-            raise PilotError() from None
+            raise BenchmarkDiagnosticError("counter_io") from None
         with os.fdopen(descriptor, "r+b") as output:
             info = os.fstat(output.fileno())
             if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
                     or info.st_nlink != 1 or info.st_uid != os.getuid()):
-                raise PilotError()
+                raise BenchmarkDiagnosticError("counter_integrity")
             fcntl.flock(output, fcntl.LOCK_EX | fcntl.LOCK_NB)
             output.seek(0)
             content = output.read(100001)
             lines = content.decode().splitlines()
             if (len(content) > 100000 or not content.endswith(b"\n") or not lines or lines[0] != self.binding
-                    or any(line not in {"1", "100", "1000"} for line in lines[1:])
-                    or len(lines) > self.max_requests or sum(map(int, lines[1:])) + units > self.max_units):
-                raise PilotError()
+                    or any(line not in {"1", "100", "1000"} for line in lines[1:])):
+                raise BenchmarkDiagnosticError("counter_integrity")
+            if len(lines) > self.max_requests or sum(map(int, lines[1:])) + units > self.max_units:
+                raise BenchmarkDiagnosticError("counter_limit")
             output.write(f"{units}\n".encode())
             output.flush()
             os.fsync(output.fileno())
@@ -173,8 +197,9 @@ class AzureBenchmark:
         local_guard()
         approval.check_window()
         self.approval, self.attested_at = approval, 0
+        self.diagnostics = BenchmarkDiagnostics()
         self.raw_credential = AzureCliCredential(subscription=str(approval.subscription_id))
-        self.credential = CheckedCredential(self.raw_credential, approval)
+        self.credential = CheckedCredential(self.raw_credential, approval, diagnostics=self.diagnostics)
         self.http = httpx2.AsyncClient(timeout=15, follow_redirects=False, trust_env=False)
         for name in ("azure.identity", "azure.identity.aio._internal.decorators",
                      "azure.identity.aio._credentials.azure_cli", "httpx2", "httpcore2"):
@@ -184,8 +209,13 @@ class AzureBenchmark:
         return self
 
     async def __aexit__(self, *args):
-        await self.http.aclose()
-        await self.raw_credential.close()
+        try:
+            await self.http.aclose()
+            await self.raw_credential.close()
+        finally:
+            if args and args[0] is not None and self.diagnostics.failure_count:
+                import sys
+                print(json.dumps({"benchmark_diagnostics": self.diagnostics.snapshot()}), file=sys.stderr)
 
     async def arm(self, resource, version):
         token = await self.credential.get_token("https://management.azure.com/.default")
@@ -231,7 +261,7 @@ class AzureBenchmark:
         local_guard()
         self.approval.check_window()
         if not self.attested_at or not 0 <= time.monotonic() - self.attested_at < 30:
-            raise PilotError()
+            raise BenchmarkDiagnosticError("attestation_stale")
 
     async def model_token(self):
         self.guard()
@@ -244,12 +274,12 @@ class AzureBenchmark:
         partition = "benchmark-" + self.approval.run_id if test_partition is None else test_partition
         if test_partition is not None and not test_partition.startswith("test-"):
             raise PilotError()
-        client = TableClient(f"https://{self.approval.storage_name}.table.core.windows.net", "MiniBenchmark",
+        client = BenchmarkTableClient(f"https://{self.approval.storage_name}.table.core.windows.net", "MiniBenchmark",
                              credential=self.credential, retry_total=0, logging_enable=False,
                              raw_request_hook=TableRequestBudget(self.approval), retry_to_secondary=False,
                              redirect_max=0,
                              logger=_sdk_logger, tracing_enable=False, connection_timeout=2, read_timeout=3)
-        return AzureTableStore(client, partition=partition)
+        return BenchmarkTableStore(client, partition=partition, diagnostics=self.diagnostics)
 
     def provider(self, control):
         self.guard()

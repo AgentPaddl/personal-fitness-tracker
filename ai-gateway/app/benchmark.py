@@ -22,7 +22,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.errors import GatewayError
-from app.pilot import Coordinator, PilotError, PilotPolicy, canonical, digest
+from app.benchmark_diagnostics import BenchmarkCoordinator, BenchmarkDiagnosticError
+from app.pilot import PilotError, PilotPolicy, canonical, digest
 from app.providers.pricing import GPT_54_MINI, PriceTable
 from app.schemas.food_analysis import FoodAnalysisEstimate, FoodAnalysisRequest
 from app.use_cases.food_analysis import FoodAnalysisUseCase
@@ -91,7 +92,7 @@ class Approval(BaseModel):
                     * Decimal(self.tax_multiplier_reserve) + Decimal(self.ancillary_reserve_eur))
         if (not self.billing_delay_risk_accepted or exposure > Decimal(self.total_budget_eur)
                 or not self.created_at <= time.time() < self.expires_at):
-            raise PilotError()
+            raise BenchmarkDiagnosticError("approval_window")
 
 
 def load_cases():
@@ -136,7 +137,7 @@ def make_coordinator(store, approval):
     )
     seed = hashlib.sha256(canonical(["public-benchmark-fingerprints-not-a-credential", approval.model_dump(mode="json")])).digest()
     prices = PriceTable(version=GPT_54_MINI.price_version, currency="USD", deployments={"mini-bench": GPT_54_MINI.price})
-    return Coordinator(store, policy, seed, {approval.identity}, prices,
+    return BenchmarkCoordinator(store, policy, seed, {approval.identity}, prices,
                        {"food_text_v1": "mini-bench", "food_image_v1": "mini-bench"},
                        profile_bindings={"mini-bench": GPT_54_MINI.identifier}, max_output_tokens=2000)
 
@@ -190,15 +191,17 @@ class RunState:
 
 
 class CaptureProvider:
-    def __init__(self, provider):
+    def __init__(self, provider, diagnostics):
         self.provider, self.metadata = provider, None
+        self.diagnostics = diagnostics
         self.started = None
         self.completed = False
 
     async def generate(self, request):
         self.started = time.perf_counter()
         try:
-            result = await self.provider.generate(request)
+            with self.diagnostics.phase("provider"):
+                result = await self.provider.generate(request)
             self.metadata = result.metadata
             self.completed = True
             return result
@@ -249,8 +252,9 @@ async def run_one(state, provider, attestation, output_dir):
     if callable(attestation):
         attestation = await attestation()
     started = time.perf_counter()
-    case, request, operation = await state.claim(expected_cursor=run["cursor"])
-    capture = CaptureProvider(provider)
+    with state.control.diagnostics.phase("claim"):
+        case, request, operation = await state.claim(expected_cursor=run["cursor"])
+    capture = CaptureProvider(provider, state.control.diagnostics)
     metadata, estimate, error = None, None, None
     try:
         result = await state.control.generate(capture, request, state.approval.identity, operation,
@@ -261,8 +265,9 @@ async def run_one(state, provider, attestation, output_dir):
     metadata = capture.metadata
     operation_key = "op-" + digest(state.control.secret, "operation", [state.approval.identity, operation])
     try:
-        operation_record, _ = await state.store.read(operation_key)
-        ledger, _ = await state.store.read("ledger")
+        with state.control.diagnostics.phase("accounting_read"):
+            operation_record, _ = await state.store.read(operation_key)
+            ledger, _ = await state.store.read("ledger")
     except Exception:
         operation_record, ledger, error = None, None, "ledger_read_failed"
     known = bool(operation_record and operation_record.get("settled") and operation_record.get("usage_known"))
@@ -283,6 +288,7 @@ async def run_one(state, provider, attestation, output_dir):
               "binding": state.binding, "request_hash": sha(asdict(request)), "manifest_hash": MANIFEST_HASH,
               "attestation": attestation, "status": "succeeded" if safe else "halted", "error": error,
               "provider_invoked": provider_invoked, "failure_stage": failure_stage,
+              "diagnostics": state.control.diagnostics.snapshot(),
               "schema_valid": estimate is not None, "estimate": estimate,
               "quality": {"arithmetic": checks, "human_scores": None, "usable": None,
                           "photo_numeric_ground_truth": False, "criterion": case["criterion"]},
@@ -298,12 +304,21 @@ async def run_one(state, provider, attestation, output_dir):
               "reserve_exposure_usd": "0" if known else str(GPT_54_MINI.reserve_usd(request.max_output_tokens)),
               "retained_reserve_usd": "0" if known else str(Decimal(operation_record["reserved"]) / 1_000_000_000) if operation_record else None}
     write_result(output_dir, f"{case['id']}.json", record)
-    await state.finish(case["id"], record, safe)
+    with state.control.diagnostics.phase("finish"):
+        await state.finish(case["id"], record, safe)
     return record
 
 
 async def execute(args):
     manifest, cases = load_cases()
+    if args.command == "continuation-plan":
+        from app.benchmark_continuation import continuation_plan
+        plan = continuation_plan(args.evidence)
+        filename = "continuation-plan-" + sha(plan)[:12] + ".json"
+        write_result(args.output, filename, plan)
+        print(json.dumps({"file": filename, "status": plan["status"], "cases": len(plan["queue"]),
+                          "projected_eur": plan["aggregate"]["full_projection_eur"]}))
+        return
     if args.command == "check":
         print(json.dumps({"cases": len(cases), "manifest_sha256": sha(manifest), "code_sha256": code_hash()}))
         return
@@ -347,6 +362,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check")
+    continuation = commands.add_parser("continuation-plan")
+    continuation.add_argument("--evidence", required=True)
+    continuation.add_argument("--output", required=True)
     review = commands.add_parser("review")
     review.add_argument("--result", required=True)
     review.add_argument("--usable", choices=("yes", "no"), required=True)
