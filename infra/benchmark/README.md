@@ -106,24 +106,101 @@ For a newly approved allocation only, initialize its local counter once:
 
 This makes no cloud requests and requires the reviewed confirmation. It is not a
 recovery/reset procedure. A different directory or run ID does not create another
-budget under an existing authorization. This workflow has no cross-run aggregate
-enforcement or continuation command; a continuation needs a separately reviewed
-aggregate checkpoint carrying all earlier attempts, reserves and ancillary costs.
+budget under an existing authorization. The fixed continuation mechanisms below
+carry earlier attempts, reserves and ancillary costs through reviewed aggregate
+checkpoints; they are not arbitrary new run IDs or additional allowances.
 
-## Completed screening: continuation preparation
+## Final-round handoff and bounded prices
 
-The final authorized seven-case attempt stopped at fresh Storage Retail-price
-preflight (long filter HTTP 404; shorter filter HTTP 400, detailed cause not
-established). No model resource, new run, test partition or case claim was created.
-Its unpublished second-child draft was archived privately and reversed; the
-published one-child continuation remains closed and must not be resumed.
-The [final assessment](../../docs/benchmark-review-2026-09-18.md#final-assessment-closed-incomplete-screening)
-is conditional suitability after explicit corrections, not current pilot clearance.
-Nine responses remain available; T5/R2 were not repeated and seven cases are missing.
-Final counter: 1,209 requests / 33,168 units. Both holds and the original EUR 10
-authorization remain unchanged. Retained Storage/Table and review roles require
-cleanup review no earlier than 2026-10-19 17:41:02 UTC; no automatic deletion job
-exists, and the historical archive gap still prevents blind destruction.
+The authorized round is now **closed and exhausted**: seven attempts, six valid
+answers and one T6 refusal with unknown usage, without retries. Five new criteria
+pass, P3 is partial and T6 does not pass. Model deployment/account and model role
+are verified absent; the dedicated Azure profile is logged out. The following
+describes the executed mechanism, not permission to resume it.
+
+The authorized final round uses `--final-round` on `continuation-adopt`,
+`continuation-next`, `continuation-stop` and model-only `benchmark_infra restore`.
+It has one fixed namespace and exactly P3, P4, R3, R4, P5, P6, T6, preserving the
+original requests. Neither closed predecessor can resume. Adoption verifies all
+45 predecessor payloads and their ETags in the same transaction as the new child.
+Seed 11 consumed slots, USD 2.5773 technical allocation, USD 0.01084875 known
+usage and both USD 0.2343 T5/R2 holds. Seven additional claims exhaust the original
+18-slot / USD 4.2174 technical ceiling. The inherited Parent-CAS state machine,
+single-use permits, minute spacing, unknown-state halt and zero model retries
+are unchanged. Existing consumed markers are not removed or reused.
+
+Before adoption, the new isolated Table handoff test checks competing claims,
+second adoption, unknown settlement, reconstructed control state and unchanged
+closed predecessors. It uses at most 250 requests / 1,400 normal units, with
+4,200 normal units still reserved in planning for actual adoption and seven
+cases. Its own known keys are tracked before writes and deleted in `finally`;
+a failed cleanup blocks model restoration. It never constructs a model provider.
+
+**A live Retail lookup is not a security boundary.** The original large Storage
+filter returned HTTP 404; its 31-meter shortened variant returns HTTP 400 with
+`Invalid OData parameters supplied`. A three-meter query succeeds, but returns
+93 items across regions/SKUs. This identifies a query-shape problem, not unknown
+unlimited charges; it does not establish the exact OData parser limit. Do not
+use foreign-region or ZRS entries as LRS rates. Preserve bounded response bodies,
+query identity, status and source timestamps before checking success. Small
+queries need exact region/SKU/unit/currency validation and pagination checks.
+
+For this final round, `final-price-basis.json` selects a previously verified
+`continuation-resource-review.json`, bound by SHA-256 and the original approval.
+It records source URL, verification time through the source, Sweden Central,
+Standard_LRS / DataZoneStandard, units/currencies, uncertainty and unknown posted
+billing. The source must be no older than six hours; expiry is the earlier of
+that deadline and the **unchanged original approval expiry**. Altered evidence,
+missing meters, wrong units/region/SKU, stale or future-dated evidence and a
+projection exceeding the existing reserves reject execution. Source age means
+time since verification, not the tariff's older effective-start date.
+
+Use the verified USD 0.825 / 0.0825 / 4.95 per million model-token rates and the
+conservative primary LRS maxima EUR 0.1005 per 10,000 Table units and EUR 0.0502
+per GB-month, with **10% additional tariff uncertainty**. No rate is invented.
+Full existing consumption bounds, including earlier requests and cleanup, give:
+
+```text
+ancillary = ((5 * 0.1005 + 0.0502) * 1.10 + 0.50) * 1.50 * 1.20
+          = EUR 1.994346 <= the existing EUR 2 reserve
+seven-case maximum = 2 + (0.01084875 + 9 * 0.2343) * 1.10 * 1.50 * 1.20
+                   = EUR 6.196706525 <= the existing EUR 10 authorization
+```
+
+The nine reserves in the projection are both holds plus seven additional calls.
+The EUR 0.50 transfer allowance, one GB-month retention, 50,000 total weighted
+Table units and tax/FX reserves are unchanged. Weighted units conservatively
+charge scans/batches and failed HTTP attempts; they are not posted transactions.
+No missing invoice is interpreted as zero, no third billing query is consumed
+and neither a per-child budget nor a new authorization is introduced.
+
+Each dispatch still performs full **live** identity and ARM attestation of exact
+resource IDs/tags, keyless configuration, IP rules and pinned deployment, then
+validates the bounded price basis. A valid basis removes Retail availability
+from that path; it does not bypass identity, resources, ledger or budget gates.
+This is a conservative operational plan with accepted billing delay, not a hard
+invoice guarantee. Retention and eventual cleanup remain part of the same budget.
+
+Final accounting: eighteen slots / USD 4.2174 lifetime allocation, USD 0.01829025
+known model cost, three USD 0.2343 holds (T5, R2, T6), and EUR 3.427956695 buffered
+exposure including the full EUR 2 ancillary reserve. T6 is retained active/unknown
+in a blocked ledger and closed run; do not clear it or call that state a retry grant.
+Counter is 1,670 requests / 39,281 units. Retained Table/Storage cleanup review is
+no earlier than **2026-10-19 18:55:12 UTC**; no automatic deletion job exists.
+The historical archive gap and uncertainties require reconciliation before removal.
+Full findings and limitations are in the [final assessment](../../docs/benchmark-review-2026-09-18.md#final-round-assessment).
+
+## Historical continuation preparation
+
+An earlier seven-case preparation stopped on the bad Retail queries, without
+creating a model, run, test partition or case claim. Its own draft was privately
+archived and reverted. That history is retained, but the price failure was not
+evidence of unbounded cost: the diagnosed query and reviewed, bounded final-round
+mechanism above supersede that stop. See the
+[current assessment](../../docs/benchmark-review-2026-09-18.md) for actual results,
+remaining uncertainty, cumulative cost and the final cleanup checkpoint.
+No automatic deletion job exists; the historical archive gap still prevents
+blind destruction or counter resets.
 
 The following preparation history is superseded operationally by the closed
 [authorized continuation outcome](../../docs/benchmark-review-2026-09-18.md#authorized-continuation-outcome).
@@ -207,7 +284,8 @@ Implemented safeguards:
 `ParentStore` now wraps the existing Coordinator store without changing production
 admission. `init`/`next` are not continuation commands. The reviewed implementation
 uses `continuation-adopt`, `continuation-next` and `continuation-stop`, each with
-`--evidence "$EVIDENCE" --apply`. There is exactly one child namespace, not a
+`--evidence "$EVIDENCE" --apply`. The original continuation has one fixed child;
+the final-round flag selects the second fixed handoff described above, never a
 caller-selected run ID or partition. Original approval/window remain binding;
 this implementation does not authorize execution after that window expires.
 

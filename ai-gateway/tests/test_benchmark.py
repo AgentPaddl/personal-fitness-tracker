@@ -857,6 +857,229 @@ def test_parent_cas_preserves_closed_run_and_allowance(closed_benchmark_evidence
     asyncio.run(run())
 
 
+@pytest.fixture
+def closed_continuation_evidence(closed_benchmark_evidence, monkeypatch):
+    from app.benchmark import code_hash
+    from app.benchmark_parent import ParentStore
+    from app.providers.base import GenerationMetadata, StructuredGenerationResult, TokenUsage
+    from tests.test_openai_api import _food_data
+
+    directory = closed_benchmark_evidence
+    clock = [time.time() + 61]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+
+    class Provider:
+        async def generate(self, request):
+            return StructuredGenerationResult(_food_data(), GenerationMetadata(
+                "azure_openai", "mini-bench", GPT_54_MINI.price.model, None, 1, "success", TokenUsage(100, 20, 0, 0),
+                price_version=GPT_54_MINI.price_version, profile_id=GPT_54_MINI.identifier, service_tier="default"))
+
+    async def run():
+        base = MemoryCAS()
+        records = json.loads((directory / "closed-ledger-snapshot.json").read_text())["records"]
+        await base.commit([(record["key"], record["data"], None) for record in records])
+        parent = ParentStore(base, directory)
+        await parent.adopt()
+        parent.control.clock = lambda: clock[0]
+        for _ in range(5):
+            clock[0] += 61
+            await run_one(parent.state, Provider(), {}, directory / "continuation-results")
+        await parent.close()
+        return [{"key": key, "data": data} for key, (data, _) in sorted(base.rows.items())]
+
+    (directory / "continuation-closed-snapshot.json").write_text(json.dumps({"records": asyncio.run(run())}))
+    (directory / "continuation-cost-review.json").write_text(json.dumps({"code_hash": code_hash()}))
+    return directory
+
+
+@pytest.mark.parametrize("mutation", ["none", "r2_started", "hold", "open_run", "cost", "result", "code"])
+def test_final_plan_preserves_two_closed_runs_and_holds(closed_continuation_evidence, mutation):
+    from decimal import Decimal
+    from app.benchmark_continuation import final_continuation_plan
+
+    directory = closed_continuation_evidence
+    filename = directory / "continuation-closed-snapshot.json"
+    archive = json.loads(filename.read_text())
+    rows = {record["key"]: record["data"] for record in archive["records"]}
+    if mutation == "r2_started":
+        rows["continuation-v1-case-R2"]["state"] = "started"
+    elif mutation == "hold":
+        rows["continuation-parent-v1"]["unknown_reserve"] = 0
+    elif mutation == "open_run":
+        rows["continuation-v1-benchmark"]["state"] = "idle"
+    elif mutation == "cost":
+        rows["continuation-parent-v1"]["known_cost"] = 0
+    elif mutation == "result":
+        (directory / "continuation-results/L2.json").write_text("{}")
+    elif mutation == "code":
+        (directory / "continuation-cost-review.json").write_text(json.dumps({"code_hash": "changed"}))
+    filename.write_text(json.dumps(archive))
+    if mutation != "none":
+        with pytest.raises(PilotError):
+            final_continuation_plan(directory)
+        return
+    plan = final_continuation_plan(directory)
+    assert [item["case_id"] for item in plan["queue"]] == ["P3", "P4", "R3", "R4", "P5", "P6", "T6"]
+    assert plan["aggregate"]["consumed_case_slots"] == 11
+    assert plan["aggregate"]["max_additional_cases"] == 7
+    assert plan["aggregate"]["technical_reserve_usd"] == "2.5773"
+    assert plan["aggregate"]["t5_held_reserve_usd"] == plan["aggregate"]["r2_held_reserve_usd"] == "0.2343"
+    assert Decimal(plan["aggregate"]["full_projection_eur"]) < Decimal("10")
+    assert plan["both_prior_runs_must_remain_closed"] is True and plan["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("scenario", ["seven", "adopt_race", "claim_race", "unknown", "lost_adopt_ack", "old_changed"])
+def test_final_parent_cumulative_cas(closed_continuation_evidence, monkeypatch, scenario):
+    from copy import deepcopy
+    from app.benchmark_parent import FinalParentStore, ParentStore, RESERVE
+    from app.providers.base import GenerationMetadata, StructuredGenerationResult, TokenUsage
+    from tests.test_openai_api import _food_data
+
+    directory = closed_continuation_evidence
+    clock = [time.time() + 61]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+
+    class Provider:
+        calls = 0
+
+        async def generate(self, request):
+            self.calls += 1
+            if scenario == "unknown":
+                raise TimeoutError()
+            return StructuredGenerationResult(_food_data(), GenerationMetadata(
+                "azure_openai", "mini-bench", GPT_54_MINI.price.model, None, 1, "success", TokenUsage(100, 20, 0, 0),
+                price_version=GPT_54_MINI.price_version, profile_id=GPT_54_MINI.identifier, service_tier="default"))
+
+    async def run():
+        base = MemoryCAS()
+        records = json.loads((directory / "continuation-closed-snapshot.json").read_text())["records"]
+        await base.commit([(record["key"], record["data"], None) for record in records])
+        original = deepcopy(base.rows)
+        first, second = FinalParentStore(base, directory), FinalParentStore(base, directory)
+        if scenario == "old_changed":
+            ledger, etag = await base.read("ledger")
+            ledger["last_time"] += 1
+            await base.commit([("ledger", ledger, etag)])
+            with pytest.raises(PilotError):
+                await first.adopt()
+            assert (await base.read(first.parent_key))[0] is None
+            return
+        if scenario == "adopt_race":
+            outcomes = await asyncio.gather(first.adopt(), second.adopt(), return_exceptions=True)
+            assert sum(outcome is None for outcome in outcomes) == 1
+            assert sum(isinstance(outcome, Conflict) for outcome in outcomes) == 1
+        elif scenario == "lost_adopt_ack":
+            commit = base.commit
+
+            async def lost_ack(changes):
+                await commit(changes)
+                raise PilotError()
+
+            with monkeypatch.context() as injected:
+                injected.setattr(base, "commit", lost_ack)
+                with pytest.raises(PilotError):
+                    await first.adopt()
+        else:
+            await first.adopt()
+        with pytest.raises(Conflict):
+            await second.adopt()
+        with pytest.raises(PilotError):
+            await ParentStore(base, directory).parent()
+        if scenario == "claim_race":
+            outcomes = await asyncio.gather(first.state.claim(), second.state.claim(), return_exceptions=True)
+            assert sum(isinstance(outcome, tuple) for outcome in outcomes) == 1
+            with pytest.raises(PilotError):
+                await FinalParentStore(base, directory).state.claim()
+        elif scenario in {"seven", "unknown"}:
+            provider = Provider()
+            for _ in range(7 if scenario == "seven" else 1):
+                first = FinalParentStore(base, directory)
+                first.control.clock = lambda: clock[0]
+                result = await run_one(first.state, provider, {}, directory / "final-results")
+                assert result["status"] == ("succeeded" if scenario == "seven" else "halted")
+                clock[0] += 61
+            assert provider.calls == (7 if scenario == "seven" else 1)
+            with pytest.raises(PilotError):
+                await second.state.claim()
+        parent, _ = await first.parent()
+        assert parent["slots"] == (18 if scenario == "seven" else 12 if scenario in {"unknown", "claim_race"} else 11)
+        assert parent["technical_reserved"] == parent["slots"] * RESERVE
+        assert parent["t5_reserve"] == parent["r2_reserve"] == RESERVE
+        assert parent["unknown_reserve"] == (3 if scenario in {"unknown", "claim_race"} else 2) * RESERVE
+        for key, (data, _) in original.items():
+            assert (await base.read(key))[0] == data
+        await first.close()
+        with pytest.raises(PilotError):
+            await second.parent()
+    asyncio.run(run())
+
+
+def test_final_handoff_scenario_offline(closed_continuation_evidence, monkeypatch):
+    from tests.test_benchmark_table_integration import exercise_final_handoff
+
+    instant = time.time() + 61
+    monkeypatch.setattr(time, "time", lambda: instant)
+
+    async def run():
+        base = MemoryCAS()
+        keys = await exercise_final_handoff(base, base, closed_continuation_evidence)
+        assert keys == set(base.rows) and len(keys) < 80
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mutation", ["none", "stale", "future", "hash", "region", "sku", "buffer", "limit", "billing",
+                                      "unit", "missing_storage", "expensive", "model_region", "expired"])
+def test_bounded_price_basis(monkeypatch, tmp_path, mutation):
+    import hashlib
+    from app.benchmark import sha
+    from app.benchmark_continuation import bounded_price_evidence
+
+    config = approval()
+    instant = time.time()
+    monkeypatch.setattr(time, "time", lambda: instant)
+    source = {"verified_at": int(instant) - 3600, "model_prices": [
+        {"meterId": meter, "armRegionName": "swedencentral", "currencyCode": "USD", "type": "Consumption",
+         "unitOfMeasure": "1M", "isPrimaryMeterRegion": True, "retailPrice": price}
+        for meter, price in [("fc81bb98-83fa-569b-a361-70d5904b285d", .825),
+                            ("41b51273-5b41-5b0b-ba4b-3900379c9800", .0825),
+                            ("3167a76c-f4a1-53f1-8784-362e76c0787e", 4.95)]], "table_prices": [
+        {"skuName": "Account Encrypted LRS", "armRegionName": "swedencentral", "currencyCode": "EUR",
+         "type": "Consumption", "unitOfMeasure": unit, "isPrimaryMeterRegion": True,
+         "productName": "Tables", "retailPrice": price} for unit, price in [("10K", .1005), ("1 GB/Month", .0502)]]}
+    if mutation in {"stale", "future"}:
+        source["verified_at"] = int(instant) + (60 if mutation == "future" else -21601)
+    if mutation == "model_region":
+        source["model_prices"][0]["armRegionName"] = "different"
+    if mutation == "unit":
+        source["table_prices"][0]["unitOfMeasure"] = "1M"
+    if mutation == "missing_storage":
+        source["table_prices"].pop()
+    if mutation == "expensive":
+        source["table_prices"][0]["retailPrice"] = 1
+    source_bytes = json.dumps(source).encode()
+    (tmp_path / "continuation-resource-review.json").write_bytes(source_bytes)
+    basis = {"source_file": "continuation-resource-review.json", "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+             "source_url": "https://prices.azure.com/api/retail/prices", "approval_hash": sha(config.model_dump(mode="json")),
+             "region": "swedencentral", "storage_sku": "Standard_LRS", "model_sku": "DataZoneStandard",
+             "tariff_multiplier": "1.10", "max_age_seconds": 21600, "table_unit_limit": 50000,
+             "storage_gb_month": "1", "transfer_allowance_eur": "0.50", "booked_billing": "unknown",
+             "expires_at": min(source["verified_at"] + 21600, config.expires_at)}
+    changes = {"hash": ("source_sha256", "wrong"), "region": ("region", "other"), "sku": ("storage_sku", "Standard_GRS"),
+               "buffer": ("tariff_multiplier", "1.00"), "limit": ("table_unit_limit", 60000),
+               "billing": ("booked_billing", "0"), "expired": ("expires_at", instant - 1)}
+    if mutation in changes:
+        key, value = changes[mutation]
+        basis[key] = value
+    (tmp_path / "final-price-basis.json").write_text(json.dumps(basis))
+    if mutation == "none":
+        result = bounded_price_evidence(tmp_path, config)
+        assert result["ancillary_projection_eur"] == "1.9943460000"
+        assert result["mode"] == "last_verified_bounded"
+    else:
+        with pytest.raises(PilotError):
+            bounded_price_evidence(tmp_path, config)
+
+
 def test_parent_claim_counter_lock_stops_before_provider(closed_benchmark_evidence, monkeypatch):
     from app.benchmark_diagnostics import BenchmarkDiagnosticError
     from app.benchmark_parent import PARENT_KEY, ParentStore, RESERVE
@@ -1442,7 +1665,8 @@ def test_stale_preflight_cannot_claim_a_later_case():
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("outcome", ["success", "price_drift", "missing_meter", "arm_denied"])
+@pytest.mark.parametrize("outcome", ["success", "price_drift", "missing_meter", "arm_denied",
+                                     "cached_success", "cached_resource_invalid", "cached_expired", "cached_arm_denied"])
 def test_full_attestation_http_path_without_azure(monkeypatch, outcome):
     import base64
     import httpx2
@@ -1472,6 +1696,19 @@ def test_full_attestation_http_path_without_azure(monkeypatch, outcome):
 
     monkeypatch.setattr(benchmark_azure, "AzureCliCredential", credential_factory)
     group, account, deployment, storage, inventory = resources(config)
+    cached = outcome.startswith("cached_")
+    if outcome == "cached_resource_invalid":
+        storage["properties"]["allowSharedKeyAccess"] = True
+    if cached:
+        from app import benchmark_continuation
+
+        def bounded_prices(directory, checked):
+            assert directory == "offline-evidence" and checked == config
+            if outcome == "cached_expired":
+                raise PilotError()
+            return {"mode": "last_verified_bounded", "model_prices": []}
+
+        monkeypatch.setattr(benchmark_continuation, "bounded_price_evidence", bounded_prices)
     documents = {config.group_id: group, config.account_id: account,
                  config.account_id + "/deployments/mini-bench": deployment,
                  config.storage_id: storage, config.group_id + "/resources": inventory}
@@ -1482,7 +1719,9 @@ def test_full_attestation_http_path_without_azure(monkeypatch, outcome):
     def handler(request):
         calls.append(request)
         if request.url.host == "management.azure.com":
-            return httpx2.Response(403 if outcome == "arm_denied" else 200, json=documents[request.url.path])
+            return httpx2.Response(403 if outcome in {"arm_denied", "cached_arm_denied"} else 200, json=documents[request.url.path])
+        if cached:
+            return httpx2.Response(400, json={"Error": "Invalid OData parameters supplied"})
         items = [{"meterId": meter, "retailPrice": price, "currencyCode": "USD", "armRegionName": "swedencentral",
                   "unitOfMeasure": "1M", "type": "Consumption", "isPrimaryMeterRegion": True} for meter, price in meters.items()]
         if outcome == "price_drift":
@@ -1492,12 +1731,12 @@ def test_full_attestation_http_path_without_azure(monkeypatch, outcome):
         return httpx2.Response(200, json={"Items": items, "NextPageLink": None})
 
     async def run():
-        async with benchmark_azure.AzureBenchmark(config) as azure:
+        async with benchmark_azure.AzureBenchmark(config, price_evidence="offline-evidence" if cached else None) as azure:
             await azure.http.aclose()
             azure.http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
             with pytest.raises(PilotError):
                 azure.guard()
-            if outcome == "success":
+            if outcome in {"success", "cached_success"}:
                 proof = await azure.attest()
                 assert proof["model"] == GPT_54_MINI.price.model
                 azure.guard()
@@ -1510,9 +1749,11 @@ def test_full_attestation_http_path_without_azure(monkeypatch, outcome):
                 with pytest.raises(PilotError):
                     azure.guard()
     asyncio.run(run())
-    assert len(calls) == (1 if outcome == "arm_denied" else 6)
+    assert len(calls) == (1 if outcome in {"arm_denied", "cached_arm_denied"} else 5 if cached else 6)
     assert all(request.method == "GET" for request in calls)
     assert not any("chat/completions" in str(request.url) for request in calls)
-    if outcome != "arm_denied":
+    if cached:
+        assert all(request.url.host == "management.azure.com" for request in calls)
+    elif outcome != "arm_denied":
         assert "$filter" in calls[-1].url.params
         assert calls[-1].headers.get("Authorization") is None

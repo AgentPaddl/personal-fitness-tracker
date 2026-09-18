@@ -22,6 +22,9 @@ RESERVE = units(GPT_54_MINI.reserve_usd(2000))
 
 
 class ParentStore:
+    parent_key = PARENT_KEY
+    prefix = PREFIX
+
     def __init__(self, store, directory, *, cleanup=False):
         self.store, self.directory = store, Path(directory)
         self.plan = continuation_plan(directory, cleanup=cleanup)
@@ -35,7 +38,7 @@ class ParentStore:
         self.state = RunState(self, self.control, self.approval, self.cases)
 
     async def parent(self):
-        parent, etag = await self.store.read(PARENT_KEY)
+        parent, etag = await self.store.read(self.parent_key)
         if (not parent or parent.get("binding") != self.binding
                 or type(parent.get("slots")) is not int or not 5 <= parent["slots"] <= 18
                 or parent.get("technical_reserved") != parent["slots"] * RESERVE
@@ -48,7 +51,7 @@ class ParentStore:
         if key not in {"ledger", "benchmark", *("case-" + case["id"] for case, _ in self.cases)} and not (
                 key.startswith("op-") and len(key) == 67 and all(character in "0123456789abcdef" for character in key[3:])):
             raise PilotError()
-        return PREFIX + key
+        return self.prefix + key
 
     async def read(self, key):
         return await self.store.read(self.key(key))
@@ -79,7 +82,7 @@ class ParentStore:
                "not_before": previous["benchmark"]["closed_at"] + 60,
                "run_id": self.approval.run_id, "initialized": True,
                "approval_hash": self.plan["parent_approval_hash"], "parent_binding": self.binding}
-        changes += [(PARENT_KEY, parent, None), (self.key("ledger"), ledger, None),
+        changes += [(self.parent_key, parent, None), (self.key("ledger"), ledger, None),
                     (self.key("benchmark"), run, None)]
         for case, request in self.cases:
             operation = UUID(int=(int(time.time() * 1000) << 80) | (7 << 76)
@@ -163,7 +166,7 @@ class ParentStore:
         else:
             raise PilotError()
         await self.store.commit([(self.key(key), data, etag) for key, data, etag in changes]
-                                + [(PARENT_KEY, parent, parent_etag)])
+                                + [(self.parent_key, parent, parent_etag)])
 
     async def close(self):
         parent, parent_etag = await self.parent()
@@ -173,6 +176,68 @@ class ParentStore:
         parent.update(state="closed", closed_at=now, purge_after=now + 2678400)
         run.update(state="closed", closed_at=now, purge_after=now + 2678400)
         ledger["blocked"] = True
-        await self.store.commit([(PARENT_KEY, parent, parent_etag), (self.key("benchmark"), run, run_etag),
+        await self.store.commit([(self.parent_key, parent, parent_etag), (self.key("benchmark"), run, run_etag),
                                  (self.key("ledger"), ledger, ledger_etag)])
         return parent
+
+
+class FinalParentStore(ParentStore):
+    parent_key = "final-parent-v1"
+    prefix = "final-v1-"
+
+    def __init__(self, store, directory, *, cleanup=False):
+        from app.benchmark_continuation import final_continuation_plan
+
+        self.store, self.directory = store, Path(directory)
+        self.plan = final_continuation_plan(directory, cleanup=cleanup)
+        self.approval = Approval.model_validate_json((self.directory / "approval.json").read_text())
+        requests = {case["id"]: (case, request) for case, request in load_cases()[1]}
+        self.cases = [requests[item["case_id"]] for item in self.plan["queue"]]
+        self.binding = sha(["final-v1", self.plan["predecessor_binding"], self.plan["predecessor_snapshot_sha256"],
+                            self.plan["predecessor_result_hashes"], code_hash(), self.plan["queue"], 11, 2 * RESERVE])
+        self.diagnostics = getattr(store, "diagnostics", BenchmarkDiagnostics())
+        self.control = make_coordinator(self, self.approval)
+        self.state = RunState(self, self.control, self.approval, self.cases)
+
+    async def parent(self):
+        parent, etag = await super().parent()
+        if (parent["slots"] < 11 or parent.get("r2_reserve") != RESERVE
+                or parent.get("unknown_reserve", 0) < 2 * RESERVE
+                or parent.get("predecessor_snapshot_sha256") != self.plan["predecessor_snapshot_sha256"]):
+            raise PilotError()
+        return parent, etag
+
+    async def adopt(self):
+        self.approval.check_window()
+        snapshot = json.loads((self.directory / "continuation-closed-snapshot.json").read_text())["records"]
+        changes = []
+        for record in snapshot:
+            actual, etag = await self.store.read(record["key"])
+            if etag is None or actual != record["data"]:
+                raise PilotError()
+            changes.append((record["key"], actual, etag))
+        previous = {record["key"]: record["data"] for record in snapshot}
+        ledger = deepcopy(previous[PREFIX + "ledger"])
+        ledger.update(blocked=False, last_time=max(ledger["last_time"], previous[PARENT_KEY]["closed_at"]))
+        ledger["benchmark"].update(attempts=11, reserved=11 * RESERVE)
+        for bucket in ledger["buckets"].values():
+            bucket["count"] += 1
+            bucket["cost"] += RESERVE
+        parent = {"version": 2, "binding": self.binding, "state": "idle", "slots": 11,
+                  "technical_reserved": 11 * RESERVE, "t5_reserve": RESERVE, "r2_reserve": RESERVE,
+                  "known_cost": previous[PARENT_KEY]["known_cost"], "unknown_reserve": 2 * RESERVE,
+                  "inflight": None, "cursor": 0, "parent_approval_hash": self.plan["parent_approval_hash"],
+                  "predecessor_snapshot_sha256": self.plan["predecessor_snapshot_sha256"], "created_at": int(time.time())}
+        run = {"binding": self.state.binding, "state": "idle", "cursor": 0,
+               "not_before": previous[PREFIX + "benchmark"]["closed_at"] + 60,
+               "run_id": self.approval.run_id, "initialized": True,
+               "approval_hash": self.plan["parent_approval_hash"], "parent_binding": self.binding}
+        changes += [(self.parent_key, parent, None), (self.key("ledger"), ledger, None), (self.key("benchmark"), run, None)]
+        for case, request in self.cases:
+            operation = UUID(int=(int(time.time() * 1000) << 80) | (7 << 76)
+                             | (secrets.randbits(12) << 64) | (2 << 62) | secrets.randbits(62))
+            changes.append((self.key("case-" + case["id"]), {
+                "operation": str(operation), "request_hash": sha(asdict(request)), "state": "ready"}, None))
+        if len(changes) > 100:
+            raise PilotError()
+        await self.store.commit(changes)

@@ -40,14 +40,15 @@ def restore_template(approval):
     return template, {"parameters": {key: {"value": value} for key, value in parameters.items()}}
 
 
-def restore_model(approval, directory):
+def restore_model(approval, directory, *, final_round=False):
     from app.benchmark_continuation import execution_evidence
-    execution_evidence(directory)
+    execution_evidence(directory, final_round=final_round)
+    label = "final-model-restore" if final_round else "model-restore"
     approval.check_window()
     check_identity(approval)
     check_group(approval)
     template, parameters = restore_template(approval)
-    write_result(directory, "model-restore-started.json", {"approval_hash": sha(approval.model_dump(mode="json")),
+    write_result(directory, label + "-started.json", {"approval_hash": sha(approval.model_dump(mode="json")),
                  "template_hash": sha(template), "started_at": int(time.time()), "retry": False})
     try:
         with tempfile.TemporaryDirectory(prefix="pft-benchmark-restore-") as temporary:
@@ -59,9 +60,9 @@ def restore_model(approval, directory):
             az("deployment", "group", "create", "--subscription", str(approval.subscription_id),
                "--resource-group", approval.resource_group, "--name", "pft-bench-" + approval.run_id,
                "--template-file", str(template_file), "--parameters", "@" + str(parameters_file))
-        write_result(directory, "model-restore-result.json", {"status": "completed", "finished_at": int(time.time())})
+        write_result(directory, label + "-result.json", {"status": "completed", "finished_at": int(time.time())})
     except BaseException:
-        write_result(directory, "model-restore-result.json", {"status": "unknown", "finished_at": int(time.time())})
+        write_result(directory, label + "-result.json", {"status": "unknown", "finished_at": int(time.time())})
         raise
 
 
@@ -197,6 +198,7 @@ def main():
     parser.add_argument("--confirm")
     parser.add_argument("--archive")
     parser.add_argument("--evidence")
+    parser.add_argument("--final-round", action="store_true")
     args = parser.parse_args()
     try:
         approval = Approval.model_validate_json(Path(args.approval).read_text())
@@ -215,7 +217,7 @@ def main():
         if args.command == "restore":
             if not args.evidence or Path(args.approval).resolve() != (Path(args.evidence) / "approval.json").resolve():
                 raise PilotError()
-            restore_model(approval, args.evidence)
+            restore_model(approval, args.evidence, final_round=args.final_round)
             print("Isolated model restore completed; storage and ledger were not provisioned.")
             return
         check_identity(approval)

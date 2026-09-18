@@ -198,10 +198,11 @@ class TableRequestBudget:
 
 
 class AzureBenchmark:
-    def __init__(self, approval):
+    def __init__(self, approval, *, price_evidence=None):
         local_guard()
         approval.check_window()
         self.approval, self.attested_at = approval, 0
+        self.price_evidence = price_evidence
         self.diagnostics = BenchmarkDiagnostics()
         self.raw_credential = AzureCliCredential(subscription=str(approval.subscription_id))
         self.credential = CheckedCredential(self.raw_credential, approval, diagnostics=self.diagnostics)
@@ -239,6 +240,15 @@ class AzureBenchmark:
         storage = await self.arm(config.storage_id, "2023-05-01")
         inventory = await self.arm(config.group_id + "/resources", "2021-04-01")
         validate_resources(config, group, account, deployment, storage, inventory)
+        if self.price_evidence is not None:
+            from app.benchmark_continuation import bounded_price_evidence
+            prices = bounded_price_evidence(self.price_evidence, config)
+            self.attested_at = time.monotonic()
+            return {"verified_at": int(time.time()), "approval_hash": sha(config.model_dump(mode="json")),
+                "resources_hash": sha([group, account, deployment, storage, inventory]),
+                "prices_hash": sha(prices["model_prices"]), "price_basis": prices,
+                "model": GPT_54_MINI.price.model, "region": "swedencentral", "sku": GPT_54_MINI.sku,
+                "service_tier": "default-requested-response-must-confirm"}
         meters = {"fc81bb98-83fa-569b-a361-70d5904b285d": .825,
                   "41b51273-5b41-5b0b-ba4b-3900379c9800": .0825,
                   "3167a76c-f4a1-53f1-8784-362e76c0787e": 4.95}

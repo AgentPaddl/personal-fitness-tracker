@@ -221,6 +221,120 @@ def test_real_counter_lifecycle(monkeypatch):
     asyncio.run(run())
 
 
+async def exercise_final_handoff(first, second, directory, keys=None):
+    import json
+    from app.benchmark_parent import FinalParentStore
+
+    records = json.loads((directory / "continuation-closed-snapshot.json").read_text())["records"]
+    owner, competitor = FinalParentStore(first, directory), FinalParentStore(second, directory)
+    keys = set() if keys is None else keys
+    keys.update({record["key"] for record in records} | {owner.parent_key, owner.key("ledger"), owner.key("benchmark"),
+        *(owner.key("case-" + case["id"]) for case, _ in owner.cases)})
+    await first.commit([(record["key"], record["data"], None) for record in records])
+    owner.control.clock = competitor.control.clock = lambda: time.time()
+    await owner.adopt()
+    with pytest.raises(Conflict):
+        await competitor.adopt()
+    outcomes = await asyncio.gather(owner.state.claim(), competitor.state.claim(), return_exceptions=True)
+    claimed = [outcome for outcome in outcomes if isinstance(outcome, tuple)]
+    assert len(claimed) == 1 and sum(isinstance(outcome, (Conflict, PilotError)) for outcome in outcomes) == 1
+    _, request, identifier = claimed[0]
+    keys.add(owner.key("op-" + digest(owner.control.secret, "operation", [owner.approval.identity, identifier])))
+    arguments = (owner.approval.identity, identifier, digest(owner.control.secret, "request", asdict(request)),
+                 owner.control.bound(request), owner.control.admission(request))
+    key = await owner.control.reserve(*arguments)
+    await competitor.control.mark_dispatched(key)
+    await owner.control.settle(key, "unknown", None)
+    restarted = FinalParentStore(second, directory)
+    with pytest.raises(PilotError):
+        await restarted.state.claim()
+    with pytest.raises(PilotError):
+        await restarted.control.reserve(*arguments)
+    parent, _ = await owner.parent()
+    assert parent["slots"] == 12 and parent["technical_reserved"] == 12 * RESERVE
+    assert parent["unknown_reserve"] == 3 * RESERVE
+    assert parent["r2_reserve"] == parent["t5_reserve"] == RESERVE
+    for record in records:
+        assert (await second.read(record["key"]))[0] == record["data"]
+    await owner.close()
+    with pytest.raises(PilotError):
+        await restarted.parent()
+    return keys
+
+
+def test_real_final_handoff(monkeypatch):
+    import hashlib
+    import json
+    import logging
+    from azure.core import MatchConditions
+    from azure.identity.aio import AzureCliCredential
+    from app.benchmark import code_hash, sha
+    from app.providers.openai_api import AzureOpenAIProvider
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("No model allowed during final handoff test")
+
+    monkeypatch.setattr(AzureBenchmark, "attest", forbidden)
+    monkeypatch.setattr(AzureOpenAIProvider, "__init__", forbidden)
+
+    async def run():
+        config = Approval.model_validate_json(Path(os.environ["BENCHMARK_APPROVAL_FILE"]).read_text())
+        directory = Path(os.environ["BENCHMARK_APPROVAL_FILE"]).parent
+        review = json.loads((directory / "final-resource-review.json").read_text())
+        assert review["code_hash"] == code_hash() and review["parent_approval_hash"] == sha(config.model_dump(mode="json"))
+        assert review["test_sha256"] == hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        assert review["storage_verified"] is True and review["model_absent"] is True
+        assert 0 <= time.time() - review["verified_at"] < 3600
+        budget = TableRequestBudget(config)
+        before = budget.filename.read_bytes()
+        weights = list(map(int, before.decode().splitlines()[1:]))
+        assert hashlib.sha256(before).hexdigest() == review["counter_sha256"]
+        assert sum(weights) + 1400 + 4200 <= budget.max_units
+        budget.max_units = sum(weights) + 1400
+        budget.max_requests = min(budget.max_requests, len(weights) + 250)
+        partition = "test-final-" + uuid4().hex
+        write_result(directory, "final-table-started.json", {"partition": partition, "max_units": 1400, "max_requests": 250})
+        for name in ("azure.identity", "azure.identity.aio._internal.decorators", "azure.identity.aio._credentials.azure_cli"):
+            logging.getLogger(name).disabled = True
+        raw = AzureCliCredential(subscription=str(config.subscription_id))
+        diagnostics = BenchmarkDiagnostics()
+        options = dict(credential=CheckedCredential(raw, config, ledger_cleanup=True, diagnostics=diagnostics),
+            retry_total=0, redirect_max=0, retry_to_secondary=False, logging_enable=False, tracing_enable=False,
+            logger=_sdk_logger, raw_request_hook=budget, connection_timeout=2, read_timeout=3)
+        passed = cleaned = False
+        keys = set()
+        try:
+            async with BenchmarkTableClient(f"https://{config.storage_name}.table.core.windows.net", "MiniBenchmark", **options) as client:
+                async with BenchmarkTableClient(f"https://{config.storage_name}.table.core.windows.net", "MiniBenchmark", **options) as another:
+                    first = BenchmarkTableStore(client, partition=partition, diagnostics=diagnostics)
+                    second = BenchmarkTableStore(another, partition=partition, diagnostics=diagnostics)
+                    try:
+                        await exercise_final_handoff(first, second, directory, keys)
+                        passed = True
+                    finally:
+                        deletes = []
+                        assert len(keys) < 80
+                        for key in sorted(keys):
+                            data, etag = await second.read(key)
+                            if data is not None:
+                                deletes.append(("delete", {"PartitionKey": partition, "RowKey": key},
+                                    {"etag": etag, "match_condition": MatchConditions.IfNotModified}))
+                        if deletes:
+                            await another.submit_transaction(deletes)
+                        assert (await second.read("final-parent-v1"))[0] is None
+                        cleaned = True
+        finally:
+            await raw.close()
+            after = budget.filename.read_bytes()
+            assert after.startswith(before)
+            added = list(map(int, after[len(before):].decode().splitlines()))
+            receipt = {"passed": passed, "cleaned": cleaned, "code_hash": code_hash(), "requests": len(added),
+                       "units": sum(added), "model_calls": 0, "diagnostics": diagnostics.snapshot()}
+            write_result(directory, "final-table-result.json", receipt)
+            print(json.dumps(receipt))
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("scenario", ["claim_race", "lost_ack", "lifetime_cleanup"])
 def test_real_benchmark_table(scenario, monkeypatch):
     def forbidden(*args, **kwargs):

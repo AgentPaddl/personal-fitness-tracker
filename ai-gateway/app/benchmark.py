@@ -373,6 +373,7 @@ def main():
         command = commands.add_parser(name)
         command.add_argument("--evidence", required=True)
         command.add_argument("--apply", action="store_true")
+        command.add_argument("--final-round", action="store_true")
     review = commands.add_parser("review")
     review.add_argument("--result", required=True)
     review.add_argument("--usable", choices=("yes", "no"), required=True)
