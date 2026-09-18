@@ -55,6 +55,15 @@ Configuration is explicit and server-only:
 | `AI_PROVIDER_MAX_OUTPUT_TOKENS` | Default 2000, local safety range 1-32768. Request-level caps may lower, never raise it. The chosen deployment must support the configured cap. |
 | `AI_PROVIDER_TIMEOUT_SECONDS` | Existing timeout setting, forwarded to SDK and bounded by async deadline; the use case retains its outer timeout. |
 | `AZURE_OPENAI_PRICES_JSON` | Optional versioned USD table below. Malformed configured prices fail closed; absence, unmapped deployment or a returned-model mismatch produces unknown cost. |
+| `AZURE_OPENAI_PROFILES_JSON` | Explicit deployment-to-profile map. GPT-5.4-mini requires `gpt-5.4-mini-2026-03-17-dz-v1`, matching routes and exact reviewed prices; no automatic selection. See the [profile configuration](../docs/operations-runbook.md#gpt-54-mini-local-profile-implementation-2026-09-18). |
+
+For the GPT-5.4-mini profile, prices are required and the maximum configurable
+output cap is **2,000 total completion tokens**, including reasoning. The profile
+pins `reasoning_effort=none`, image `detail=high`, and `service_tier=default`.
+Missing/incorrect response model or service tier rejects the result; missing or
+inconsistent usage retains unknown cost. Usage is read from raw response JSON
+before SDK type coercion. The legacy configuration below is not a GPT-5.4-mini
+example. Neither profile changes production denial or negative readiness.
 
 Price table shape (illustrative server configuration, not a verified account quote):
 

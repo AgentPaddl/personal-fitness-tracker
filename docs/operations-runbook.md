@@ -112,8 +112,10 @@ reserved cost, active operations and tombstones. It is deliberately not automati
 
 ### Cost bound and accounting
 
-Only the explicitly reviewed `gpt-4.1-mini-2025-04-14` profile is supported for
-pilot cost admission today. Reserve **1047576 input tokens**, its full documented
+The legacy `gpt-4.1-mini-2025-04-14` pilot profile remains available explicitly;
+the [GPT-5.4-mini implementation below](#gpt-54-mini-local-profile-implementation-2026-09-18)
+adds a separate pinned profile, never automatic substitution. The legacy profile
+reserves **1047576 input tokens**, its full documented
 context maximum, plus the enforced request output cap. This includes image/schema
 input conservatively instead of inferring image cost from file bytes or assuming
 an average prompt. Use the larger configured input/cached-input rate, no cache
@@ -138,6 +140,382 @@ Current minute/day/month buckets are retained; expired buckets cannot debit a ne
 period. Reported bound/model violations close the ledger for investigation; they
 cannot undo a charge already made. Provider billing remains authoritative, and
 hosting/storage/tax/FX charges are outside these model-token budgets.
+
+### GPT-5.4-mini candidate review (2026-09-18)
+
+This is a preparation record, not an activation or model-change approval. At
+baseline commit `0cfb53a`, `Coordinator.bound` and `Coordinator.settle` still pin
+`gpt-4.1-mini-2025-04-14` and its input bound. Changing a route or price entry
+alone cannot admit GPT-5.4-mini. The Azure adapter still rejects production calls
+and reports negative readiness. No provider call or cloud write is part of this
+review.
+
+The target topology is variant B: a publicly reachable HTTPS gateway callable
+only by the authorized backend, not directly by iOS. The existing service token
+and request-bound HMAC remain required; they do not yet implement backend workload
+identity verification. Before activation, add exact backend identity/role
+authorization, early authentication and bounded ingress, and verify that no
+alternate ingress bypasses them. Public reachability is not anonymous access.
+The existing Table network restriction is not silently waived by this topology;
+its resolution remains a separate release gate.
+
+#### Verified model and deployment evidence
+
+Read-only checks used the separately authenticated private subscription after
+rechecking its subscription/tenant IDs and Enabled state. ARM API `2024-10-01`:
+`locations/{region}/models`, `locations/{region}/usages`, and
+`modelCapacities?modelFormat=OpenAI&modelName=gpt-5.4-mini&modelVersion=2026-03-17`
+under `/subscriptions/{subscription}/providers/Microsoft.CognitiveServices/`.
+No credentials or personal request data were queried. Results on 2026-09-18:
+
+| Property | Evidence and interpretation |
+| --- | --- |
+| Candidate | Azure OpenAI `gpt-5.4-mini`, version `2026-03-17`; expected snapshot identifier `gpt-5.4-mini-2026-03-17`. Actual response identifier still requires verification, not a wildcard match. |
+| Deployment | EU `DataZoneStandard`, Sweden Central proposed; on-demand standard token billing, not Global, Priority, Batch or PTU. EU processing follows the EU Data Boundary, including possible EFTA locations, not Sweden-only residency. |
+| Lifecycle | Sweden Central catalog: `GenerallyAvailable`; inference/SKU deprecation `2027-09-21`. Microsoft's retirement schedule agrees. Recheck before activation and review replacement planning by 2027-06-21. |
+| Quota | `OpenAI.DataZoneStandard.gpt-5.4-mini`: limit 200, current 0, unit thousands of TPM, in each of Sweden Central, Germany West Central, France Central and West Europe. Thus 200,000 TPM unallocated per checked region, not a summed capacity promise. |
+| Capacity | Version-specific DataZoneStandard `availableCapacity=200` in those same four regions; all queried lists had null continuation links. This is a point-in-time report, not a reservation or successful deployment. GPT-4.1-mini DataZone quota remains explicitly 0 in each region. |
+| Rate units | Catalog reports 1 request/minute and 1,000 TPM per capacity unit. A later allocation of 20 units would imply 20 RPM/20,000 TPM, subject to revalidation; neither allocation nor monthly budget is created by quota availability. |
+| Interfaces | Microsoft lists text/image input, text output, structured outputs, system/developer messages, Chat Completions and Responses. Retain `/openai/v1/chat/completions` with deployment name and `response_format=json_schema`, `strict=true`; no Responses migration or new adapter is needed for this use case. |
+| Limits | Microsoft and OpenAI list 400,000 context, maximum 272,000 input and 128,000 output tokens. Input and output share context; reasoning is part of output. These are model limits, not recommended pilot caps. |
+
+The Microsoft reasoning-model feature matrix explicitly includes this version;
+the generic structured-output guide's older model list does not yet list it.
+Live compatibility of this exact schema/image/request combination remains a
+benchmark gate. OpenAI lists reasoning efforts `none` (default), `low`, `medium`,
+`high`, `xhigh`. Propose explicit `none` initially, not an assumed Azure default;
+reject an unsupported setting rather than silently substituting another effort.
+`max_completion_tokens=2000` would cap visible text, formatting and reasoning
+combined. It does not promise 2,000 visible tokens or a complete estimate. A
+reasoning-heavy or truncated response can be billed without a usable result.
+Do not copy the generic vision guide's `max_tokens` or retry recommendations.
+
+#### Price snapshot and monthly scenarios
+
+Azure Retail Prices API, retrieved 2026-09-18, `productName=Azure OpenAI GPT5`,
+`armRegionName=swedencentral`, `type=Consumption`, `currencyCode=USD`, unit `1M`,
+`effectiveStartDate=2026-03-01T00:00:00Z`:
+
+| SKU | USD / million tokens | Meter ID |
+| --- | ---: | --- |
+| `5.4 mini Inp Dz` | 0.825 | `fc81bb98-83fa-569b-a361-70d5904b285d` |
+| `5.4 mini cd Inp Dz` | 0.0825 | `41b51273-5b41-5b0b-ba4b-3900379c9800` |
+| `5.4 mini Opt Dz` | 4.95 | `3167a76c-f4a1-53f1-8784-362e76c0787e` |
+
+Reproduce with GET `https://prices.azure.com/api/retail/prices`, `currencyCode='USD'`,
+filter on the product/region and these exact SKU names; follow `NextPageLink` if
+present (null here). Empty earlier filters were not zero prices. The web price
+table rounds input/cache to 0.83/0.09; calculations use the precise meters above.
+No mini-specific long-context band was found in the checked regular meters;
+do not import GPT-5.4 full-model premiums or prices. Revalidate all applicable
+bands/tier before a funded run. This snapshot is not an installed or approved
+`PriceTable.version`; a future explicit version must bind deployment, model,
+billing tier and these rates. No cache discount is assumed for admission.
+
+For input I, cached subset C and total billable output O:
+`cost_usd = ((I-C)*0.825 + C*0.0825 + O*4.95)/1000000`.
+Reasoning tokens are already in O, never added a second time. Image tokens are
+input tokens, not base64 characters or an image-generation fee. This profile
+uses no tools, paid cache-storage feature or additional model-service meter.
+
+**Scenarios, not measured consumption:** 4,000 total billable input tokens and
+1,000 total billable output tokens per request, no cached tokens. Cost per request
+is `0.00330 + 0.00495 = USD 0.00825`.
+
+| Requests per person/month | People | Total requests | Total input / output tokens | USD per person | USD both people |
+| ---: | ---: | ---: | --- | ---: | ---: |
+| 300 | 2 | 600 | 2,400,000 / 600,000 | 2.475 | 4.95 |
+| 600 | 2 | 1,200 | 4,800,000 / 1,200,000 | 4.95 | 9.90 |
+
+Independent sensitivities relative to that baseline, not forecasts or guarantees:
+
+| Additional assumption | USD/month, 600 base requests | USD/month, 1,200 base requests |
+| --- | ---: | ---: |
+| 3,000 extra billable image-input tokens on every base request | 6.435 | 12.87 |
+| 1,000 extra reasoning/output tokens on every base request (2,000 output total) | 7.92 | 15.84 |
+| 20% extra correction requests, each assumed 4,000 input + 1,000 output | 5.94 | 11.88 |
+
+Do not add image or reasoning tokens again when already included in the baseline.
+The 3,000 and 20% examples are sensitivity assumptions, not observed image costs
+or correction frequency. Corrections are separate billable operations and can
+resend a larger current estimate; they do not resend the photo. If monthly
+request counts already include corrections, do not apply another multiplier.
+Three successful correction rounds can make four calls per initial analysis;
+failures/new explicit operations also consume the server's request and cost caps.
+Each extra 1,000 input tokens adds USD 0.000825; 1,000 output adds USD 0.00495.
+The previous USD 10 total monthly proposal has virtually no headroom at 1,200
+baseline calls, before reservation headroom, images or corrections. A budget is
+not a promise to serve the proposed call count. All figures exclude hosting,
+storage, tax and FX; the subscription is billed in EUR under its actual contract.
+
+#### Safer reservation without an invented small bound
+
+The smallest initial implementation can use this model's documented **272,000
+maximum input**, covering text, final schema, framing and images collectively,
+plus the enforced total output cap. With the reviewed standard rates and 2,000
+output tokens: `(272000*0.825 + 2000*4.95)/1000000 = USD 0.2343`, or 234,300,000
+nano-USD. At 4,000 output it is USD 0.2442, requiring separate cap approval.
+This is a conditional model-token bound for the attested snapshot/tier, not a
+universal billing guarantee, prepayment or currently implemented policy.
+It is lower than the prior GPT-4.1-mini reserve of USD 0.46445344 at 2,000 output.
+Blindly carrying over its 1,047,576 input cap at the new rates would reserve
+USD 0.8741502. Neither that old limit nor its image rules belong in this profile.
+
+A substantially tighter per-request bound remains **unproven**. Prepare one
+immutable final request before admission, including the transformed strict
+schema. Count text with a reviewed model tokenizer or proved byte bound, include
+all framing/schema overhead, and add a version/detail-specific image bound based
+on validated pixels. The current 64 KiB pre-transformation cap, one-image/3 MiB/
+4,096-pixel safety limits and average token estimates do not prove that sum.
+OpenAI's current image guide lists 32-pixel patches, multiplier 1.2 and a
+2,500-patch/2,048-pixel limit for GPT-5.4-mini `high` (`auto` maps to `high`),
+with possible one-token rounding variation. Azure's generic vision guide instead
+describes older tile behavior; Azure equivalence is not established by these
+reads. Do not certify a 3,000-token Azure image ceiling from that example.
+
+Use the full model-input bound or reject if any accounting term is unproved;
+pin an explicit reviewed detail level instead of relying on `auto`. A 10,000-input/
+2,000-output calculation would be USD 0.01815, but **must not become the reserve**
+until that input bound is proved and enforced. Sample maxima, a percentile plus
+margin, post-call overrun detection, and a later benchmark cannot prove a universal
+pre-dispatch bound. Preserve atomic reservation, full unknown-outcome retention,
+single dispatch and failure counting. Binding model/tier/price version and the
+actual input/output bounds to the operation lets settlement detect violations;
+it cannot undo provider spend that already occurred.
+
+#### Smallest implementation and benchmark decision
+
+**Suitable for a model-profile implementation and a separately approved limited
+benchmark, not yet for activation.** Nutrition quality, label accuracy, latency,
+usage completeness and real Azure response identity remain unmeasured. No
+alternative provider or speculative adapter is justified at this stage.
+
+1. Add one explicit reviewed model profile to the existing Azure path, consumed
+  by both `Coordinator.bound` and `Coordinator.settle`: snapshot identity,
+  272,000 input maximum, enforced pilot output cap and standard billing tier.
+  Include the profile in the policy digest/attestation; unknown model/profile
+  denies admission. Reuse `PriceTable`'s three-rate arithmetic with a new explicit
+  version. Never accept arbitrary configured model names merely to remove the
+  old hard-coded check. Carry forward the existing ledger on a policy change.
+2. Add server-side, profile-bound `reasoning_effort` and image `detail` to the
+  existing adapter/configuration. Start with explicit `none`, a reviewed `high`
+  detail, and the existing 2,000 completion cap; these settings need Azure
+  validation. Explicitly pin/attest the ordinary service tier before dispatch;
+  reject unexpected tier metadata rather than price Priority at Standard rates.
+  Keep system/user messages, strict schema and local business
+  validation, `store=false`, `stream=false`, `n=1`, no tools, no retries or
+  fallback. Keep both production guards and negative readiness unchanged.
+  Raising the software's 32,768 ceiling to the model's 128,000 is unnecessary.
+3. Extend existing mock tests for this exact profile, outgoing parameters, price
+  and returned-model mismatch, input/output violations, cached/reasoning usage,
+  billed truncation/refusal and unknown outcomes. Store/check the effective
+  per-operation cap, not only the broader policy cap, before introducing tighter
+  request-specific reserves. No iOS/public contract or new provider is needed.
+4. Implement variant B authorization as a separate release prerequisite:
+  backend Managed Identity token acquisition for the gateway audience; strict
+  signature/issuer/tenant/audience/lifetime verification, exact backend
+  principal/client and app-role authorization; retain independent HMAC and
+  service token. Verify header provenance and all revisions/alternate ingress.
+  Entra authentication alone accepts too broad a caller set. Bound bodies before
+  JSON/image work and bound scaling/logs; model budgets are not hosting-cost caps.
+
+Next package: the model profile, explicit parameters and offline regression tests
+only. After that, seek separate resource/funding approval for **one pass of the
+existing 18 synthetic/staged benchmark cases**, one candidate, at most 18 attempts,
+no paid warmups/repairs/retries. With the full input reserve and 2,000 output cap,
+`18*0.2343 = USD 4.2174`; propose a separate USD 5 model-only ceiling, not approval.
+Unknown operations keep reserve/slots and may stop the run before 18 attempts.
+The historical 54-repeat candidate / 162-call comparison and its USD 1.53 bound
+do not apply; 54 attempts at this conservative reserve would be USD 12.6522.
+Measure usage (including reasoning/cache), cost per usable result, truncations,
+schema/label/correction accuracy and cold/warm latency against the existing
+rubric. One pass is screening, not proof of the earlier 95%/p95 release targets.
+Stop for unsupported parameters, identity/rate mismatch or bound violation; do
+not silently raise caps or switch models. If screening fails, first assess the
+smallest change within this profile; only then review another Azure model with
+fresh quota/capability/pricing evidence, without prebuilding another adapter.
+
+Sources checked 2026-09-18: [Azure reasoning and limits](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/reasoning),
+[retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule),
+[deployment types](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/deployment-types),
+[structured outputs](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/structured-outputs),
+[Azure vision](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/gpt-with-vision),
+[Azure pricing](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/),
+[Retail API](https://prices.azure.com/api/retail/prices),
+[OpenAI model details](https://developers.openai.com/api/docs/models/gpt-5.4-mini),
+[OpenAI image accounting](https://developers.openai.com/api/docs/guides/images-vision),
+[gateway Entra authorization](https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra#daemon-client-application-service-to-service-calls).
+Validation: 46 existing targeted offline adapter/pilot tests passed, covering
+production denial, strict single-call transport, disabled retries, output caps,
+unknown/model/price handling and cache/reasoning accounting. These exercise the
+current baseline with mocks, not a GPT-5.4-mini deployment or a live token bound.
+
+### GPT-5.4-mini local profile implementation (2026-09-18)
+
+The subsequently authorized code package implements the reviewed profile; it does
+not activate the pilot or amend the historical review's evidence/assumptions.
+No cloud resources, paid calls or production configuration were changed.
+The adapter still requires `APP_ENV=development` or `test` on every call and its
+readiness remains false. Public/backend/iOS contracts remain provider-neutral.
+
+Configuration has **no automatic profile selection**. Use the following shapes
+only after the relevant approval; `benchmark-deployment` is a placeholder, not
+an existing resource. All routes must name explicitly bound deployments, and all
+profile and price deployment keys must agree exactly:
+
+```json
+{"food_text_v1":"benchmark-deployment","food_image_v1":"benchmark-deployment"}
+```
+
+The above is `AZURE_OPENAI_MODEL_ROUTES_JSON`. Set `AZURE_OPENAI_PROFILES_JSON` to:
+
+```json
+{"benchmark-deployment":"gpt-5.4-mini-2026-03-17-dz-v1"}
+```
+
+And `AZURE_OPENAI_PRICES_JSON` to:
+
+```json
+{
+  "version": "azure-sweden-dz-2026-09-18-v1",
+  "currency": "USD",
+  "deployments": {
+    "benchmark-deployment": {
+      "model": "gpt-5.4-mini-2026-03-17",
+      "input_per_million": "0.825",
+      "cached_input_per_million": "0.0825",
+      "output_per_million": "4.95"
+    }
+  }
+}
+```
+
+`GPT_54_MINI` in `app/providers/pricing.py` is the immutable reviewed definition:
+model/version `gpt-5.4-mini` / `2026-03-17`, SKU `DataZoneStandard`, region
+`swedencentral`. The response must name exactly `gpt-5.4-mini-2026-03-17` and tier
+`default`; absent/other identities deny the result and close the pilot ledger
+for investigation. This expectation is not live Azure verification. A different
+Azure response identifier requires review, not an alias/wildcard workaround.
+The profile pins `reasoning_effort=none`, image `detail=high` and
+`service_tier=default`; incompatible/unknown profile overrides and changed rates
+or price versions fail closed. Capability/configuration errors get no retry.
+
+Final source cross-check (2026-09-18): Microsoft's [reasoning matrix](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/reasoning)
+names this exact mini snapshot and Chat Completions/output-cap support; its
+`none` footnote names the GPT-5.4 family, not a separate mini-specific default.
+The [Azure Chat reference](https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat)
+documents lowercase `none`, `image_url.detail=high` and total
+`max_completion_tokens`. Microsoft's [processing-tier guide](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/priority-processing)
+explicitly documents `service_tier=default` for standard pricing in Chat
+Completions and `default` in standard-tier responses. Priority is not supported
+for EU DataZone; no priority capability is assumed here. These are documented
+contracts, not proof of this exact request on a Sweden deployment; older Azure
+examples also contain null tier metadata. Missing tier still stops the run.
+`deployment_verified_until` is an operator attestation deadline, not an ARM
+lookup: before setting it, independently verify the resource ID/endpoint,
+deployment name, model/version, region, SKU, default tier, upgrade policy and
+current prices. The policy digest binds the configured expectations, not proof
+that Azure currently matches them. Disable admission on deployment changes.
+
+Use `AI_PROVIDER_MAX_OUTPUT_TOKENS=2000` and policy `max_output_tokens=2000` for
+the manifest. Smaller explicit caps are allowed; larger profile configuration
+is rejected. The SDK receives `max_completion_tokens`, capped by both adapter
+and request. It includes reasoning/formatting/visible output, not 2,000 visible
+tokens plus hidden tokens. No `max_tokens`, sampling controls, tools or repairs
+are introduced. Both original business constraints and strict transport schema
+are checked; a billed refusal/truncation, including reasoning-only exhaustion,
+never becomes a usable estimate.
+
+Admission computes `(272000*max(0.825,0.0825) + 2000*4.95)/1000000`, then rounds
+up to nano-USD: **234300000 = USD 0.2343**. It is not a flat fee. Actual cost uses
+noncached input, cached input and total completion exactly once. Raw JSON integer
+checks precede SDK coercion; missing/invalid counts never release reserve as zero.
+Successful valid output may still have unknown cost. Refused/truncated results
+with valid matching usage are charged; unknown outcomes keep reserve/slots.
+
+The operation atomically stores deployment, returned-model expectation, profile,
+price version, service tier and effective input/output caps. The single-use permit
+binds the request to deployment/profile/price/output cap as well. Settlement checks
+the operation's cap, not just the potentially larger current policy ceiling;
+reported violations block further admission and cannot undo existing spend.
+The policy digest now includes full profile parameters and configured adapter
+cap, including an empty profile map for the legacy path. Existing ledgers therefore
+require stopped admission and audited carry-forward even when retaining GPT-4.1;
+do not reset, silently migrate, or discard unknown operations.
+
+For the benchmark, `AI_PILOT_POLICY_JSON` must additionally include a `benchmark`
+object with `run_id`, `manifest_sha256` (SHA-256 of `canonical(manifest)`),
+`max_attempts: 18`, `max_reserved_usd: "4.2174"` and an approved Unix-seconds
+`expires_at`. These fields are part of the policy digest. The shared ledger holds
+the run's permanent `attempts` and cumulative admitted `reserved` counters;
+reservation updates them atomically with the operation and all period limits.
+Neither settlement, day/month rollover, a new Coordinator nor tombstone cleanup
+replenishes them. Unknown attempts stay counted and reserved. Missing/malformed
+run state or a changed run/manifest fails closed; never initialize a replacement
+ledger to continue a partially consumed run. Ordinary non-benchmark policies
+remain supported, but are not authorization for this 18-attempt benchmark.
+
+#### Offline preparation and isolated real-run prerequisites
+
+The [versioned manifest](../ai-gateway/tests/fixtures/gpt54-mini-benchmark.v1.json)
+fixes 6 text, 6 staged-image, 4 refinement and 2 rendered-label cases, references,
+tolerances and result fields. Refinements use a fixed baseline, never a paid setup
+call. The offline test renders labels locally and substitutes existing synthetic
+image bytes for P1-P6 solely for transport checks. **Those six reviewed staged
+photos and their hashes are still required before a quality benchmark.** Freeze
+all fixture/prompt/schema hashes, dimensions and label readability before funding.
+
+Offline check, from `ai-gateway/`, with the existing test environment:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_pilot.py -k benchmark_manifest
+```
+
+This always uses SDK MockTransport and MemoryCAS, synthetic identities/keys and
+verified HMACs; it has no live switch. It proves 18 distinct single dispatches,
+duplicate rejection, rejection of a 19th attempt, and summed reserves of
+`18*0.2343 = USD 4.2174`. It does not prove Azure availability, Table isolation,
+real identity authorization, photo quality, nutrition quality or latency.
+
+A later genuine benchmark must use a **separately authorized, isolated nonproduction
+environment**, not relabel a production service as development. Preserve the
+regular authenticated backend -> gateway -> Coordinator -> adapter path:
+
+1. Obtain resource/funding/privacy approval and review endpoint, exact deployed
+   version, Sweden Central DataZoneStandard, ordinary tier, all rates and expiring
+   `deployment_verified_until` attestation. Configure real identities separately
+   from synthetic case content. Live compatibility confirmation consumes one of
+   the 18 attempts, not an additional paid smoke call.
+2. Use isolated nonproduction backend/gateway instances with `AI_PILOT_ENABLED=true`,
+   backend Easy Auth and allowlist, service token plus request-bound HMAC, separate
+   signing/fingerprint keys, no development auth bypass. Use real Managed Identity
+   Table access and an approved, durably initialized ledger. The current Table
+   client uses Managed Identity, not local developer/key authentication; a laptop
+   alone is not a documented real-run setup. Do not replace it with MemoryCAS.
+3. Restrict benchmark ingress to the authorized backend and runner with no public
+   end-user exposure. Variant B public ingress still needs its backend workload
+   identity/role and early bounded-ingress gates; this package does not implement
+   them. Preserve Table network restrictions and bound independent hosting costs.
+   Do not override production guards, readiness or auth dependencies. A separate
+   nonproduction process may invoke the normal request path while `/readyz` remains
+   negative; if the host/runner requires positive readiness, that setup is blocked,
+   not a reason to return true or disable its checks.
+4. Approve the run manifest with one durable UUIDv7 operation per case, one pass,
+   no replacement IDs after failures, no automatic retry/repair/warmup/LLM judge.
+  Set the permanent `benchmark` limits above, person and global day/month
+  request limits to at most 18, concurrency 1, and both model-budget ceilings
+  to at most USD 4.2174. Stop at expiry; calendar rollover does not renew the run.
+  Never restart with a fresh ledger/manifest. Minute limits may be lower and must
+   respect the actual deployment quota. Never use two users' separate limits to
+   double the global 18-attempt allowance. No automatic replenishment after cheap
+   successes; counts cap attempts independently of reconciled cost.
+5. Stop on identity/tier/price/usage-bound violations or unknown outcomes for review;
+   do not release retained reservations to finish the matrix. Review the manifest's
+   quality scores and schema/label/correction criteria manually, 17 estimation
+   cases plus P5 separately. Report cold/warm elapsed time, input/cache/total output/
+   reasoning, usage completeness, actual known cost and retained reserve separately;
+   include failures in spend and cost per usable estimate. Unknown is never zero.
+   No result or measured-quality claim is supplied by this offline package.
 
 ### Atomicity, operations and failures
 

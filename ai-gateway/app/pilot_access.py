@@ -64,7 +64,9 @@ def build_coordinator(store=None):
         if prices is None or settings.ai_provider_max_output_tokens > policy.max_output_tokens:
             raise PilotError()
         routes = settings.azure_openai_model_routes()
-        control = Coordinator(store, policy, secret, allowlist, prices, routes)
+        control = Coordinator(store, policy, secret, allowlist, prices, routes,
+                      profile_bindings=settings.azure_openai_profiles(),
+                      max_output_tokens=settings.ai_provider_max_output_tokens)
         if store is None:
             control.store = AzureTableStore.connect(os.environ["AI_PILOT_TABLE_ENDPOINT"], os.environ["AI_PILOT_TABLE_NAME"])
         return control

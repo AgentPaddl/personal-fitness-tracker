@@ -8,7 +8,7 @@ from functools import lru_cache
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.providers.pricing import PriceTable
+from app.providers.pricing import PriceTable, resolve_profiles
 
 #: Providers implemented today. "copilot" is the real GitHub Copilot SDK
 #: adapter (see app/providers/github_copilot.py); "fake" is deterministic
@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     azure_openai_api_key: SecretStr | None = Field(default=None, alias="AZURE_OPENAI_API_KEY", repr=False)
     azure_openai_model_routes_json: str = Field(default="", alias="AZURE_OPENAI_MODEL_ROUTES_JSON")
     azure_openai_prices_json: str = Field(default="", alias="AZURE_OPENAI_PRICES_JSON")
+    azure_openai_profiles_json: str = Field(default="", alias="AZURE_OPENAI_PROFILES_JSON")
 
     # Server-side, opaque model-routing key for the food-text generation
     # purpose. Never exposed through the public API; changing it must not
@@ -160,7 +161,8 @@ class Settings(BaseSettings):
                 raise ValueError("AZURE_OPENAI_MODEL_ROUTES_JSON must map every configured purpose.")
             if not 1 <= self.ai_provider_max_output_tokens <= 32768:
                 raise ValueError("AI_PROVIDER_MAX_OUTPUT_TOKENS must be between 1 and 32768.")
-            self.azure_openai_prices()
+            resolve_profiles(self.azure_openai_profiles(), routes, self.azure_openai_prices(),
+                             self.ai_provider_max_output_tokens)
 
         if not (1 <= self.ai_provider_max_concurrency <= 20):
             raise ValueError("AI_PROVIDER_MAX_CONCURRENCY must be between 1 and 20.")
@@ -235,6 +237,16 @@ class Settings(BaseSettings):
             return PriceTable.model_validate(self._azure_json(self.azure_openai_prices_json))
         except ValueError:
             raise ValueError("Invalid AZURE_OPENAI_PRICES_JSON; expected a versioned USD deployment price table.") from None
+
+    def azure_openai_profiles(self) -> dict[str, str]:
+        from app.providers.openai_api import _identifier
+
+        if not self.azure_openai_profiles_json.strip():
+            return {}
+        bindings = self._azure_json(self.azure_openai_profiles_json)
+        if not bindings or any(not _identifier(key) or not _identifier(value) for key, value in bindings.items()):
+            raise ValueError("AZURE_OPENAI_PROFILES_JSON requires deployment/profile identifiers.")
+        return bindings
 
     def copilot_model_routes(self) -> dict[str, str]:
         """Parse COPILOT_MODEL_ROUTES_JSON into a purpose -> model id mapping.

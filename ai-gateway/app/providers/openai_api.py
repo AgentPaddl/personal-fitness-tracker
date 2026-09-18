@@ -26,7 +26,7 @@ from app.providers.base import (
     GenerationMetadata, StructuredGenerationProvider, StructuredGenerationRequest,
     StructuredGenerationResult, TokenUsage,
 )
-from app.providers.pricing import PriceTable
+from app.providers.pricing import PriceTable, resolve_profiles
 from app.providers.strict_schema import to_strict_schema
 
 logger = logging.getLogger("app.generation")
@@ -54,16 +54,22 @@ def _integer(value: Any) -> int | None:
 
 
 def _usage(response: Any) -> TokenUsage | None:
-    usage = getattr(response, "usage", None)
-    prompt = _integer(getattr(usage, "prompt_tokens", None))
-    completion = _integer(getattr(usage, "completion_tokens", None))
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    prompt = _integer(usage.get("prompt_tokens"))
+    completion = _integer(usage.get("completion_tokens"))
     if prompt is None or completion is None:
         return None
-    total = getattr(usage, "total_tokens", None)
+    total = usage.get("total_tokens")
     if total is not None and (_integer(total) is None or total != prompt + completion):
         return None
-    cached = _integer(getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None))
-    reasoning = _integer(getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None))
+    prompt_details, completion_details = usage.get("prompt_tokens_details"), usage.get("completion_tokens_details")
+    cached_raw = prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None
+    reasoning_raw = completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None
+    cached, reasoning = _integer(cached_raw), _integer(reasoning_raw)
+    if (cached_raw is not None and cached is None) or (reasoning_raw is not None and reasoning is None):
+        return None
     if (cached is not None and cached > prompt) or (reasoning is not None and reasoning > completion):
         return None
     return TokenUsage(prompt, completion, cached, reasoning)
@@ -93,6 +99,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
     def __init__(
         self, *, endpoint: str, api_key: str, model_routes: dict[str, str],
         max_output_tokens: int = 2000, prices: PriceTable | None = None,
+        profile_bindings: dict[str, str] | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
     ):
         base_url = validate_endpoint(endpoint)
@@ -103,6 +110,8 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             raise ValueError("Explicit credentials and valid deployment routes are required.")
         if type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 32768:
             raise ValueError("Output token limit must be between 1 and 32768.")
+        self._profile_bindings = dict(profile_bindings or {})
+        self._profiles = resolve_profiles(self._profile_bindings, model_routes, prices, max_output_tokens)
         logging.getLogger("openai._base_client").disabled = True
         self._client = AsyncOpenAI(
             api_key=api_key, base_url=base_url, max_retries=0,
@@ -113,7 +122,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
         )
         self._routes = dict(model_routes)
         self._max_output_tokens = max_output_tokens
-        self._prices = prices
+        self._prices = prices.model_copy(deep=True) if prices else None
 
     async def check_ready(self) -> bool:
         return False
@@ -128,6 +137,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
         started = time.perf_counter()
         deployment = self._routes.get(request.model_purpose)
         response = None
+        accounting = None
         request_id = None
         status = "invalid_request"
         try:
@@ -136,8 +146,8 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
                 raise ServiceNotReadyError()
             from app.pilot import consume_permit, enabled
 
-            if enabled():
-                consume_permit(request)
+            profiles = resolve_profiles(self._profile_bindings, self._routes, self._prices, self._max_output_tokens)
+            profile = profiles.get(deployment)
             if deployment is None:
                 status = "model_unavailable"
                 raise ModelUnavailableError()
@@ -146,22 +156,41 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
                 raise ProviderOutputInvalidError()
             if not math.isfinite(request.timeout_seconds) or request.timeout_seconds <= 0:
                 raise ProviderOutputInvalidError()
+            effective_limit = min(limit or self._max_output_tokens, self._max_output_tokens)
+            if enabled():
+                consume_permit(request, deployment=deployment, profile_id=profile.identifier if profile else None,
+                               max_output_tokens=effective_limit,
+                               price_version=self._prices.version if self._prices else None)
             strict = to_strict_schema(request.output_json_schema)
             Draft202012Validator.check_schema(request.output_json_schema)
             validator = Draft202012Validator(request.output_json_schema, format_checker=FormatChecker())
             strict_validator = Draft202012Validator(strict)
-            messages = self._messages(request)
+            messages = self._messages(request, profile.image_detail if profile else None)
+            parameters = {"reasoning_effort": profile.reasoning_effort, "service_tier": profile.service_tier} if profile else {}
             status = "unavailable"
             async with asyncio.timeout(request.timeout_seconds):
-                response = await self._client.chat.completions.create(
+                raw = await self._client.chat.completions.with_raw_response.create(
                     model=deployment, messages=messages, store=False, stream=False, n=1,
-                    max_completion_tokens=min(limit or self._max_output_tokens, self._max_output_tokens),
+                    max_completion_tokens=effective_limit,
                     response_format={"type": "json_schema", "json_schema": {
                         "name": "structured_result", "strict": True, "schema": strict,
                     }},
                     timeout=request.timeout_seconds,
+                    **parameters,
                 )
-            request_id = _identifier(getattr(response, "_request_id", None))
+            request_id = _identifier(raw.request_id)
+            status = "invalid_output"
+            accounting = json.loads(raw.content, object_pairs_hook=_json_object, parse_constant=_invalid_constant)
+            response = raw.parse()
+            if profile:
+                if (accounting.get("model") != profile.price.model
+                        or accounting.get("service_tier") != profile.service_tier):
+                    status = "profile_mismatch"
+                    raise ModelUnavailableError()
+                usage = _usage(accounting)
+                if usage and (usage.input_tokens > profile.max_input_tokens or usage.output_tokens > effective_limit):
+                    status = "bound_violation"
+                    raise ProviderOutputInvalidError()
             status = "invalid_output"
             if len(response.choices) != 1:
                 raise ProviderOutputInvalidError()
@@ -182,11 +211,11 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             validator.validate(data)
             status = "success"
         except asyncio.CancelledError:
-            self._metadata(deployment, response, request_id, started, "cancelled")
+            self._metadata(deployment, accounting, request_id, started, "cancelled")
             raise
         except (TimeoutError, APITimeoutError):
             error = ProviderTimeoutError()
-            error.metadata = self._metadata(deployment, response, request_id, started, "timeout")
+            error.metadata = self._metadata(deployment, accounting, request_id, started, "timeout")
             raise error from None
         except APIStatusError as exc:
             error_type, status = {
@@ -200,7 +229,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             if exc.status_code == 400 and exc.code == "content_filter":
                 error_type, status = ProviderOutputInvalidError, "refused"
             error = error_type()
-            error.metadata = self._metadata(deployment, response, _identifier(exc.request_id), started, status)
+            error.metadata = self._metadata(deployment, accounting, _identifier(exc.request_id), started, status)
             raise error from None
         except Exception as exc:
             if isinstance(exc, GatewayError):
@@ -209,21 +238,27 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
                 error = ProviderOutputInvalidError()
             else:
                 error = ProviderUnavailableError()
-            error.metadata = self._metadata(deployment, response, request_id, started, status)
+            error.metadata = self._metadata(deployment, accounting, request_id, started, status)
             raise error from None
         return StructuredGenerationResult(
-            data=data, metadata=self._metadata(deployment, response, request_id, started, status),
+            data=data, metadata=self._metadata(deployment, accounting, request_id, started, status),
         )
 
     def _metadata(self, deployment, response, request_id, started, status) -> GenerationMetadata:
+        response = response if isinstance(response, dict) else {}
         usage = _usage(response)
-        model = _identifier(getattr(response, "model", None))
+        model = _identifier(response.get("model"))
+        profile = self._profiles.get(deployment)
+        tier = _identifier(response.get("service_tier"))
         cost = self._prices.estimate(deployment, model, usage) if self._prices else None
+        if profile and (model != profile.price.model or tier != profile.service_tier):
+            cost = None
         metadata = GenerationMetadata(
             provider="azure_openai", requested_deployment=deployment, returned_model=model,
             provider_request_id=request_id, duration_ms=round((time.perf_counter() - started) * 1000, 3),
             status=status, usage=usage, estimated_cost_usd=cost,
             price_version=self._prices.version if self._prices else None,
+            profile_id=profile.identifier if profile else None, service_tier=tier,
         )
         logger.info(
             "generation status=%s duration_ms=%s usage_known=%s input_tokens=%s output_tokens=%s cost_usd=%s price_version=%s",
@@ -235,7 +270,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
         return metadata
 
     @staticmethod
-    def _messages(request: StructuredGenerationRequest) -> list[dict[str, Any]]:
+    def _messages(request: StructuredGenerationRequest, image_detail: str | None = None) -> list[dict[str, Any]]:
         messages = [{"role": message.role, "content": message.content} for message in request.messages]
         if not messages or any(message["role"] not in {"system", "user"} for message in messages):
             raise ProviderOutputInvalidError()
@@ -250,6 +285,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
                     raise ProviderOutputInvalidError()
                 parts.append({"type": "image_url", "image_url": {
                     "url": f"data:{attachment.media_type};base64,{attachment.data}",
+                    **({"detail": image_detail} if image_detail else {}),
                 }})
             messages.append({"role": "user", "content": parts})
         return messages

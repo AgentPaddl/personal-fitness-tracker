@@ -119,7 +119,31 @@ HTTP body. Both risks need boundary-specific checks before external use.
 
 ### Provider selection
 
-**First integration candidate: Azure OpenAI, `gpt-4.1-mini` version
+**2026-09-18 update:** the verified private subscription reports zero
+GPT-4.1-mini DataZone quota in all four checked EU regions. The next candidate is
+Azure `gpt-5.4-mini`, version `2026-03-17`, EU `DataZoneStandard`, for the target
+variant B gateway (public HTTPS with strict backend-only authorization). See the
+[model review, costs and implementation gates](operations-runbook.md#gpt-54-mini-candidate-review-2026-09-18).
+This supersedes the next-candidate recommendation below, not the implemented
+model binding or production guard. No deployment or funded benchmark is approved;
+the historical multi-provider benchmark budget below does not apply to this model.
+
+**Local implementation (2026-09-18):** the explicit
+`gpt-5.4-mini-2026-03-17-dz-v1` profile now binds Sweden Central DataZoneStandard,
+the reviewed price version, `reasoning_effort=none`, image `detail=high`, ordinary
+service tier and a maximum of 2,000 total completion tokens. The existing adapter,
+Coordinator and public contracts are retained. Operations persist their effective
+model/deployment/price/cap binding; SDK responses with a different model/tier are
+rejected, and raw-JSON usage avoids coerced token counts. The model-input maximum
+of 272,000 yields USD 0.2343 reserve, without claiming a tighter image bound.
+The [18-case offline manifest](../ai-gateway/tests/fixtures/gpt54-mini-benchmark.v1.json)
+and existing test suites exercise the path with mocks only. Six staged photo
+assets still require preparation/review; placeholder images prove transport, not
+nutrition quality. See the [isolated benchmark gates](operations-runbook.md#gpt-54-mini-local-profile-implementation-2026-09-18).
+Production denial, negative readiness, privacy/funding gates and variant B
+backend-only authorization prerequisites are unchanged. No paid run is approved.
+
+**Initial integration candidate (2026-09-17): Azure OpenAI, `gpt-4.1-mini` version
 `2025-04-14`, EU `DataZoneStandard`.** This matches the EU-processing preference,
 the existing Azure operating environment, and the current small text/image/JSON
 workload. It does not require assuming approval for OpenAI's separate European

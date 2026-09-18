@@ -26,6 +26,7 @@ def _build_provider(settings: Settings) -> StructuredGenerationProvider:
             model_routes=settings.azure_openai_model_routes(),
             max_output_tokens=settings.ai_provider_max_output_tokens,
             prices=settings.azure_openai_prices(),
+            profile_bindings=settings.azure_openai_profiles(),
         )
     if settings.ai_provider == "fake":
         return FakeProvider()

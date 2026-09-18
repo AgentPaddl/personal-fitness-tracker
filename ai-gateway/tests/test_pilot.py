@@ -15,7 +15,7 @@ import pytest
 
 from app.pilot import Conflict, Coordinator, PilotError, PilotPolicy, digest
 from app.providers.base import GenerationMessage, StructuredGenerationRequest, StructuredGenerationResult
-from app.providers.pricing import PriceTable
+from app.providers.pricing import GPT_54_MINI, PriceTable
 
 IDENTITY = ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002")
 OTHER = (IDENTITY[0], "00000000-0000-4000-8000-000000000003")
@@ -67,6 +67,159 @@ def request():
                                        {"type": "object"}, 1, max_output_tokens=100)
 
 
+def profile_coordinator(store=None, *, max_output_tokens=2000, **policy_changes):
+    policy = coordinator(max_output_tokens=2000, **policy_changes).policy
+    prices = PriceTable(version=GPT_54_MINI.price_version, currency="USD",
+                        deployments={"deployment-test": GPT_54_MINI.price})
+    control = Coordinator(store or MemoryCAS(), policy, SECRET, {IDENTITY, OTHER}, prices,
+                          {"purpose-test": "deployment-test"},
+                          profile_bindings={"deployment-test": GPT_54_MINI.identifier},
+                          max_output_tokens=max_output_tokens)
+    if not control.store.rows:
+        control.store.rows["ledger"] = (control.initial_ledger(), "1")
+    return control
+
+
+@pytest.mark.parametrize("outcome", ["success", "missing_usage", "refused", "reasoning_exhausted", "model", "tier"])
+def test_profile_pilot_reservation_settlement_and_failures(monkeypatch, outcome):
+    import httpx2
+    from app.errors import ModelUnavailableError, ProviderOutputInvalidError
+    from tests.test_openai_api import _profile_provider, _profile_completion, _request
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    calls = []
+    response = _profile_completion()
+    if outcome == "missing_usage":
+        response["usage"] = None
+    elif outcome == "refused":
+        response["choices"][0]["message"]["refusal"] = "synthetic refusal"
+    elif outcome == "reasoning_exhausted":
+        response["choices"][0].update(finish_reason="length", message={"role": "assistant", "content": ""})
+        response["usage"].update(completion_tokens=2000, total_tokens=2100,
+                                 completion_tokens_details={"reasoning_tokens": 2000})
+    elif outcome == "model":
+        response["model"] = "gpt-5.4-mini"
+    elif outcome == "tier":
+        response["service_tier"] = "priority"
+
+    async def run():
+        control = profile_coordinator()
+        generation, identifier = _request(max_output_tokens=2000), operation()
+
+        def handler(request):
+            calls.append(request)
+            return httpx2.Response(200, json=response)
+
+        provider = _profile_provider(handler)
+        try:
+            assert control.bound(generation) == 234300000
+            if outcome in {"refused", "reasoning_exhausted", "model", "tier"}:
+                error_type = ModelUnavailableError if outcome in {"model", "tier"} else ProviderOutputInvalidError
+                with pytest.raises(error_type):
+                    await control.generate(provider, generation, IDENTITY, identifier, "synthetic")
+            else:
+                await control.generate(provider, generation, IDENTITY, identifier, "synthetic")
+            row = next(data for key, (data, _) in control.store.rows.items() if key.startswith("op-"))
+            assert row["reserved"] == 234300000
+            assert row["admission"] == {
+                "deployment": "deployment-test", "model": GPT_54_MINI.price.model,
+                "profile_id": GPT_54_MINI.identifier, "service_tier": "default",
+                "price_version": GPT_54_MINI.price_version, "max_input_tokens": 272000, "max_output_tokens": 2000,
+            }
+            unknown = outcome in {"missing_usage", "model", "tier"}
+            assert row["usage_known"] is not unknown
+            expected = 234300000 if unknown else 9952800 if outcome == "reasoning_exhausted" else 151800
+            assert row["charged"] == expected
+            assert control.store.rows["ledger"][0]["blocked"] is (outcome in {"model", "tier"})
+            with pytest.raises(PilotError):
+                await control.generate(provider, generation, IDENTITY, identifier, "synthetic")
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("change", ["deployment", "cap", "price_version"])
+def test_profile_dispatch_permit_rejects_adapter_drift(monkeypatch, change):
+    from app.errors import ProviderOutputInvalidError
+    from tests.test_openai_api import _profile_provider, _profile_prices, _request
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise AssertionError("Mismatched dispatch")
+
+    async def run():
+        control = profile_coordinator()
+        options = {}
+        if change == "deployment":
+            options = {"model_routes": {"purpose-test": "other"}, "profile_bindings": {"other": GPT_54_MINI.identifier},
+                       "prices": PriceTable(version=GPT_54_MINI.price_version, currency="USD",
+                                            deployments={"other": GPT_54_MINI.price})}
+        elif change == "cap":
+            options = {"max_output_tokens": 1000}
+        provider = _profile_provider(handler, **options)
+        if change == "price_version":
+            provider._prices = _profile_prices().model_copy(update={"version": "unreviewed"})
+        try:
+            with pytest.raises(ProviderOutputInvalidError if change == "price_version" else PilotError):
+                await control.generate(provider, _request(max_output_tokens=2000), IDENTITY, operation(), "synthetic")
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert calls == []
+
+
+@pytest.mark.parametrize("change", ["input", "effective_output", "deployment", "version", "profile", "missing_cache"])
+def test_profile_settlement_checks_recorded_binding_and_bounds(change):
+    from app.providers.base import GenerationMetadata, TokenUsage
+    from tests.test_openai_api import _request
+
+    class Metered:
+        async def generate(self, request):
+            metadata = GenerationMetadata(
+                "azure_openai", "deployment-test", GPT_54_MINI.price.model, None, 1, "success",
+                TokenUsage(100, 20, 40, 5), Decimal("999"), GPT_54_MINI.price_version,
+                GPT_54_MINI.identifier, "default")
+            if change == "input":
+                metadata = replace(metadata, usage=TokenUsage(272001, 20, 0, 0))
+            elif change == "effective_output":
+                metadata = replace(metadata, usage=TokenUsage(100, 1001, 0, 1000))
+            elif change == "deployment":
+                metadata = replace(metadata, requested_deployment="other")
+            elif change == "version":
+                metadata = replace(metadata, price_version="unreviewed")
+            elif change == "profile":
+                metadata = replace(metadata, profile_id=None)
+            elif change == "missing_cache":
+                metadata = replace(metadata, usage=TokenUsage(100, 20, None, 5))
+            return StructuredGenerationResult({}, metadata)
+
+    async def run():
+        control = profile_coordinator()
+        generation = _request(max_output_tokens=1000)
+        if change == "missing_cache":
+            await control.generate(Metered(), generation, IDENTITY, operation(), "synthetic")
+        else:
+            with pytest.raises(PilotError):
+                await control.generate(Metered(), generation, IDENTITY, operation(), "synthetic")
+        row = next(data for key, (data, _) in control.store.rows.items() if key.startswith("op-"))
+        assert row["admission"]["max_output_tokens"] == 1000
+        assert row["reserved"] == 229350000
+        assert control.store.rows["ledger"][0]["blocked"] is (change != "missing_cache")
+        if change not in {"input", "effective_output"}:
+            assert row["charged"] == row["reserved"]
+            assert not row["usage_known"]
+
+    asyncio.run(run())
+
+
 class Provider:
     calls = 0
 
@@ -74,6 +227,107 @@ class Provider:
         self.calls += 1
         await asyncio.sleep(0)
         return StructuredGenerationResult({})
+
+
+def test_offline_benchmark_manifest_has_18_single_dispatch_attempts(monkeypatch):
+    import hashlib
+    import hmac
+    import io
+    import httpx2
+    from PIL import Image, ImageDraw, ImageFont
+    from app import pilot_access
+    from app.pilot import canonical
+    from app.schemas.food_analysis import FoodAnalysisRequest
+    from app.use_cases.food_analysis import FoodAnalysisUseCase
+    from tests.image_fixtures import make_valid_jpeg_bytes
+    from tests.test_openai_api import _profile_provider, _profile_completion, _food_data
+
+    manifest = json.loads((Path(__file__).parent / "fixtures/gpt54-mini-benchmark.v1.json").read_text())
+    assert manifest["max_attempts"] == len(manifest["cases"]) == 18
+    assert manifest["repeats"] == 1
+    assert manifest["profile"] == GPT_54_MINI.identifier
+    assert manifest["price_version"] == GPT_54_MINI.price_version
+    assert GPT_54_MINI.reserve_usd(manifest["max_output_tokens"]) * 18 == Decimal(manifest["max_model_reserve_usd"])
+    assert len({case["id"] for case in manifest["cases"]}) == 18
+    limits = {"minute": 18, "day": 18, "month": 18, "concurrent": 1,
+              "daily_usd": manifest["max_model_reserve_usd"], "monthly_usd": manifest["max_model_reserve_usd"]}
+    control = profile_coordinator(person=limits, total=limits, max_image_bytes=3145728,
+                                  max_image_dimension=1024, max_text_schema_bytes=65536,
+                                  benchmark={"run_id": "offline-v1", "manifest_sha256": hashlib.sha256(
+                                      canonical(manifest)).hexdigest(), "max_attempts": 18,
+                                      "max_reserved_usd": "4.2174", "expires_at": 2000000000})
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    signing_key = b"synthetic-benchmark-signing-key-not-for-use"
+    assert signing_key != control.secret
+    monkeypatch.setenv("AI_PILOT_SIGNING_KEY", signing_key.decode())
+    monkeypatch.setattr(pilot_access, "build_coordinator", lambda: control)
+
+    async def close():
+        pass
+
+    control.store.close = close
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx2.Response(200, json=_profile_completion(_food_data()))
+
+    async def run():
+        provider = _profile_provider(handler)
+        use_case = FoodAnalysisUseCase(provider, 1, "purpose-test", "purpose-test", max_output_tokens=2000)
+        try:
+            for sequence, case in enumerate(manifest["cases"], 1):
+                payload = deepcopy(case.get("payload", {}))
+                if case["mode"] == "refinement":
+                    payload["refinement"] = {**case["refinement"], "current_estimate": manifest["baseline"]}
+                elif case["mode"] in {"image", "label"}:
+                    if case["mode"] == "image":
+                        assert case["asset"]["required_before_live"]
+                        encoded = make_valid_jpeg_bytes()
+                        media_type = "image/jpeg"
+                    else:
+                        label = Image.new("RGB", (800, 500), "white")
+                        draw = ImageDraw.Draw(label)
+                        draw.multiline_text((30, 30), "\n".join(case["label_lines"]), fill="black",
+                                            font=ImageFont.load_default(size=30), spacing=14)
+                        buffer = io.BytesIO()
+                        label.save(buffer, format="PNG")
+                        encoded, media_type = buffer.getvalue(), "image/png"
+                    payload["image"] = {"media_type": media_type, "data_base64": base64.b64encode(encoded).decode()}
+                identifier = operation(sequence=sequence)
+                envelope = {"aud": "fitness-gateway-pilot-v1", "issued": int(time.time()),
+                            "tid": IDENTITY[0], "oid": IDENTITY[1], "operation": identifier,
+                            "body": hashlib.sha256(canonical(payload)).hexdigest()}
+                encoded = base64.urlsafe_b64encode(canonical(envelope)).decode()
+                signature = hmac.new(signing_key, encoded.encode(), hashlib.sha256).hexdigest()
+                identity, verified_operation = pilot_access.verify(
+                    {"X-Pilot-Authorization": encoded + "." + signature, "X-Operation-Id": identifier}, payload)
+                token = pilot_access._context.set((identity, verified_operation, payload))
+                try:
+                    result = await use_case.execute(FoodAnalysisRequest.model_validate(payload))
+                    assert result.estimate.food_name == "synthetic-meal-marker"
+                    assert len(calls) == sequence
+                    assert calls[-1]["max_completion_tokens"] == 2000
+                    has_image = any(isinstance(message["content"], list) for message in calls[-1]["messages"])
+                    assert has_image is (case["mode"] in {"image", "label"})
+                    if case["mode"] == "refinement":
+                        assert "No image is attached" in calls[-1]["messages"][0]["content"]
+                    with pytest.raises(PilotError):
+                        await use_case.execute(FoodAnalysisRequest.model_validate(payload))
+                    assert len(calls) == sequence
+                finally:
+                    pilot_access._context.reset(token)
+            records = [data for key, (data, _) in control.store.rows.items() if key.startswith("op-")]
+            assert sum(record["reserved"] for record in records) == 4217400000
+            from tests.test_openai_api import _request
+            with pytest.raises(PilotError, match="limit"):
+                await control.generate(provider, _request(max_output_tokens=2000), IDENTITY, operation(sequence=19), "extra")
+            assert len(calls) == 18
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
 
 
 def test_two_coordinators_same_operation_only_dispatch_once():
@@ -85,6 +339,98 @@ def test_two_coordinators_same_operation_only_dispatch_once():
                                          for control in (first, second)), return_exceptions=True)
         assert provider.calls == 1
         assert sum(isinstance(result, PilotError) for result in results) == 1
+    asyncio.run(run())
+
+
+def test_benchmark_lifetime_limit_survives_restart_rollover_and_parallel_admission():
+    from tests.test_openai_api import _request
+
+    async def run():
+        limits = {"minute": 100, "day": 100, "month": 100, "concurrent": 20,
+                  "daily_usd": "100", "monthly_usd": "100"}
+        benchmark = {"run_id": "durable-v1", "manifest_sha256": "a" * 64, "max_attempts": 18,
+                     "max_reserved_usd": "4.2174", "expires_at": 2000000000}
+        options = {"person": limits, "total": limits, "benchmark": benchmark}
+        control, provider = profile_coordinator(**options), Provider()
+        start = 1789646400.0
+        control.clock = lambda: start
+        generation = _request(max_output_tokens=2000)
+        for sequence in range(1, 18):
+            await control.generate(provider, generation, IDENTITY, operation(start, sequence), str(sequence))
+        resumed = [profile_coordinator(control.store, **options) for _ in range(2)]
+        later = start + 40 * 86400
+        for replacement in resumed:
+            replacement.clock = lambda: later
+        results = await asyncio.gather(*(
+            replacement.generate(provider, generation, IDENTITY, operation(later, 18 + index), "last")
+            for index, replacement in enumerate(resumed)), return_exceptions=True)
+        assert sum(isinstance(result, PilotError) for result in results) == 1
+        assert provider.calls == 18
+        assert control.store.rows["ledger"][0]["benchmark"] == {
+            "run_id": "durable-v1", "attempts": 18, "reserved": 4217400000}
+        with pytest.raises(PilotError):
+            await resumed[0].generate(provider, generation, OTHER, operation(later, 30), "extra")
+        assert provider.calls == 18
+
+    asyncio.run(run())
+
+
+def test_benchmark_unknown_attempt_remains_counted_after_restart():
+    from tests.test_openai_api import _request
+
+    class Unknown(Provider):
+        async def generate(self, request):
+            self.calls += 1
+            raise TimeoutError()
+
+    async def run():
+        benchmark = {"run_id": "unknown-v1", "manifest_sha256": "b" * 64, "max_attempts": 1,
+                     "max_reserved_usd": "0.2343", "expires_at": 2000000000}
+        control, provider = profile_coordinator(benchmark=benchmark), Unknown()
+        generation, identifier = _request(max_output_tokens=2000), operation()
+        with pytest.raises(TimeoutError):
+            await control.generate(provider, generation, IDENTITY, identifier, "one")
+        resumed = profile_coordinator(control.store, benchmark=benchmark)
+        for next_id in (identifier, operation(sequence=2)):
+            with pytest.raises(PilotError):
+                await resumed.generate(provider, generation, IDENTITY, next_id, "one")
+        assert provider.calls == 1
+        assert control.store.rows["ledger"][0]["benchmark"]["attempts"] == 1
+        assert control.store.rows["ledger"][0]["benchmark"]["reserved"] == 234300000
+        assert control.store.rows["ledger"][0]["active"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", ["missing", "run_id", "attempts", "reserved", "budget", "expired", "manifest"])
+def test_benchmark_invalid_state_or_expiry_denies_before_dispatch(change):
+    from tests.test_openai_api import _request
+
+    async def run():
+        benchmark = {"run_id": "closed-v1", "manifest_sha256": "c" * 64, "max_attempts": 18,
+                     "max_reserved_usd": "4.2174", "expires_at": 2000000000}
+        control, provider = profile_coordinator(benchmark=benchmark), Provider()
+        ledger = control.store.rows["ledger"][0]
+        if change == "missing":
+            del ledger["benchmark"]
+        elif change == "run_id":
+            ledger["benchmark"]["run_id"] = "other-v1"
+        elif change == "attempts":
+            ledger["benchmark"]["attempts"] = True
+        elif change == "reserved":
+            ledger["benchmark"]["reserved"] = -1
+        elif change == "budget":
+            ledger["benchmark"]["reserved"] = 4217400000
+        elif change == "expired":
+            control.clock = lambda: 2000000000
+        elif change == "manifest":
+            control = profile_coordinator(control.store, benchmark={**benchmark, "manifest_sha256": "d" * 64})
+        with pytest.raises(PilotError):
+            await control.generate(provider, _request(max_output_tokens=2000), IDENTITY,
+                                   operation(control.clock()), "one")
+        assert provider.calls == 0
+        assert not any(key.startswith("op-") for key in control.store.rows)
+
     asyncio.run(run())
 
 
@@ -297,7 +643,8 @@ def test_missing_or_unbounded_admission_prevents_provider_call(reason):
 
 
 @pytest.mark.parametrize("mode", ["text", "image", "refinement"])
-def test_full_backend_gateway_sdk_pilot_contract(monkeypatch, caplog, mode):
+@pytest.mark.parametrize("profile", [False, True])
+def test_full_backend_gateway_sdk_pilot_contract(monkeypatch, caplog, mode, profile):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "backend"))
     import azure.functions as func
     import httpx2
@@ -308,10 +655,10 @@ def test_full_backend_gateway_sdk_pilot_contract(monkeypatch, caplog, mode):
     from app.main import create_app
     from app import pilot_access
     from app.use_cases.food_analysis import FoodAnalysisUseCase
-    from tests.test_openai_api import _provider, _completion, _food_data
+    from tests.test_openai_api import _provider, _completion, _food_data, _profile_provider, _profile_completion
     from tests.image_fixtures import make_valid_jpeg_bytes
 
-    control = coordinator()
+    control = profile_coordinator() if profile else coordinator()
 
     async def close():
         pass
@@ -347,12 +694,15 @@ def test_full_backend_gateway_sdk_pilot_contract(monkeypatch, caplog, mode):
 
     def handler(request):
         calls.append(request)
-        return httpx2.Response(200, json=_completion(_food_data(), model="gpt-4.1-mini-2025-04-14"))
+        completion = _profile_completion(_food_data()) if profile else _completion(_food_data(), model="gpt-4.1-mini-2025-04-14")
+        return httpx2.Response(200, json=completion)
 
-    provider = _provider(handler, model_routes={"text": "deployment", "image": "deployment"}, prices=control.prices)
+    provider = (_profile_provider(handler) if profile else
+                _provider(handler, model_routes={"text": "deployment", "image": "deployment"}, prices=control.prices))
     app = create_app()
     app.dependency_overrides[get_food_analysis_use_case] = lambda: FoodAnalysisUseCase(
-        provider, 1, "text", "image", max_output_tokens=100)
+        provider, 1, "purpose-test" if profile else "text", "purpose-test" if profile else "image",
+        max_output_tokens=2000 if profile else 100)
     monkeypatch.setattr(pilot_access, "build_coordinator", lambda: control)
     real_init = GatewayClient.__init__
     clients = []

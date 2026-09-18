@@ -15,7 +15,7 @@ from app.errors import (
 )
 from app.providers.base import Attachment, GenerationMessage, StructuredGenerationRequest
 from app.providers.openai_api import AzureOpenAIProvider
-from app.providers.pricing import PriceTable
+from app.providers.pricing import GPT_54_MINI, PriceTable, resolve_profiles
 from app.providers.strict_schema import to_strict_schema
 from app.schemas.food_analysis import FoodAnalysisEstimate, FoodAnalysisRequest
 from app.use_cases.food_analysis import FoodAnalysisUseCase
@@ -28,7 +28,8 @@ def _local_adapter_environment(monkeypatch):
 
 
 @pytest.mark.parametrize("app_env", ["production", None, "staging"])
-def test_direct_generation_enforces_local_only_guard(monkeypatch, app_env):
+@pytest.mark.parametrize("profile", [False, True])
+def test_direct_generation_enforces_local_only_guard(monkeypatch, app_env, profile):
     calls = []
 
     def handler(request):
@@ -36,7 +37,7 @@ def test_direct_generation_enforces_local_only_guard(monkeypatch, app_env):
         return httpx2.Response(200, json=_completion())
 
     async def run():
-        provider = _provider(handler)
+        provider = (_profile_provider if profile else _provider)(handler)
         if app_env is None:
             monkeypatch.delenv("APP_ENV", raising=False)
         else:
@@ -151,6 +152,113 @@ def _request(**overrides):
     })
 
 
+def _profile_prices():
+    return PriceTable(version=GPT_54_MINI.price_version, currency="USD",
+                      deployments={"deployment-test": GPT_54_MINI.price})
+
+
+def test_reviewed_profile_reserve_and_price_binding():
+    assert GPT_54_MINI.reserve_usd(2000) == Decimal("0.2343")
+    assert GPT_54_MINI.reserve_usd(1000) == Decimal("0.22935")
+    assert GPT_54_MINI.reserve_usd(2000) * 18 == Decimal("4.2174")
+    profiles = resolve_profiles({"deployment-test": GPT_54_MINI.identifier},
+                                {"purpose-test": "deployment-test"}, _profile_prices(), 2000)
+    assert profiles == {"deployment-test": GPT_54_MINI}
+
+
+def _profile_provider(handler, **overrides):
+    return _provider(handler, **{
+        "prices": _profile_prices(), "profile_bindings": {"deployment-test": GPT_54_MINI.identifier},
+        **overrides,
+    })
+
+
+def _profile_completion(data=None, **overrides):
+    return _completion(data, **{"model": GPT_54_MINI.price.model, "service_tier": "default", **overrides})
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_profile_sdk_exact_request_and_output_cap(image):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(200, json=_profile_completion())
+
+    async def run():
+        provider = _profile_provider(handler)
+        attachments = [Attachment("image", "image/png", base64.b64encode(make_valid_png_bytes()).decode())] if image else []
+        generation = _request(max_output_tokens=9000, attachments=attachments)
+        try:
+            assert await provider.check_ready() is False
+            return await provider.generate(generation), generation
+        finally:
+            await provider.aclose()
+
+    (result, generation) = asyncio.run(run())
+    assert len(calls) == 1
+    assert str(calls[0].url) == "https://example.openai.azure.com/openai/v1/chat/completions"
+    messages = [{"role": "user", "content": "synthetic input"}]
+    if image:
+        messages.append({"role": "user", "content": [{"type": "image_url", "image_url": {
+            "url": f"data:image/png;base64,{generation.attachments[0].data}", "detail": "high",
+        }}]})
+    assert json.loads(calls[0].content) == {
+        "model": "deployment-test", "messages": messages, "store": False, "stream": False, "n": 1,
+        "max_completion_tokens": 2000, "reasoning_effort": "none", "service_tier": "default",
+        "response_format": {"type": "json_schema", "json_schema": {
+            "name": "structured_result", "strict": True, "schema": to_strict_schema(generation.output_json_schema),
+        }},
+    }
+    assert result.metadata.estimated_cost_usd == Decimal("0.0001518")
+    assert result.metadata.profile_id == GPT_54_MINI.identifier
+
+
+@pytest.mark.parametrize("overrides", [
+    {"model": "gpt-5.4-mini"}, {"model": "gpt-5.4-mini-2026-03-18"}, {"model": None},
+    {"service_tier": "priority"}, {"service_tier": None},
+])
+def test_profile_rejects_unknown_model_or_tier(overrides):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(200, json=_profile_completion(**overrides))
+
+    async def run():
+        provider = _profile_provider(handler)
+        try:
+            with pytest.raises(ModelUnavailableError) as caught:
+                await provider.generate(_request())
+            assert caught.value.metadata.estimated_cost_usd is None
+            assert caught.value.metadata.status == "profile_mismatch"
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("change", ["missing", "version", "deployment", "model", "input", "cache", "output", "cap"])
+def test_reviewed_profile_rejects_configuration_drift(change):
+    bindings = {"deployment-test": GPT_54_MINI.identifier}
+    prices = _profile_prices().model_dump(mode="json")
+    if change == "missing":
+        bindings = {}
+    elif change == "version":
+        bindings["deployment-test"] = "gpt-5.4-mini-2026-03-18-dz-v1"
+    elif change == "deployment":
+        bindings = {"other-deployment": GPT_54_MINI.identifier}
+    elif change == "model":
+        prices["deployments"]["deployment-test"]["model"] = "gpt-5.4-mini"
+    elif change in {"input", "cache", "output"}:
+        field = {"input": "input_per_million", "cache": "cached_input_per_million", "output": "output_per_million"}[change]
+        prices["deployments"]["deployment-test"][field] = "0.01"
+    with pytest.raises(ValueError):
+        resolve_profiles(bindings, {"purpose-test": "deployment-test"}, PriceTable.model_validate(prices),
+                         2001 if change == "cap" else 2000)
+
+
 def _provider(handler, **overrides):
     return AzureOpenAIProvider(**{
         "endpoint": "https://example.openai.azure.com", "api_key": "not-a-real-key",
@@ -193,14 +301,16 @@ def test_sdk_text_request_is_strict_stateless_single_call_with_metadata():
     assert result.metadata.estimated_cost_usd == Decimal("0.000066")
 
 
-def test_sdk_output_validated_against_original_bounds_with_usage_on_error():
+@pytest.mark.parametrize("profile", [False, True])
+def test_sdk_output_validated_against_original_bounds_with_usage_on_error(profile):
     async def run():
-        provider = _provider(lambda request: httpx2.Response(200, json=_completion({"value": 11})))
+        completion = (_profile_completion if profile else _completion)({"value": 11})
+        provider = (_profile_provider if profile else _provider)(lambda request: httpx2.Response(200, json=completion))
         try:
             with pytest.raises(ProviderOutputInvalidError) as caught:
                 await provider.generate(_request())
             assert caught.value.metadata.usage_known
-            assert caught.value.metadata.estimated_cost_usd == Decimal("0.000066")
+            assert caught.value.metadata.estimated_cost_usd == Decimal("0.0001518" if profile else "0.000066")
         finally:
             await provider.aclose()
 
@@ -260,6 +370,7 @@ def test_requires_exactly_one_response_choice(choices):
     _assert_failure(_completion(choices=choices), ProviderOutputInvalidError, "invalid_output")
 
 
+@pytest.mark.parametrize("profile", [False, True])
 @pytest.mark.parametrize(("http_status", "error_type", "status"), [
     (401, ProviderAuthenticationError, "authentication_failed"),
     (403, ProviderAuthenticationError, "authentication_failed"),
@@ -272,7 +383,7 @@ def test_requires_exactly_one_response_choice(choices):
     (400, ProviderUnavailableError, "unavailable"),
     (307, ProviderUnavailableError, "unavailable"),
 ])
-def test_http_errors_never_retry_redirect_or_leak_content(http_status, error_type, status, caplog):
+def test_http_errors_never_retry_redirect_or_leak_content(http_status, error_type, status, caplog, profile):
     calls = []
     secret_marker = "sensitive-provider-error-marker"
     caplog.set_level(logging.DEBUG)
@@ -285,7 +396,7 @@ def test_http_errors_never_retry_redirect_or_leak_content(http_status, error_typ
         })
 
     async def run():
-        provider = _provider(handler)
+        provider = (_profile_provider if profile else _provider)(handler)
         try:
             with pytest.raises(error_type) as caught:
                 await provider.generate(_request())
@@ -470,6 +581,63 @@ def test_prompt_filter_error_is_a_refusal_without_usage():
             assert caught.value.metadata.status == "refused"
             assert caught.value.metadata.usage is None
             assert caught.value.metadata.estimated_cost_usd is None
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("change", ["missing", "total", "cache", "reasoning", "negative_reasoning", "boolean_reasoning"])
+def test_profile_unknown_usage_is_not_free(change):
+    response = _profile_completion()
+    if change == "missing":
+        response["usage"] = None
+    elif change == "total":
+        response["usage"]["total_tokens"] = 999
+    elif change == "cache":
+        response["usage"]["prompt_tokens_details"] = None
+    else:
+        response["usage"]["completion_tokens_details"]["reasoning_tokens"] = {
+            "reasoning": 21, "negative_reasoning": -1, "boolean_reasoning": True,
+        }[change]
+
+    async def run():
+        provider = _profile_provider(lambda request: httpx2.Response(200, json=response))
+        try:
+            result = await provider.generate(_request())
+            assert result.metadata.estimated_cost_usd is None
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", ["schema", "truncated", "effective_output", "input"])
+def test_profile_invalid_response_never_repairs(change):
+    response = _profile_completion({} if change == "schema" else {"value": 2})
+    if change == "truncated":
+        response["choices"][0]["finish_reason"] = "length"
+    elif change == "effective_output":
+        response["usage"].update(completion_tokens=1001, total_tokens=1101)
+    elif change == "input":
+        response["usage"].update(prompt_tokens=272001, total_tokens=272021)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(200, json=response)
+
+    async def run():
+        provider = _profile_provider(handler)
+        try:
+            with pytest.raises(ProviderOutputInvalidError) as caught:
+                await provider.generate(_request(max_output_tokens=1000))
+            assert caught.value.metadata.usage_known
+            assert caught.value.metadata.status == {
+                "schema": "invalid_output", "truncated": "truncated",
+                "effective_output": "bound_violation", "input": "bound_violation",
+            }[change]
         finally:
             await provider.aclose()
 

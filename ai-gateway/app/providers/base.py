@@ -84,6 +84,8 @@ class GenerationMetadata:
     usage: TokenUsage | None = None
     estimated_cost_usd: Decimal | None = None
     price_version: str | None = None
+    profile_id: str | None = None
+    service_tier: str | None = None
 
     @property
     def usage_known(self) -> bool:

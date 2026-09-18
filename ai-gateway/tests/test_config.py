@@ -1,6 +1,10 @@
+import asyncio
+import json
+
 import pytest
 
 from app.config import Settings, get_settings
+from app.providers.pricing import GPT_54_MINI, PriceTable
 
 
 def _azure_settings(**overrides):
@@ -19,6 +23,39 @@ def test_azure_explicit_local_configuration_and_unknown_price():
     assert settings.azure_openai_model_routes()["food_image_v1"] == "image-deployment"
     assert settings.azure_openai_prices() is None
     assert "not-a-real-key" not in repr(settings)
+
+
+@pytest.mark.parametrize("change", [None, "production", "missing_profile", "sku", "price_version", "cap", "extra", "shape"])
+def test_explicit_profile_settings_and_factory(change):
+    from app.dependencies import _build_provider
+
+    bindings = {name: GPT_54_MINI.identifier for name in ("text-deployment", "image-deployment")}
+    prices = PriceTable(version=GPT_54_MINI.price_version, currency="USD",
+                        deployments={name: GPT_54_MINI.price for name in bindings})
+    options = {"azure_openai_profiles_json": json.dumps(bindings), "azure_openai_prices_json": prices.model_dump_json()}
+    if change == "production":
+        options["app_env"] = "production"
+    elif change == "missing_profile":
+        options["azure_openai_profiles_json"] = ""
+    elif change == "sku":
+        options["azure_openai_profiles_json"] = json.dumps({name: "gpt-5.4-mini-global" for name in bindings})
+    elif change == "price_version":
+        options["azure_openai_prices_json"] = prices.model_copy(update={"version": "unreviewed"}).model_dump_json()
+    elif change == "cap":
+        options["ai_provider_max_output_tokens"] = 2001
+    elif change == "extra":
+        options["azure_openai_profiles_json"] = json.dumps({**bindings, "unexpected": GPT_54_MINI.identifier})
+    elif change == "shape":
+        options["azure_openai_profiles_json"] = '{"text-deployment":{"reasoning_effort":"high"}}'
+    settings = _azure_settings(**options)
+    if change:
+        with pytest.raises(ValueError):
+            _build_provider(settings)
+    else:
+        provider = _build_provider(settings)
+        assert provider._profiles == {name: GPT_54_MINI for name in bindings}
+        assert provider._max_output_tokens == 2000
+        asyncio.run(provider.aclose())
 
 
 @pytest.mark.parametrize("overrides", [

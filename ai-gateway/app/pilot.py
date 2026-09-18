@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.errors import GatewayError
 from app.providers.base import GenerationMetadata, StructuredGenerationRequest
-from app.providers.pricing import PriceTable
+from app.providers.pricing import PriceTable, resolve_profiles
 
 
 class PilotError(GatewayError):
@@ -69,6 +69,15 @@ class Limits(BaseModel):
     monthly_usd: Money
 
 
+class BenchmarkRun(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,60}$")
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    max_attempts: Annotated[int, Field(strict=True, ge=1, le=18)]
+    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("4.2174"), allow_inf_nan=False)]
+    expires_at: Positive
+
+
 class PilotPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: str = Field(pattern=r"^[A-Za-z0-9_-]{1,60}$")
@@ -81,6 +90,7 @@ class PilotPolicy(BaseModel):
     max_image_dimension: Annotated[int, Field(strict=True, ge=1, le=4096)]
     max_output_tokens: Annotated[int, Field(strict=True, ge=1, le=32768)]
     deployment_verified_until: Positive
+    benchmark: BenchmarkRun | None = None
 
     @model_validator(mode="after")
     def retention_covers_admission(self):
@@ -118,16 +128,23 @@ class DispatchPermit:
     request_digest: str
     expires: float
     used: bool = False
+    admission: dict | None = None
 
 
 _permit: ContextVar[DispatchPermit | None] = ContextVar("pilot_dispatch", default=None)
 
 
-def consume_permit(request: StructuredGenerationRequest):
+def consume_permit(request: StructuredGenerationRequest, *, deployment=None, profile_id=None,
+                   max_output_tokens=None, price_version=None):
     permit = _permit.get()
     if permit is None or permit.used or time.time() > permit.expires:
         raise PilotError()
     if hashlib.sha256(canonical(asdict(request))).hexdigest() != permit.request_digest:
+        raise PilotError()
+    if permit.admission and any(permit.admission[field] != value for field, value in (
+        ("deployment", deployment), ("profile_id", profile_id),
+        ("max_output_tokens", max_output_tokens), ("price_version", price_version),
+    )):
         raise PilotError()
     permit.used = True
 
@@ -135,24 +152,44 @@ def consume_permit(request: StructuredGenerationRequest):
 class Coordinator:
     def __init__(self, store: ControlStore, policy: PilotPolicy, secret: bytes,
                  allowlist: set[tuple[str, str]], prices: PriceTable, routes: dict[str, str],
-                 clock=time.time):
+                 clock=time.time, *, profile_bindings: dict[str, str] | None = None,
+                 max_output_tokens: int | None = None):
         if len(secret) < 32 or not 1 <= len(allowlist) <= 2 or not routes:
             raise PilotError()
         self.store, self.policy, self.secret = store, policy, secret
         self.allowlist, self.prices, self.routes, self.clock = allowlist, prices, routes, clock
+        self.profile_bindings = dict(profile_bindings or {})
+        self.max_output_tokens = policy.max_output_tokens if max_output_tokens is None else max_output_tokens
+        if type(self.max_output_tokens) is not int or not 1 <= self.max_output_tokens <= policy.max_output_tokens:
+            raise PilotError()
+        try:
+            self.profiles = resolve_profiles(self.profile_bindings, routes, prices, self.max_output_tokens)
+        except ValueError:
+            raise PilotError() from None
         self.policy_id = digest(secret, "policy", [policy.model_dump(mode="json"), sorted(allowlist),
-                                                 prices.model_dump(mode="json"), routes])
+                                                 prices.model_dump(mode="json"), routes,
+                                                 {key: {**asdict(profile), "price": profile.price.model_dump(mode="json")}
+                                                  for key, profile in self.profiles.items()}, self.max_output_tokens])
 
     def initial_ledger(self):
-        return {"policy": self.policy_id, "buckets": {}, "active": {}, "blocked": False, "last_time": 0}
+        benchmark = self.policy.benchmark
+        return {"policy": self.policy_id, "buckets": {}, "active": {}, "blocked": False, "last_time": 0,
+            "benchmark": {"run_id": benchmark.run_id, "attempts": 0, "reserved": 0} if benchmark else None}
 
     def bound(self, request: StructuredGenerationRequest) -> int:
         policy = self.policy
-        price = self.prices.deployments.get(self.routes.get(request.model_purpose))
+        deployment = self.routes.get(request.model_purpose)
+        price = self.prices.deployments.get(deployment)
+        try:
+            profiles = resolve_profiles(self.profile_bindings, self.routes, self.prices, self.max_output_tokens)
+        except ValueError:
+            raise PilotError() from None
+        profile = profiles.get(deployment)
         if (self.clock() >= policy.deployment_verified_until or price is None
-                or price.model != "gpt-4.1-mini-2025-04-14"
+            or policy.benchmark is not None and self.clock() >= policy.benchmark.expires_at
+                or not profile and price.model != "gpt-4.1-mini-2025-04-14"
                 or type(request.max_output_tokens) is not int
-                or not 1 <= request.max_output_tokens <= policy.max_output_tokens
+                or not 1 <= request.max_output_tokens <= self.max_output_tokens
                 or not 0 < request.timeout_seconds <= 99):
             raise PilotError()
         content = [asdict(message) for message in request.messages]
@@ -173,8 +210,20 @@ class Coordinator:
                         raise ValueError()
         except Exception:
             raise PilotError("pilot_input") from None
+        if profile:
+            return units(profile.reserve_usd(request.max_output_tokens))
         return units((Decimal(1_047_576) * max(price.input_per_million, price.cached_input_per_million)
                       + request.max_output_tokens * price.output_per_million) / 1_000_000)
+
+    def admission(self, request: StructuredGenerationRequest) -> dict:
+        deployment = self.routes[request.model_purpose]
+        profile = self.profiles.get(deployment)
+        return {"deployment": deployment, "model": self.prices.deployments[deployment].model,
+                "profile_id": profile.identifier if profile else None,
+                "service_tier": profile.service_tier if profile else None,
+                "price_version": self.prices.version,
+                "max_input_tokens": profile.max_input_tokens if profile else 1_047_576,
+                "max_output_tokens": request.max_output_tokens}
 
     def _keys(self, person: str, now: float):
         instant = datetime.fromtimestamp(now, timezone.utc)
@@ -189,10 +238,17 @@ class Coordinator:
         ledger, etag = await self.store.read("ledger")
         if ledger is None or ledger["policy"] != self.policy_id or ledger["blocked"]:
             raise PilotError()
+        if self.policy.benchmark:
+            run = ledger.get("benchmark")
+            if (not isinstance(run, dict) or run.get("run_id") != self.policy.benchmark.run_id
+                    or any(type(run.get(field)) is not int or run[field] < 0 for field in ("attempts", "reserved"))):
+                raise PilotError()
         return ledger, etag
 
-    async def reserve(self, identity, operation, fingerprint, amount):
+    async def reserve(self, identity, operation, fingerprint, amount, admission=None):
         now = self.clock()
+        if self.profiles and admission is None:
+            raise PilotError()
         if identity not in self.allowlist:
             raise PilotError("pilot_forbidden")
         operation = operation_id(operation, now, self.policy.operation_max_age_seconds)
@@ -206,6 +262,14 @@ class Coordinator:
             if now < ledger["last_time"]:
                 raise PilotError()
             ledger["last_time"] = max(now, ledger["last_time"])
+            benchmark = self.policy.benchmark
+            if benchmark:
+                run = ledger["benchmark"]
+                if (now >= benchmark.expires_at or run["attempts"] >= benchmark.max_attempts
+                        or run["reserved"] + amount > units(benchmark.max_reserved_usd, ROUND_FLOOR)):
+                    raise PilotError("pilot_limit")
+                run["attempts"] += 1
+                run["reserved"] += amount
             active = ledger["active"]
             if (len(active) >= self.policy.total.concurrent
                     or sum(entry == person for entry in active.values()) >= self.policy.person.concurrent):
@@ -223,7 +287,8 @@ class Coordinator:
             active[key] = person
             record = {"fingerprint": fingerprint, "state": "pending", "reserved": amount,
                       "created": now, "expires": now + self.policy.retention_seconds,
-                      "dispatch_before": now + 30, "buckets": [entry[0] for entry in keys]}
+                      "dispatch_before": now + 30, "buckets": [entry[0] for entry in keys],
+                      "admission": admission}
             try:
                 await self.store.commit([("ledger", ledger, etag), (key, record, None)])
                 return key
@@ -233,7 +298,8 @@ class Coordinator:
 
     async def mark_dispatched(self, key):
         record, etag = await self.store.read(key)
-        if not record or record["state"] != "pending" or self.clock() > record["dispatch_before"]:
+        if (not record or record["state"] != "pending" or self.clock() > record["dispatch_before"]
+            or self.policy.benchmark is not None and self.clock() >= self.policy.benchmark.expires_at):
             raise PilotError()
         record["state"] = "unknown"
         await self.store.commit([(key, record, etag)])
@@ -246,20 +312,32 @@ class Coordinator:
                 raise PilotError()
             actual = None
             usage = metadata.usage if metadata else None
-            if metadata and metadata.returned_model is not None and metadata.returned_model != "gpt-4.1-mini-2025-04-14":
+            admission = record.get("admission")
+            expected_model = admission["model"] if admission else "gpt-4.1-mini-2025-04-14"
+            input_bound = admission["max_input_tokens"] if admission else 1_047_576
+            output_bound = admission["max_output_tokens"] if admission else self.policy.max_output_tokens
+            identity_matches = metadata is not None and metadata.returned_model == expected_model
+            if metadata and metadata.returned_model is not None and not identity_matches:
                 ledger["blocked"] = True
-            if usage and (type(usage.input_tokens) is int and usage.input_tokens > 1_047_576
-                          or type(usage.output_tokens) is int and usage.output_tokens > self.policy.max_output_tokens):
+            if metadata and admission and metadata.requested_deployment != admission["deployment"]:
                 ledger["blocked"] = True
-            if metadata and metadata.usage is not None and metadata.price_version == self.prices.version:
-                counts = (usage.input_tokens, usage.output_tokens, usage.cached_input_tokens)
-                if (all(type(count) is int and count >= 0 for count in counts)
-                        and usage.cached_input_tokens <= usage.input_tokens
-                        and (usage.reasoning_tokens is None or type(usage.reasoning_tokens) is int
-                             and 0 <= usage.reasoning_tokens <= usage.output_tokens)):
-                    cost = self.prices.estimate(metadata.requested_deployment, metadata.returned_model, usage)
-                    if cost is not None:
-                        actual = units(cost)
+                identity_matches = False
+            if metadata and admission and admission["profile_id"]:
+                if (metadata.profile_id != admission["profile_id"]
+                        or metadata.price_version != admission["price_version"]
+                        or metadata.status == "profile_mismatch"
+                        or metadata.service_tier is not None and metadata.service_tier != admission["service_tier"]):
+                    ledger["blocked"] = True
+                    identity_matches = False
+                if metadata.service_tier != admission["service_tier"]:
+                    identity_matches = False
+            if usage and (type(usage.input_tokens) is int and usage.input_tokens > input_bound
+                          or type(usage.output_tokens) is int and usage.output_tokens > output_bound):
+                ledger["blocked"] = True
+            if metadata and identity_matches and metadata.price_version == self.prices.version:
+                cost = self.prices.estimate(metadata.requested_deployment, metadata.returned_model, usage)
+                if cost is not None:
+                    actual = units(cost)
             charged = record["reserved"] if actual is None else actual
             if charged > record["reserved"]:
                 ledger["blocked"] = True
@@ -271,7 +349,7 @@ class Coordinator:
                 ledger["active"].pop(key, None)
             try:
                 await self.store.commit([("ledger", ledger, ledger_etag), (key, record, etag)])
-                return
+                return ledger["blocked"]
             except Conflict:
                 continue
         raise PilotError()
@@ -279,13 +357,15 @@ class Coordinator:
     async def generate(self, provider, request, identity, operation, fingerprint):
         try:
             amount = self.bound(request)
-            key = await self.reserve(identity, operation, fingerprint, amount)
+            admission = self.admission(request)
+            key = await self.reserve(identity, operation, fingerprint, amount, admission)
             await self.mark_dispatched(key)
         except PilotError:
             raise
         except Exception:
             raise PilotError() from None
-        permit = DispatchPermit(hashlib.sha256(canonical(asdict(request))).hexdigest(), time.time() + 1)
+        permit = DispatchPermit(hashlib.sha256(canonical(asdict(request))).hexdigest(), time.time() + 1,
+                    admission=admission)
         token = _permit.set(permit)
         try:
             async with asyncio.timeout(request.timeout_seconds):
@@ -302,7 +382,9 @@ class Coordinator:
         finally:
             _permit.reset(token)
         try:
-            await self.settle(key, "succeeded", result.metadata)
+            blocked = await self.settle(key, "succeeded", result.metadata)
+            if blocked and self.profiles:
+                raise PilotError()
         except Exception:
             raise PilotError() from None
         return result
