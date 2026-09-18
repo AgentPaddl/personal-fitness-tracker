@@ -1,16 +1,19 @@
 """Entra-only local benchmark resource attestation. No resource provisioning."""
 
 import base64
+import fcntl
 import json
 import logging
 import os
+import stat
 import time
+from urllib.parse import urlsplit
 
 import httpx2
 from azure.data.tables.aio import TableClient
 from azure.identity.aio import AzureCliCredential
 
-from app.benchmark import MANIFEST_HASH, sha
+from app.benchmark import MANIFEST_HASH, result_directory, sha
 from app.pilot import PilotError
 from app.pilot_table import AzureTableStore, _sdk_logger
 from app.providers.openai_api import AzureOpenAIProvider
@@ -114,15 +117,67 @@ def validate_resources(approval, group, account, deployment, storage, inventory)
         raise PilotError()
 
 
+class TableRequestBudget:
+    def __init__(self, approval, *, cleanup=False):
+        directory = os.environ.get("BENCHMARK_CONTROL_DIR")
+        if not directory:
+            raise PilotError()
+        self.filename = result_directory(directory) / (approval.run_id + "-table-requests.log")
+        self.binding = sha(approval.model_dump(mode="json"))
+        self.max_requests, self.max_units = (3000, 50000) if cleanup else (2500, 40000)
+
+    def initialize(self):
+        descriptor = os.open(self.filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write((self.binding + "\n").encode())
+            output.flush()
+            os.fsync(output.fileno())
+        self._sync_directory()
+
+    def _sync_directory(self):
+        descriptor = os.open(self.filename.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def __call__(self, request):
+        route = urlsplit(request.http_request.url)
+        units = 100 if route.path.endswith("/$batch") else 1000 if (
+            request.http_request.method == "GET" and "PartitionKey=" not in route.path) else 1
+        try:
+            descriptor = os.open(self.filename, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            raise PilotError() from None
+        with os.fdopen(descriptor, "r+b") as output:
+            info = os.fstat(output.fileno())
+            if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_nlink != 1 or info.st_uid != os.getuid()):
+                raise PilotError()
+            fcntl.flock(output, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            output.seek(0)
+            content = output.read(100001)
+            lines = content.decode().splitlines()
+            if (len(content) > 100000 or not content.endswith(b"\n") or not lines or lines[0] != self.binding
+                    or any(line not in {"1", "100", "1000"} for line in lines[1:])
+                    or len(lines) > self.max_requests or sum(map(int, lines[1:])) + units > self.max_units):
+                raise PilotError()
+            output.write(f"{units}\n".encode())
+            output.flush()
+            os.fsync(output.fileno())
+            self._sync_directory()
+
+
 class AzureBenchmark:
     def __init__(self, approval):
         local_guard()
         approval.check_window()
         self.approval, self.attested_at = approval, 0
-        self.raw_credential = AzureCliCredential(tenant_id=str(approval.tenant_id), subscription=str(approval.subscription_id))
+        self.raw_credential = AzureCliCredential(subscription=str(approval.subscription_id))
         self.credential = CheckedCredential(self.raw_credential, approval)
         self.http = httpx2.AsyncClient(timeout=15, follow_redirects=False, trust_env=False)
-        for name in ("azure.identity", "httpx2", "httpcore2"):
+        for name in ("azure.identity", "azure.identity.aio._internal.decorators",
+                     "azure.identity.aio._credentials.azure_cli", "httpx2", "httpcore2"):
             logging.getLogger(name).disabled = True
 
     async def __aenter__(self):
@@ -191,6 +246,8 @@ class AzureBenchmark:
             raise PilotError()
         client = TableClient(f"https://{self.approval.storage_name}.table.core.windows.net", "MiniBenchmark",
                              credential=self.credential, retry_total=0, logging_enable=False,
+                             raw_request_hook=TableRequestBudget(self.approval), retry_to_secondary=False,
+                             redirect_max=0,
                              logger=_sdk_logger, tracing_enable=False, connection_timeout=2, read_timeout=3)
         return AzureTableStore(client, partition=partition)
 

@@ -14,7 +14,7 @@ from azure.data.tables.aio import TableClient
 from azure.identity.aio import AzureCliCredential
 
 from app.benchmark import Approval, MANIFEST_HASH, ROOT, sha, write_result
-from app.benchmark_azure import CheckedCredential, local_guard
+from app.benchmark_azure import CheckedCredential, TableRequestBudget, local_guard
 from app.pilot import PilotError, canonical
 from app.pilot_table import AzureTableStore, _sdk_logger
 
@@ -32,7 +32,11 @@ def plan(approval):
     return {"approval_hash": sha(approval.model_dump(mode="json")),
             "template_hash": hashlib.sha256(TEMPLATE.read_bytes()).hexdigest(),
             "resource_group": approval.resource_group, "region": "swedencentral",
-            "model_reserve_usd": "4.2174", "ancillary_planning_eur": "1",
+            "model_reserve_usd": "4.2174", "operational_budget_eur": approval.total_budget_eur,
+            "ancillary_reserve_eur": approval.ancillary_reserve_eur,
+            "usd_to_eur_reserve": approval.usd_to_eur_reserve,
+            "tax_multiplier_reserve": approval.tax_multiplier_reserve,
+            "billing_delay_risk_accepted": approval.billing_delay_risk_accepted,
             "parameters": {key: {"value": value} for key, value in parameters.items()}}
 
 
@@ -71,10 +75,12 @@ def check_group(approval):
 
 
 async def close_or_archive(approval, archive=None):
-    raw = AzureCliCredential(tenant_id=str(approval.tenant_id), subscription=str(approval.subscription_id))
+    raw = AzureCliCredential(subscription=str(approval.subscription_id))
     credential = CheckedCredential(raw, approval, ledger_cleanup=True)
     client = TableClient(f"https://{approval.storage_name}.table.core.windows.net", "MiniBenchmark",
                          credential=credential, retry_total=0, logging_enable=False, logger=_sdk_logger,
+                         raw_request_hook=TableRequestBudget(approval, cleanup=True), retry_to_secondary=False,
+                         redirect_max=0,
                          tracing_enable=False, connection_timeout=2, read_timeout=3)
     store = AzureTableStore(client, partition="benchmark-" + approval.run_id)
     try:
@@ -114,7 +120,9 @@ def validate_archive(run, ledger, records):
     cases = [record["data"] for record in records if record["key"].startswith("case-")]
     attempts = ledger["benchmark"]["attempts"] if ledger else 0
     if (run.get("state") != "closed" or len(operations) != attempts or ledger and ledger.get("active")
-            or run.get("initialized") is True and (ledger is None or len(cases) != 18)
+            or run.get("initialized") is True and (
+                ledger is None or len(cases) != 18
+                or sum(record.get("state") == "finished" for record in cases) != attempts)
             or any(record.get("state") not in {"ready", "finished"} for record in cases)
             or any(record.get("state") not in {"succeeded", "failed"} or not record.get("settled")
                    or record.get("usage_known") is not True for record in operations)):
@@ -123,7 +131,7 @@ def validate_archive(run, ledger, records):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "provision", "stop", "destroy"))
+    parser.add_argument("command", choices=("plan", "prepare-control", "provision", "stop", "destroy"))
     parser.add_argument("--approval", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm")
@@ -138,6 +146,11 @@ def main():
             return
         if not args.apply or args.confirm != confirmation:
             raise PilotError()
+        if args.command == "prepare-control":
+            approval.check_window()
+            TableRequestBudget(approval).initialize()
+            print("Local Table counter initialized once; no cloud requests made.")
+            return
         check_identity(approval)
         if args.command == "provision":
             approval.check_window()

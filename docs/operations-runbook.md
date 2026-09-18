@@ -525,6 +525,17 @@ not cloud-approved and cannot be enabled through test dependency overrides:
 
 #### Minimal resource proposal for approval (2026-09-18)
 
+Operational-budget update: the subsequently authorized local workflow uses a
+EUR 10 aggregate stop threshold with accepted delayed-billing overrun risk, not
+the historical separate financial allowances below. The technical USD 4.2174
+model reserve and 18-attempt cap remain unchanged. Current approval reserves
+tax/FX and EUR 2 for finite Table operations, retention and cleanup; see the
+[current procedure](../infra/benchmark/README.md). Live results and resource
+closure evidence belong in the external run report, never in application logs.
+The proposal and original authorization status below are historical preparation.
+The [completed screening review](benchmark-review-2026-09-18.md) records the
+offline T5 dispatch proof, T2 arithmetic finding and unchanged cumulative limits.
+
 **Implemented locally, not authorized for cloud execution:** this one-owner
 screening CLI uses normal Microsoft Entra login, the existing use-case request
 builder/Coordinator/adapter and real Azure Table transactions. See the

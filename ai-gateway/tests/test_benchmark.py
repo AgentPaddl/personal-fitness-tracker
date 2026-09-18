@@ -82,7 +82,96 @@ def approval():
                     run_id="offline", account_name="pftbenchoffline", storage_name="pftbenchoffline",
                     egress_ipv4="8.8.8.8", created_at=int(time.time()) - 1,
                     expires_at=int(time.time()) + 600, manifest_sha256=MANIFEST_HASH,
-                    price_version=GPT_54_MINI.price_version, capacity=10)
+                    price_version=GPT_54_MINI.price_version, capacity=10,
+                    billing_delay_risk_accepted=True)
+
+
+def test_operational_budget_requires_risk_acceptance():
+    config = approval()
+    config.check_window()
+    with pytest.raises(PilotError):
+        config.model_copy(update={"billing_delay_risk_accepted": False}).check_window()
+    with pytest.raises(PilotError):
+        config.model_copy(update={"total_budget_eur": "9.00"}).check_window()
+
+
+def test_table_request_budget_is_durable_and_bound(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app.benchmark_azure import TableRequestBudget
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    config = approval()
+    request = SimpleNamespace(http_request=SimpleNamespace(method="POST", url="https://example.invalid/$batch"))
+    first = TableRequestBudget(config)
+    first.initialize()
+    first(request)
+    second = TableRequestBudget(config)
+    second.max_units = 100
+    with pytest.raises(PilotError):
+        second(request)
+    with pytest.raises(PilotError):
+        TableRequestBudget(config.model_copy(update={"expires_at": config.expires_at + 1}))(request)
+    cleanup = TableRequestBudget(config, cleanup=True)
+    cleanup(request)
+    assert cleanup.filename.read_text().splitlines()[1:] == ["100", "100"]
+
+
+def test_table_sdk_calls_budget_before_transport(monkeypatch, tmp_path):
+    from azure.core.credentials import AzureNamedKeyCredential
+    from azure.data.tables.aio import TableClient
+    from app.benchmark_azure import TableRequestBudget
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval())
+    budget.initialize()
+    budget.max_units = 0
+
+    async def run():
+        async with TableClient("https://offline.table.core.windows.net", "MiniBenchmark",
+                               credential=AzureNamedKeyCredential("offline", "c3ludGhldGlj"),
+                               retry_total=0, raw_request_hook=budget) as client:
+            with pytest.raises(PilotError):
+                await client.get_entity("offline", "offline")
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["missing", "truncated", "permissions", "hardlink", "symlink", "limit", "locked"])
+def test_table_budget_never_resets_or_dispatches_invalid_counter(monkeypatch, tmp_path, failure):
+    import fcntl
+    import os
+    from types import SimpleNamespace
+    from app.benchmark_azure import TableRequestBudget
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval(), cleanup=True)
+    budget.initialize()
+    with pytest.raises(FileExistsError):
+        budget.initialize()
+    request = SimpleNamespace(http_request=SimpleNamespace(method="POST", url="https://example.invalid/$batch"))
+    lock = None
+    if failure == "missing":
+        budget.filename.unlink()
+    elif failure == "truncated":
+        budget.filename.write_text(budget.binding + "\n10")
+    elif failure == "permissions":
+        budget.filename.chmod(0o644)
+    elif failure == "hardlink":
+        os.link(budget.filename, tmp_path / "linked")
+    elif failure == "symlink":
+        original = tmp_path / "original"
+        budget.filename.rename(original)
+        budget.filename.symlink_to(original)
+    elif failure == "limit":
+        budget(request)
+        budget.max_requests = 1
+    elif failure == "locked":
+        lock = budget.filename.open("rb")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    before = budget.filename.read_bytes() if budget.filename.exists() else None
+    try:
+        with pytest.raises((PilotError, BlockingIOError)):
+            budget(request)
+        assert (budget.filename.read_bytes() if budget.filename.exists() else None) == before
+    finally:
+        if lock:
+            lock.close()
 
 
 def test_frozen_public_requests_are_complete():
@@ -212,6 +301,47 @@ def test_changed_case_binding_cannot_resume():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("failure", ["admission", "provider"])
+def test_result_distinguishes_admission_failure_from_provider_entry(monkeypatch, tmp_path, failure):
+    from app import benchmark
+    from app.errors import ProviderTimeoutError
+
+    class Provider:
+        calls = 0
+
+        async def generate(self, request):
+            self.calls += 1
+            raise ProviderTimeoutError()
+
+    async def run():
+        store, config = MemoryCAS(), approval()
+        _, cases = load_cases()
+        control = make_coordinator(store, config)
+        state = RunState(store, control, config, cases)
+        await state.initialize()
+
+        async def denied(*args):
+            raise PilotError()
+
+        if failure == "admission":
+            monkeypatch.setattr(control, "reserve", denied)
+        provider = Provider()
+        ticks = iter([10.0, 10.1, 10.2, 10.3])
+        monkeypatch.setattr(benchmark.time, "perf_counter", lambda: next(ticks))
+        result = await run_one(state, provider, {}, tmp_path / "results")
+        assert result["provider_invoked"] is (failure == "provider")
+        assert result["failure_stage"] == failure
+        assert result["admission_ms"] <= result["total_ms"]
+        assert result["status"] == "halted"
+        assert result["reserve_exposure_usd"] == "0.2343"
+        assert provider.calls == (1 if failure == "provider" else 0)
+        ledger, _ = await store.read("ledger")
+        assert ledger["benchmark"]["attempts"] == provider.calls
+        with pytest.raises(PilotError):
+            await state.claim()
+    asyncio.run(run())
+
+
 def test_infrastructure_is_isolated_keyless_and_pinned():
     template = json.loads((Path(__file__).resolve().parents[2] / "infra/benchmark/main.json").read_text())
     assert template["parameters"]["manifestSha256"]["allowedValues"] == [MANIFEST_HASH]
@@ -252,6 +382,20 @@ def test_archive_requires_every_consumed_operation_reconciled(unknown):
         validate_archive(run, None, [{"key": "case-T1", "data": {"state": "started"}}])
 
 
+@pytest.mark.parametrize("finished_without_operation", [False, True])
+def test_archive_does_not_infer_no_dispatch_from_missing_operation(finished_without_operation):
+    from app.benchmark_infra import validate_archive
+    run = {"state": "closed", "initialized": True}
+    ledger = {"benchmark": {"attempts": 0}, "active": {}}
+    records = [{"key": f"case-{index}", "data": {"state": "ready"}} for index in range(18)]
+    if finished_without_operation:
+        records[0]["data"]["state"] = "finished"
+        with pytest.raises(PilotError):
+            validate_archive(run, ledger, records)
+    else:
+        validate_archive(run, ledger, records)
+
+
 def test_infrastructure_plan_is_offline_and_requires_confirmation(monkeypatch, tmp_path, capsys):
     import sys
     from app import benchmark_infra
@@ -263,6 +407,14 @@ def test_infrastructure_plan_is_offline_and_requires_confirmation(monkeypatch, t
     plan = json.loads(capsys.readouterr().out)
     assert len(plan["confirmation"]) == 64
     monkeypatch.setattr(sys, "argv", ["benchmark_infra", "provision", "--approval", str(config_file)])
+    with pytest.raises(SystemExit) as stopped:
+        benchmark_infra.main()
+    assert stopped.value.code == 1
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    monkeypatch.setattr(sys, "argv", ["benchmark_infra", "prepare-control", "--approval", str(config_file),
+                                     "--apply", "--confirm", plan["confirmation"]])
+    benchmark_infra.main()
+    assert (tmp_path / "control/offline-table-requests.log").read_text() == plan["approval_hash"] + "\n"
     with pytest.raises(SystemExit) as stopped:
         benchmark_infra.main()
     assert stopped.value.code == 1
@@ -434,7 +586,11 @@ def test_full_attestation_http_path_without_azure(monkeypatch, outcome):
         async def close(self):
             pass
 
-    monkeypatch.setattr(benchmark_azure, "AzureCliCredential", lambda **kwargs: Credential())
+    def credential_factory(**kwargs):
+        assert kwargs == {"subscription": str(config.subscription_id)}
+        return Credential()
+
+    monkeypatch.setattr(benchmark_azure, "AzureCliCredential", credential_factory)
     group, account, deployment, storage, inventory = resources(config)
     documents = {config.group_id: group, config.account_id: account,
                  config.account_id + "/deployments/mini-bench": deployment,

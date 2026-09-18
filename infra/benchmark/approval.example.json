@@ -10,5 +10,10 @@
   "expires_at": 0,
   "manifest_sha256": "e808a8ffc0545a213b37a82b36b3157abedafa69542abd88f2490b40ecf195c6",
   "price_version": "azure-sweden-dz-2026-09-18-v1",
-  "capacity": 10
+  "capacity": 10,
+  "total_budget_eur": "10.00",
+  "usd_to_eur_reserve": "1.20",
+  "tax_multiplier_reserve": "1.50",
+  "ancillary_reserve_eur": "2.00",
+  "billing_delay_risk_accepted": false
 }

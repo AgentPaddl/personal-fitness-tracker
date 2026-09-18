@@ -1,7 +1,7 @@
 # Isolated public-data benchmark
 
-Implemented preparation only. No resource provisioning, Table data-plane calls
-or paid generations were performed during offline validation. The existing
+The prepared workflow supports separately authorized real execution. Offline
+validation never provisions resources or calls paid models. The existing
 production API, authentication, readiness, iOS and build numbers are unchanged.
 This CLI measures the existing use case, Coordinator and Azure adapter; it does
 not claim to validate deployed HTTP ingress, backend Easy Auth or mobile latency.
@@ -9,8 +9,12 @@ not claim to validate deployed HTTP ingress, backend Easy Auth or mobile latency
 ## Approval and prerequisites
 
 - Explicitly approve this isolated public-endpoint/IP-restricted topology, resource
-  inventory, operator, 18-attempt USD 4.2174 model reserve and separate EUR 1
-  ancillary planning allowance. Neither allowance is an Azure invoice hard cap.
+  inventory and operator. The current operational threshold is EUR 10 including
+  tax, FX, retention and cleanup, with explicitly accepted delayed-billing risk.
+  The technical 18-attempt USD 4.2174 model reserve is unchanged. Approval reserves
+  EUR 1.20 per USD, a 1.50 tax multiplier and EUR 2 ancillary allowance, totaling
+  EUR 9.59132 worst-case planning exposure. These are not invoice guarantees.
+  Verify current rates and stop new work if the total projection exceeds EUR 10.
 - Use Python 3.13, the pinned `ai-gateway/requirements.txt` and test dependencies,
   Azure CLI and a normal interactive Entra **user** login in a dedicated
   `AZURE_CONFIG_DIR`. No service-principal secret, API key, SAS or stored application
@@ -49,6 +53,16 @@ export AZURE_CORE_COLLECT_TELEMETRY=no AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no
 ```
 
 Set `AZURE_CONFIG_DIR` to the dedicated login directory before normal `az login`.
+Set `BENCHMARK_CONTROL_DIR` to a permanent external owner-only directory (0700).
+Its append-only Table admission log is bound to the approval and must never be
+removed/reset while resources remain. Across tests, runs and restarts, it limits
+normal work to 2,500 requests / 40,000 conservative operation units and reserves
+another 500 requests / 10,000 units for cleanup. This is not Azure billing data.
+Create it exactly once with the offline `prepare-control` command below, before
+the first Table test/access. Requests never recreate a missing counter. Existing
+logs from the completed screening remain compatible; do not initialize them again.
+Missing, damaged, linked, insecurely permissioned or locked logs block access,
+including cleanup. Review such failures without deleting/replacing the log.
 All commands below run from `ai-gateway/` with its `.venv/bin/python`. `$APPROVAL`
 is the external approval JSON path; `$RESULTS` is an external owner-only directory.
 Never use the regular app's resource group, configuration or identity assertions.
@@ -67,6 +81,18 @@ digest, not a secret. No arbitrary dataset path or request text is accepted. The
 manifest and all eight assets must match their frozen hashes. Requests reuse the
 existing FoodAnalysisUseCase builder and validators. Code, dependencies, Python
 version, complete prompts/schemas and approval are bound at initialization.
+
+For a newly approved allocation only, initialize its local counter once:
+
+```sh
+.venv/bin/python -B -m app.benchmark_infra prepare-control --approval "$APPROVAL" --apply --confirm "$CONFIRMATION"
+```
+
+This makes no cloud requests and requires the reviewed confirmation. It is not a
+recovery/reset procedure. A different directory or run ID does not create another
+budget under an existing authorization. This workflow has no cross-run aggregate
+enforcement or continuation command; a continuation needs a separately reviewed
+aggregate checkpoint carrying all earlier attempts, reserves and ancillary costs.
 
 ## Separately authorized cloud setup
 
@@ -159,6 +185,15 @@ logs remain content-free. A disk failure leaves the run blocked, not replayable.
 If Table reads fail after a possible dispatch, locally available usage is still
 recorded with unknown settled cost. `reserve_exposure_usd` keeps the conservative
 maximum exposure even when the actual retained reservation cannot be read.
+New results also record `provider_invoked` and a bounded `failure_stage`:
+`admission`, `provider`, `post_provider` or `accounting_read` (`null` on success).
+The invocation marker precedes entry into the provider adapter, including its
+auth/guard checks; `true` does not prove that an HTTP request was sent. A verified
+`false` can support a separately reviewed no-dispatch finding. Neither marker
+automatically refunds a reserve, consumes another case or reopens a stopped run.
+Admission and total duration now use one final monotonic timestamp, so admission
+cannot exceed total duration. Do not reinterpret older timing fields using this
+new implementation: forensic conclusions require the exact bound runtime source.
 
 Record human review alongside an immutable result with scores 0 (fails) through
 4 (fully meets criterion); omit inapplicable dimensions, never mark an unreviewed
@@ -180,6 +215,13 @@ reserve, not unknown-as-zero; quality and cost per usable result require complet
 human review. One pass is screening, not statistical accuracy or p95 proof.
 
 ## Stop and retain, then destroy
+
+Closure must record the exact UTC retention-review date, measured results versus
+computed costs, remaining resources, unresolved reserves and unavailable billing
+data in the external run report. No future cleanup scheduler is installed by this
+template: the owner must execute the retention review and approved destroy command.
+Preserve original error artifacts even if a later ledger snapshot clarifies that
+admission failed before a model dispatch. Never restart a closed run.
 
 After a completed/stopped run or expiry, the separately approved stop command
 atomically closes the run/blocks its ledger, then deletes the OpenAI account and
@@ -210,14 +252,20 @@ the repo, then deletes the exact isolated RG including storage and roles:
 
 The archive directory must be 0700. Keep it so deleted infrastructure cannot be
 mistaken for a new unused budget. Unknown or missing records **block destruction**;
-operator reconciliation/extended retention needs a separate review, never a fresh
+in an initialized run, finished-case and operation counts must agree. A finished
+case without an operation requires separate evidence review even when the ledger
+attempt count equals the number of operations. Missing records alone cannot prove
+no dispatch. A derived local review does not automatically satisfy this CLI gate.
+Operator reconciliation/extended retention needs a separate review, never a fresh
 ledger. No automatic reconciliation or force-delete flag is provided. If archive
 creation succeeds but deletion fails, inspect the cloud before continuing manually;
 the script will not overwrite the archive. Azure may retain account soft-delete
 metadata and ARM deployment history; no purge of that history is performed here.
 
-The EUR 1 ancillary envelope must include 31-day storage retention, Table test and
-runtime transactions, network transfer, FX/tax and any extension. It is not enforced
-by Azure billing. No hosting or log ingestion charges are intentionally introduced.
+The EUR 2 ancillary reserve within the EUR 10 operational threshold includes
+31-day storage retention, Table tests/runtime transactions, network transfer,
+FX/tax and cleanup. It is not enforced by Azure billing. Bound ARM status reads,
+run the Table suite once, and query billing only at preflight, closure and retention
+review. No hosting or log ingestion charges are intentionally introduced.
 After review, remove the local synthetic result artifacts according to the approved
 retention; retain the nonsecret closed-run archive and licensed fixture provenance.

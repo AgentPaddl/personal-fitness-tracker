@@ -16,6 +16,7 @@ import secrets
 import stat
 import sys
 import time
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -50,6 +51,11 @@ class Approval(BaseModel):
     manifest_sha256: str
     price_version: str
     capacity: int = Field(strict=True, ge=1, le=10)
+    total_budget_eur: Literal["10.00"] = "10.00"
+    usd_to_eur_reserve: Literal["1.20"] = "1.20"
+    tax_multiplier_reserve: Literal["1.50"] = "1.50"
+    ancillary_reserve_eur: Literal["2.00"] = "2.00"
+    billing_delay_risk_accepted: bool = Field(default=False, strict=True)
 
     @model_validator(mode="after")
     def fixed_scope(self):
@@ -81,7 +87,10 @@ class Approval(BaseModel):
         return str(self.tenant_id), str(self.operator_id)
 
     def check_window(self):
-        if not self.created_at <= time.time() < self.expires_at:
+        exposure = (Decimal("4.2174") * Decimal(self.usd_to_eur_reserve)
+                    * Decimal(self.tax_multiplier_reserve) + Decimal(self.ancillary_reserve_eur))
+        if (not self.billing_delay_risk_accepted or exposure > Decimal(self.total_budget_eur)
+                or not self.created_at <= time.time() < self.expires_at):
             raise PilotError()
 
 
@@ -184,12 +193,14 @@ class CaptureProvider:
     def __init__(self, provider):
         self.provider, self.metadata = provider, None
         self.started = None
+        self.completed = False
 
     async def generate(self, request):
         self.started = time.perf_counter()
         try:
             result = await self.provider.generate(request)
             self.metadata = result.metadata
+            self.completed = True
             return result
         except GatewayError as exc:
             self.metadata = exc.metadata
@@ -262,14 +273,21 @@ async def run_one(state, provider, attestation, output_dir):
     if estimate is not None and "expected" in case:
         checks = {field: abs(estimate[field] - expected) <= max(0 if field == "calories" else 1, expected * .05)
                   for field, expected in case["expected"].items()}
+    finished = time.perf_counter()
+    provider_invoked = capture.started is not None
+    failure_stage = None if safe else (
+        "accounting_read" if error == "ledger_read_failed" else
+        "admission" if not provider_invoked else
+        "post_provider" if capture.completed else "provider")
     record = {"case_id": case["id"], "operation_id": operation, "run_id": state.approval.run_id,
               "binding": state.binding, "request_hash": sha(asdict(request)), "manifest_hash": MANIFEST_HASH,
               "attestation": attestation, "status": "succeeded" if safe else "halted", "error": error,
+              "provider_invoked": provider_invoked, "failure_stage": failure_stage,
               "schema_valid": estimate is not None, "estimate": estimate,
               "quality": {"arithmetic": checks, "human_scores": None, "usable": None,
                           "photo_numeric_ground_truth": False, "criterion": case["criterion"]},
-              "total_ms": round((time.perf_counter() - started) * 1000, 3),
-              "admission_ms": round(((capture.started or time.perf_counter()) - started) * 1000, 3),
+              "total_ms": round((finished - started) * 1000, 3),
+              "admission_ms": round(((capture.started if provider_invoked else finished) - started) * 1000, 3),
               "provider_ms": metadata.duration_ms if metadata else None,
               "cold_or_warm": "cold", "usage": asdict(metadata.usage) if metadata and metadata.usage else None,
               "usage_known": known, "profile": GPT_54_MINI.identifier, "price_version": GPT_54_MINI.price_version,
