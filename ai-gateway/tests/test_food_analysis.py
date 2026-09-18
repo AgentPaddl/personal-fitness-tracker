@@ -63,6 +63,126 @@ def test_food_analysis_success_returns_bounded_estimate(client):
     assert isinstance(estimate["assumptions"], list)
 
 
+@pytest.mark.parametrize("mutation", ["none", "scaled", "independent", "maximum_notes", "duplicate", "duplicate_reference",
+                                      "invented_source", "incomplete", "empty", "missing", "no_contract",
+                                      "zero_basis", "negative", "nan", "boolean", "overflow"])
+def test_declared_text_nutrition_is_calculated_once(mutation):
+    import asyncio
+    from copy import deepcopy
+    from app.benchmark import load_cases
+    from app.providers.base import GenerationMetadata, StructuredGenerationResult, TokenUsage
+    from app.providers.strict_schema import to_strict_schema
+    from app.schemas.food_analysis import FoodAnalysisRequest
+    from app.use_cases.food_analysis import FoodAnalysisUseCase
+
+    case = next(case for case, _ in load_cases()[1] if case["id"] == "T2")
+    payload = deepcopy(case["payload"])
+    components = [
+        {"quantity_source": "200 g Joghurt", "nutrition_source": "Je 100 g Joghurt: 60 kcal, Eiweiss 4 g, Kohlenhydrate 5 g, Fett 2 g.",
+         "quantity_grams": "200", "basis_grams": "100", "calories": "60", "protein_grams": "4", "carbohydrate_grams": "5", "fat_grams": "2"},
+        {"quantity_source": "40 g Haferflocken", "nutrition_source": "Je 100 g Haferflocken: 380 kcal, Eiweiss 13 g, Kohlenhydrate 60 g, Fett 7 g.",
+         "quantity_grams": "40", "basis_grams": "100", "calories": "380", "protein_grams": "13", "carbohydrate_grams": "60", "fat_grams": "7"},
+    ]
+    data = {**_CURRENT_ESTIMATE, "calories": 276, "protein_grams": 20.2,
+            "declared_nutrition": {"complete": True, "components": components}}
+    if mutation == "scaled":
+        payload["food_description"] = payload["food_description"].replace("200 g", "125.5 g").replace("40 g", "20 g")
+        components[0].update(quantity_source="125.5 g Joghurt", quantity_grams="125.5")
+        components[1].update(quantity_source="20 g Haferflocken", quantity_grams="20")
+    elif mutation == "maximum_notes":
+        data["assumptions"] = [f"Assumption {index}" for index in range(19)]
+        data["warnings"] = [f"Warning {index}" for index in range(20)]
+    elif mutation == "duplicate":
+        components.append(deepcopy(components[0]))
+    elif mutation == "independent":
+        payload["food_description"] = "15.5 g Quark. Je 25 g Quark: 60 kcal, Eiweiss 1.5 g, Kohlenhydrate 5.1 g, Fett 0.35 g."
+        components[:] = [{
+            "quantity_source": "15.5 g Quark", "nutrition_source": "Je 25 g Quark: 60 kcal, Eiweiss 1.5 g, Kohlenhydrate 5.1 g, Fett 0.35 g.",
+            "quantity_grams": "15.5", "basis_grams": "25", "calories": "60", "protein_grams": "1.5",
+            "carbohydrate_grams": "5.1", "fat_grams": "0.35",
+        }]
+    elif mutation == "duplicate_reference":
+        components[1]["nutrition_source"] = components[0]["nutrition_source"]
+    elif mutation == "invented_source":
+        components[0]["nutrition_source"] = "not supplied"
+    elif mutation == "incomplete":
+        data["declared_nutrition"] = {"complete": False, "components": []}
+    elif mutation == "empty":
+        components.clear()
+    elif mutation == "no_contract":
+        del data["declared_nutrition"]
+    elif mutation == "missing":
+        del components[0]["protein_grams"]
+    elif mutation in {"zero_basis", "negative", "nan", "boolean", "overflow"}:
+        field, value = {"zero_basis": ("basis_grams", "0"), "negative": ("calories", "-1"),
+                        "nan": ("calories", "NaN"), "boolean": ("calories", True),
+                        "overflow": ("quantity_grams", "10000")}[mutation]
+        components[0][field] = value
+        if mutation == "overflow":
+            components[0]["calories"] = "10000"
+
+    metadata = GenerationMetadata("synthetic", "test", "test", None, 1, "success", TokenUsage(10, 20))
+
+    class Provider:
+        calls = 0
+
+        async def generate(self, request):
+            self.calls += 1
+            self.request = request
+            return StructuredGenerationResult(data=data, metadata=metadata)
+
+    provider = Provider()
+    use_case = FoodAnalysisUseCase(provider, 1, "food_text_v1")
+    if mutation in {"none", "scaled", "independent", "maximum_notes"}:
+        response = asyncio.run(use_case.execute(FoodAnalysisRequest.model_validate(payload)))
+        expected = {
+            "none": case["expected"],
+            "maximum_notes": case["expected"],
+            "scaled": {"calories": 151.3, "protein_grams": 7.62, "carbohydrate_grams": 18.275, "fat_grams": 3.91},
+            "independent": {"calories": 37.2, "protein_grams": 0.93, "carbohydrate_grams": 3.162, "fat_grams": 0.217},
+        }[mutation]
+        assert {field: getattr(response.estimate, field) for field in expected} == expected
+        assert "declared_nutrition" not in response.model_dump()["estimate"]
+        assert response.estimate.assumptions[1:] == data["assumptions"]
+        assert response.estimate.warnings == data["warnings"]
+    else:
+        with pytest.raises(ProviderOutputInvalidError) as caught:
+            asyncio.run(use_case.execute(FoodAnalysisRequest.model_validate(payload)))
+        assert caught.value.metadata is metadata
+    assert provider.calls == 1
+    strict = to_strict_schema(provider.request.output_json_schema)
+    assert "declared_nutrition" in strict["required"]
+    assert provider.request.output_json_schema["properties"]["assumptions"]["maxItems"] == 19
+    assert not provider.request.attachments
+
+
+@pytest.mark.parametrize("field, maximum", [
+    ("calories", 10000), ("protein_grams", 1000),
+    ("carbohydrate_grams", 1000), ("fat_grams", 1000),
+])
+@pytest.mark.parametrize("increment", ["0", "0.000000000000001"])
+def test_declared_totals_are_bounded_before_float_rounding(field, maximum, increment):
+    from app.schemas.food_analysis import TextNutritionExtraction
+    from app.use_cases.food_analysis import FoodAnalysisUseCase
+
+    components = []
+    for name, amount in [("first", str(maximum)), ("second", increment)]:
+        components.append({
+            "quantity_source": f"1 g {name}", "nutrition_source": f"{name}: {amount} {field} per 1 g",
+            "quantity_grams": "1", "basis_grams": "1", "calories": "0", "protein_grams": "0",
+            "carbohydrate_grams": "0", "fat_grams": "0", field: amount,
+        })
+    description = "; ".join(component[key] for component in components for key in ("quantity_source", "nutrition_source"))
+    extraction = TextNutritionExtraction.model_validate({
+        **_CURRENT_ESTIMATE, "declared_nutrition": {"complete": True, "components": components},
+    })
+    if increment == "0":
+        assert getattr(FoodAnalysisUseCase._declared_estimate(extraction, description), field) == maximum
+    else:
+        with pytest.raises(ValueError):
+            FoodAnalysisUseCase._declared_estimate(extraction, description)
+
+
 def test_food_analysis_is_deterministic(client):
     payload = {"food_description": "two scrambled eggs"}
     first = client.post("/v1/food-analysis", json=payload).json()

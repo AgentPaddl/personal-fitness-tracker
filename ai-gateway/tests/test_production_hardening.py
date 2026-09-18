@@ -194,7 +194,7 @@ class _SlowProvider(StructuredGenerationProvider):
     async def generate(self, request: StructuredGenerationRequest) -> StructuredGenerationResult:
         self.entered.set()
         await self._release_event.wait()
-        return StructuredGenerationResult(data=_VALID_DATA)
+        return StructuredGenerationResult(data={**_VALID_DATA, "declared_nutrition": None})
 
 
 def test_concurrency_limiter_rejects_when_saturated():

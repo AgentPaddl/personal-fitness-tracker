@@ -4,6 +4,183 @@ Practical, sanitized procedures for operating the deployed production stack. No
 secret values appear anywhere in this document — only resource names, setting
 *names*, and commands with placeholders for anything sensitive.
 
+## Two-person pilot preparation from 19ee4c4
+
+**Current decision: GPT-5.4-mini is the pilot candidate; activation is blocked.**
+This local-only preparation supersedes the earlier next-benchmark proposals below,
+not their historical evidence. The [completed screening](benchmark-review-2026-09-18.md)
+separates demonstrated defects, passed examples and uncertainty. It does not prove
+general photo accuracy or injection safety. No cloud access, model call, resource
+creation, deployment or ongoing spending is authorized here. The benchmark's
+EUR 10 approval is closed-run-only, not pilot funding; its retained ledger, holds
+and retention review stay separate and must not be reset or reused as headroom.
+
+### Local quality and error changes
+
+- Initial text analysis now uses internal **text-nutrition extraction v1**, in the
+  same single provider call. The public request/response, image and refinement
+  paths, provider abstraction, Coordinator, ledger and idempotency are unchanged.
+  `declared_nutrition=null` means the model found no explicit nutrient reference
+  values. Otherwise it supplies `complete` and at most 20 components, each with
+  verbatim quantity/nutrient excerpts, quantity and reference quantity in grams,
+  and four nutrient values as unsigned decimal strings (at most 18 characters).
+  Quantities/reference weights must be positive and at most 10,000 g; reference
+  nutrients and final totals retain the estimate bounds. Unsupported units,
+  conflicting or missing values must yield `complete=false`, not inferred inputs.
+  Consumed grams are distinct from package weight and portion counts. Per-100-g,
+  per-serving and total values use their respective explicitly stated reference
+  weights in grams. Portion counts/fractions without an explicit consumed gram
+  amount remain unsupported; raw/dry and prepared weights must not be mixed or
+  converted by an inferred cooking yield. Stated zero is permitted; missing macros
+  are not zero. Stated packaging calories are scaled independently, never replaced
+  by a 4/4/9 macro-derived value. No new unit-conversion/parser feature is added.
+- The use case rejects incomplete/empty declarations, malformed or out-of-range
+  values and missing, nonunique or reused source excerpts. It scales and sums
+  using Decimal precision 50, half-even rounding, checks Decimal totals against
+  the bounds **before** float conversion, then uses the existing public numeric
+  DTO. Recurring quotients round at that precision; no new display quantization is
+  introduced. iOS retains its existing review rounding. No natural-language regex
+  or benchmark-case branch exists. The internal schema allows 19 assumptions to
+  reserve one place for calculation provenance; the public limit remains 20.
+  Accepted warnings/assumptions are retained, not silently dropped to add provenance.
+  Validation errors preserve internal usage metadata and produce no estimate.
+- Offline T2 calculation is **272 kcal / 13.2 g protein / 34 g carbohydrate /
+  6.8 g fat** from mocked extracted components. Different weights, a non-100-g
+  basis and invalid inputs are covered. This fixes arithmetic conditional on
+  extracted inputs, **not model extraction correctness**: `complete`, `null`,
+  source-to-number association and semantic coverage are still model decisions.
+  Quoted substrings do not prove that a component was not omitted, a number was
+  copied correctly, or grams/kcal were interpreted correctly. Live acceptance
+  must check these under the final prompt/schema and unchanged 2,000-token cap.
+  Ordinary estimates remain estimates, never certified supplied-value totals.
+  The historical benchmark builder/artifacts stay unchanged; this is a new
+  execution contract, not a retrospective pass or permission to resume that run.
+  Mock tests also cover per-serving/whole-amount gram bases, mismatched preparation
+  states flagged incomplete, periodic division, near-bound overflows and an already
+  halved refinement result passed through without a second scaling. Such tests
+  still supply the extraction/result themselves; they do not prove that a model
+  correctly classifies those natural-language cases or never chooses `null` wrongly.
+- The effective new schema goes through the same strict SDK validation and
+  Coordinator admission. Offline SDK/ledger tests verify one dispatch, the unchanged
+  2,000-token output cap and **USD 0.2343** reserve based on the full 272,000-input
+  model bound; added prompt/schema tokens do not justify lowering that reserve.
+  A `length` finish yields no estimate, retains usage accounting, and triggers no
+  repair/retry. The 20-component/2,000-character schema bounds do **not** promise
+  that every permitted output fits 2,000 tokens; quote/schema overhead can exhaust
+  the cap. Representative real extraction/truncation frequency and cost per usable
+  result are live gates, not reasons to silently raise the cap or add calls.
+- T6's stored `refused` status cannot identify which filter branch fired. Offline
+  tests cover message refusal, `content_filter` finish and HTTP 400 filtering:
+  adapter/use case -> gateway 502 `provider_output_invalid` -> backend 502
+  `gateway_upstream_error` -> iOS `analysisFailed`, with no estimate, automatic
+  retry, raw error disclosure or new review. A failed replacement analysis formerly
+  left the old review confirmable; its regression was reproduced and fixed by
+  closing the old session before dispatch. Replacing a pending/unknown refinement
+  requires the existing new-operation confirmation before starting another call.
+  Confirmed entries remain unchanged; closing only invalidates in-memory review
+  state and late responses. The actual save entry point also checks
+  the session before constructing a `FoodEntry`. No SwiftData schema changed.
+  A failed refinement still explicitly retains its prior valid estimate; it does
+  not promote the failed response to a new estimate. Physical-device persistence
+  acceptance remains required; there is no app-level XCTest target.
+
+### Minimum resource and change sequence
+
+| Order | Smallest required resource/change and acceptance gate |
+| --- | --- |
+| 1. Approval and ownership | Obtain separate private-subscription funding, operator ownership, two verified `(tid, oid)` identities, privacy approval and a dated price/capacity review. No employer-funded subscription or credentials. Approve model, hosting, storage/logging and tax/FX exposure separately, with a stop owner and end date. |
+| 2. Private deployment inventory | One dedicated resource group; one Python 3.13-compatible Linux Functions consumption backend/plan (Flex if required by the reviewed platform); its required host storage; one Container Apps consumption environment and API-only gateway (proposed 0.25 vCPU/0.5 GiB, min 0/max 1, subject to memory/cold-start tests); one image repository, managed secret store and bounded content-free diagnostics. Reuse suitable privately owned instances only after isolation/ownership review. No APIM, Redis, queue, extra database or new orchestration layer. |
+| 3. Model and ledger | One Sweden Central Azure OpenAI account/deployment, pinned `gpt-5.4-mini-2026-03-17`, EU DataZoneStandard, ordinary tier, `none` reasoning, `high` image detail, 2,000 completion tokens. Recheck quota/capacity; proposed 20 units is not reserved capacity. One dedicated Table ledger for this newly approved pilot; reuse existing Coordinator/CAS/permit implementation, not benchmark state. Resolve the existing Table network-restriction gate with restricted gateway egress/network configuration; do not silently open storage. Assign only needed data-plane roles to the gateway managed identity. |
+| 4. Two-person backend authorization | Configure native-client/API registrations, delegated scope, exact tenant/issuer/audience/client and two-entry allowlists. Easy Auth must verify signatures/lifetime, remove forged identity headers and protect every host/revision. Verify actual claims mapping and denial of third identities, app-only tokens and alternate ingress; parser mocks alone do not establish provenance. |
+| 5. Variant B gateway authorization | Public HTTPS is only the network topology. Add backend Managed Identity token acquisition for a dedicated gateway audience and strict signature/lifetime/issuer/tenant/audience plus exact backend principal/client/app-role authorization before body work. Retain the service token and request/body/identity/operation-bound HMAC. Reject native-user tokens and other workloads even if they authenticate to Entra. Resolve edge body/connection/rate limits and maximum scaling; a Function handler size check is not an ingress-memory limit. |
+| 6. API-only release | Produce a dedicated production artifact/dependency set with no Copilot SDK/CLI, GitHub credentials, provider selection/fallback or old route. Reuse the Azure adapter; do not add another provider. Audit the built image, startup configuration, revisions and credentials. Keep production denial/negative readiness until the full identity, ledger, model and privacy gates pass; do not merely remove the guard or rename `APP_ENV`. Close/revoke old Copilot routes and access. Rollback is a verified API-only artifact retaining admission controls, otherwise AI off; never an older Copilot revision. |
+| 7. iOS update | Add a durable Release HTTPS backend URL via existing build-setting/Info.plist conventions; a scheme environment variable is not shipped in an Archive. Bind the private tenant/client/scope/redirect configuration and verify normal installed launch, not just Xcode Run. Retain bundle ID, signing continuity, SwiftData container/schema and local data. Back up/export first; install as an update without uninstalling or deleting the store; compare existing meals/workouts/weight data and new saves after upgrade. iOS contains only backend/auth public configuration, never gateway/provider credentials. |
+| 8. Bounded acceptance, then pilot | Obtain a separate bounded live-test allowance and explicit activation approval. Start with the two verified accounts only, a pinned artifact/config digest and reviewed policy. Do not reopen the benchmark, clear unknown operations, replay results or use the old EUR 10 as an allowance. |
+
+**Proposed policy for approval, not configured:** per person 2/minute, 20/day,
+300/month, one concurrent operation, USD 1/day and USD 5/month model ceilings;
+global 4/minute, 40/day, 600/month, two concurrent operations, USD 2/day and
+USD 10/month. Counts include initial analyses, refinements and failures; each
+explicit new operation counts again. Use a 15-minute initial UUIDv7 acceptance
+window and the existing 31-day metadata retention, one shared policy digest and
+ledger across instances, existing request/image bounds and an explicit short-lived
+deployment attestation. These are application limits, not hosting/billing caps.
+Admission reserves USD 0.2343 per call under the reviewed rates; unknown outcomes
+retain the full reserve/concurrency and can stop further use pending reconciliation.
+An inexpensive observed answer never releases an unknown hold or authorizes reset.
+Changing keys/policy requires the existing stopped-admission carry-forward procedure.
+
+### Privacy and live acceptance blockers
+
+Before personal nutrition/photos leave either device, document controller and
+processor responsibilities, applicable health-data basis/consent and notice for
+both people, Microsoft contractual/DPA and subprocessors/transfer terms, EU
+DataZone scope (not Sweden-only), abuse-monitoring/retention exceptions, access,
+withdrawal/deletion and incident procedures. `store=false` is not a claim of zero
+provider retention. Keep images, descriptions and results out of application,
+proxy, SDK and diagnostic logs; retain only necessary pseudonymous accounting
+metadata for the documented 31 days, restrict access and verify deletion and
+backup retention. No real participant data in test fixtures or evidence commits.
+
+Required live acceptance, only after separate authorization:
+
+- Both allowed accounts work; third-account, expired/wrong-audience/issuer/client
+  tokens, forged platform headers and direct/alternate-host calls fail before
+  dispatch. Gateway rejects iOS tokens, another workload and missing/tampered
+  service assertions; only the exact backend identity/role succeeds.
+- Two instances/racing requests preserve CAS and person/global limits. Duplicate,
+  modified, expired, consumed and unknown operations never cause a second dispatch
+  or result replay. Lost response, refusal and missing usage retain correct spend
+  and uncertainty; outage/expired attestation fails closed. Test log redaction,
+  body bounds, scale limits, metadata cleanup and AI-off/API-only rollback.
+- Validate real extraction for original T2, independent quantities/reference sizes,
+  decimal formats, incomplete/mixed/contradictory declarations and omissions.
+  Verify no schema truncation under the approved cap. Retest image/refinement
+  compatibility without asserting general photo accuracy. Exercise controlled
+  filter responses through deployed backend/iOS, including replacement review:
+  no new estimate, no `FoodEntry`, no silent retry. Do not weaken filters to pass T6.
+- Verify installed-device login, account change, background/return, network loss,
+  explicit retry/new-operation confirmation and at-most-once confirmed saving.
+  Prove old local data survives the signed update and rollback/AI-off remains usable.
+
+### Ongoing costs, not ongoing approval
+
+The existing 2026-09-18 snapshot is a planning basis only: USD 0.825 input,
+0.0825 cached input and 4.95 output per million tokens. At assumed 4,000 input /
+1,000 output per call and no cache discount, 600 total monthly calls cost
+**USD 4.95** model-only; 1,200 would cost **USD 9.90** but exceed the proposed
+600-call policy. At 600 calls with an additional 3,000 image tokens on every call,
+the scenario is **USD 6.435**. Twenty percent extra correction calls instead would
+be **USD 5.94**, but 720 calls require a separately approved higher request limit.
+Do not double-count photos/corrections already included in the call/token totals.
+The expanded extraction schema changes tokens; historical benchmark pennies are
+not a pilot forecast. Conservative reserves may deny calls before nominal limits.
+
+Total ongoing exposure is model tokens **plus** Functions execution/host storage,
+Container Apps active/idle compute, image registry/storage, Table transactions and
+capacity, secrets, network/egress and diagnostic ingestion/retention, then actual
+contract tax/FX. No free-tier credit or fixed infrastructure price is assumed.
+For sizing, an always-on 0.25-vCPU/0.5-GiB gateway alone consumes up to 648,000
+vCPU-seconds and 1,296,000 GiB-seconds over 30 days; min 0 reduces idle use but adds
+cold-start uncertainty. Obtain a priced monthly infrastructure ceiling before
+provisioning; alerts are not hard caps. Model USD 10/month is only a proposed
+software ceiling, not an approved EUR all-in budget. Owner approval must explicitly
+cover recurring resources, live acceptance and shutdown/retention costs.
+
+Local verification after package review: **592 gateway tests passed, 14 live tests
+skipped; 173 backend tests passed** (including health/Functions import), with
+external sockets blocked. **146 FoodAnalysisKit and 28 EntraAuthKit tests passed**;
+the Debug simulator app build succeeded with cached dependencies, package updates
+disabled, no signing and DerivedData outside the repository. Pylance syntax checks
+for the new production schema/use case and primary gateway regression tests passed;
+editor diagnostics and `git diff --check` were clear. Review reproduced and fixed
+float-rounded boundary acceptance and unconfirmed replacement of a pending review;
+the internal note limit also reserves the provenance slot. No deployed authentication,
+real model extraction or physical-device data-update test is claimed. Preparation
+is based on `19ee4c4`; the subsequent package-review authorization permits one
+reviewed commit and regular push, not cloud operations, model calls, deployment,
+build-number changes or pilot activation.
+
 ## Paid API migration boundary (2026-09-17)
 
 The procedures below describe the existing Copilot deployment. The

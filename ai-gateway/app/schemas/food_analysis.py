@@ -7,10 +7,11 @@ include any provider or model identifier.
 from __future__ import annotations
 
 import base64
+from decimal import Decimal
 import math
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.image_validation import image_content_matches_declared_type
 
@@ -103,6 +104,45 @@ class FoodAnalysisEstimate(BaseModel):
     confidence: float = Field(ge=0, le=1)
     warnings: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
     assumptions: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
+
+
+class DeclaredNutritionComponent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quantity_source: str = Field(min_length=1, max_length=2000)
+    nutrition_source: str = Field(min_length=1, max_length=2000)
+    quantity_grams: str = Field(min_length=1, max_length=18)
+    basis_grams: str = Field(min_length=1, max_length=18)
+    calories: str = Field(min_length=1, max_length=18)
+    protein_grams: str = Field(min_length=1, max_length=18)
+    carbohydrate_grams: str = Field(min_length=1, max_length=18)
+    fat_grams: str = Field(min_length=1, max_length=18)
+
+    @field_validator("quantity_grams", "basis_grams", "calories", "protein_grams", "carbohydrate_grams", "fat_grams")
+    @classmethod
+    def _require_decimal(cls, value: str, info: ValidationInfo) -> str:
+        parts = value.split(".")
+        if len(parts) > 2 or any(not part.isascii() or not part.isdecimal() for part in parts):
+            raise ValueError("A plain unsigned decimal string is required.")
+        amount = Decimal(value)
+        maximum = 10000 if info.field_name in {"quantity_grams", "basis_grams", "calories"} else 1000
+        if amount > maximum or info.field_name in {"quantity_grams", "basis_grams"} and amount <= 0:
+            raise ValueError("Declared value is outside calculation bounds.")
+        return value
+
+
+class DeclaredNutrition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    complete: bool = Field(strict=True)
+    components: list[DeclaredNutritionComponent] = Field(max_length=20)
+
+
+class TextNutritionExtraction(FoodAnalysisEstimate):
+    model_config = ConfigDict(extra="forbid")
+
+    assumptions: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES - 1)
+    declared_nutrition: DeclaredNutrition | None
 
 
 class RefinementCurrentEstimate(FoodAnalysisEstimate):

@@ -141,6 +141,78 @@ def test_profile_pilot_reservation_settlement_and_failures(monkeypatch, outcome)
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("truncated", [False, True])
+def test_extraction_contract_keeps_output_cap_full_input_reserve_and_single_dispatch(monkeypatch, truncated):
+    import httpx2
+    from dataclasses import asdict
+    from app.errors import ProviderOutputInvalidError
+    from app.pilot import canonical
+    from app.schemas.food_analysis import FoodAnalysisRequest
+    from app.use_cases.food_analysis import FoodAnalysisUseCase
+    from tests.test_openai_api import _profile_provider, _profile_completion, _food_data
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    calls = []
+    generation_requests = []
+    quantity_source = "I ate 25 g food"
+    nutrition_source = "Per serving of 50 g: 80 kcal, protein 2 g, carbohydrate 3 g, fat 1 g"
+    data = {**_food_data(), "declared_nutrition": {"complete": True, "components": [{
+        "quantity_source": quantity_source, "nutrition_source": nutrition_source,
+        "quantity_grams": "25", "basis_grams": "50", "calories": "80", "protein_grams": "2",
+        "carbohydrate_grams": "3", "fat_grams": "1",
+    }]}}
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        response = _profile_completion(data)
+        if truncated:
+            response["choices"][0]["finish_reason"] = "length"
+        return httpx2.Response(200, json=response)
+
+    async def run():
+        control = profile_coordinator(max_text_schema_bytes=65536)
+        identifier = operation()
+        provider = _profile_provider(handler)
+        use_case = FoodAnalysisUseCase(provider, 1, "purpose-test", max_output_tokens=2000)
+
+        async def dispatch(generation):
+            generation_requests.append(generation)
+            return await control.generate(provider, generation, IDENTITY, identifier, "synthetic")
+
+        monkeypatch.setattr(use_case, "_generate_with_timeout", dispatch)
+        payload = FoodAnalysisRequest(food_description=f"{quantity_source}. {nutrition_source}.")
+        try:
+            if truncated:
+                with pytest.raises(ProviderOutputInvalidError) as caught:
+                    await use_case.execute(payload)
+                assert caught.value.metadata.status == "truncated"
+                assert caught.value.metadata.usage_known
+            else:
+                result = await use_case.execute(payload)
+                assert result.estimate.calories == 40
+                assert result.estimate.protein_grams == 1
+                assert "declared_nutrition" not in result.model_dump()["estimate"]
+            generation = generation_requests[0]
+            serialized = canonical([[asdict(message) for message in generation.messages], generation.output_json_schema])
+            assert len(serialized) < 65536
+            assert control.bound(generation) == 234300000
+            assert control.admission(generation)["max_input_tokens"] == 272000
+            assert control.admission(generation)["max_output_tokens"] == 2000
+            row = next(data for key, (data, _) in control.store.rows.items() if key.startswith("op-"))
+            assert row["reserved"] == 234300000
+            assert row["usage_known"]
+            with pytest.raises(PilotError):
+                await use_case.execute(payload)
+            assert len(calls) == 1
+            assert calls[0]["max_completion_tokens"] == 2000
+            assert "declared_nutrition" in calls[0]["response_format"]["json_schema"]["schema"]["required"]
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("change", ["deployment", "cap", "price_version"])
 def test_profile_dispatch_permit_rejects_adapter_drift(monkeypatch, change):
     from app.errors import ProviderOutputInvalidError
@@ -270,7 +342,11 @@ def test_offline_benchmark_manifest_has_18_single_dispatch_attempts(monkeypatch)
 
     def handler(request):
         calls.append(json.loads(request.content))
-        return httpx2.Response(200, json=_profile_completion(_food_data()))
+        data = _food_data()
+        schema = calls[-1]["response_format"]["json_schema"]["schema"]
+        if "declared_nutrition" in schema["properties"]:
+            data["declared_nutrition"] = None
+        return httpx2.Response(200, json=_profile_completion(data))
 
     async def run():
         provider = _profile_provider(handler)
@@ -695,7 +771,10 @@ def test_full_backend_gateway_sdk_pilot_contract(monkeypatch, caplog, mode, prof
 
     def handler(request):
         calls.append(request)
-        completion = _profile_completion(_food_data()) if profile else _completion(_food_data(), model="gpt-4.1-mini-2025-04-14")
+        data = _food_data()
+        if mode == "text":
+            data["declared_nutrition"] = None
+        completion = _profile_completion(data) if profile else _completion(data, model="gpt-4.1-mini-2025-04-14")
         return httpx2.Response(200, json=completion)
 
     provider = (_profile_provider(handler) if profile else

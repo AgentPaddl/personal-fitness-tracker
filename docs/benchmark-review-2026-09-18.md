@@ -2,6 +2,18 @@
 
 ## Final-Round Assessment
 
+**Decision: GPT-5.4-mini is the candidate for the two-person pilot.** This is a
+model-selection decision, not authorization to deploy or fund ongoing operation.
+The demonstrated defects, passed examples and unassessed risks below remain
+separate. Neither general photo accuracy nor injection safety is established.
+The benchmark's EUR 10 authorization does not cover the ongoing pilot.
+
+Subsequent [local pilot preparation](operations-runbook.md#two-person-pilot-preparation-from-19ee4c4)
+adds conditional deterministic text arithmetic and refusal-flow regression checks.
+It does not change any score/result below or establish that the model now extracts
+T2 correctly. Statements below about unchanged product code describe the completed
+benchmark task, not this separately authorized local preparation.
+
 All seven requested cases were attempted once under the existing EUR 10
 authorization: P3, P4, R3, R4, P5, P6, T6. Six returned schema-valid answers with
 known usage; T6 was refused/filtered and has no usable answer or known usage.

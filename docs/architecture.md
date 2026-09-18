@@ -119,6 +119,29 @@ HTTP body. Both risks need boundary-specific checks before external use.
 
 ### Provider selection
 
+**Current pilot decision from `19ee4c4`: GPT-5.4-mini is the selected candidate.**
+The completed [screening review](benchmark-review-2026-09-18.md) distinguishes
+T2 arithmetic failure, P3 partial coverage, T6 refusal, passed examples and
+unassessed risks; it establishes neither general photo accuracy nor injection
+safety. The following dated candidate/benchmark proposals are historical.
+The EUR 10 benchmark authorization does not fund an ongoing pilot.
+
+Local preparation adds a single-call internal initial-text extraction contract
+and Decimal scaling/summing, conditional on model-extracted gram quantities and
+declared nutrients. It does not introduce a free-text parser or certify source
+association/completeness. Images, refinements and public DTOs remain unchanged;
+real extraction with the new contract remains a live acceptance blocker.
+Refused/filtered responses stay errors through gateway, backend and iOS. A
+reproduced stale-review path on failed replacement is closed, and the save entry
+point guards the session before constructing a local entry. SwiftData is unchanged.
+
+Stable iOS operation snapshots and distributed limits already exist locally and
+are reused, not rebuilt. API-only packaging, strict backend workload authorization
+for public-HTTPS variant B, a durable installed-app URL, private recurring funding,
+privacy prerequisites and deployed/device acceptance remain outstanding. Production
+denial/negative readiness stays in place. The [minimum pilot plan and cost proposal](operations-runbook.md#two-person-pilot-preparation-from-19ee4c4)
+is local preparation only, with API-only rollback or AI off, never Copilot access.
+
 **2026-09-18 update:** the verified private subscription reports zero
 GPT-4.1-mini DataZone quota in all four checked EU regions. The next candidate is
 Azure `gpt-5.4-mini`, version `2026-03-17`, EU `DataZoneStandard`, for the target

@@ -226,7 +226,7 @@ struct FoodAnalysisReviewView: View {
     }
 
     private func save() {
-        guard let input = draft.validated() else { return }
+        guard session.canConfirmCurrentDraft, let input = draft.validated() else { return }
 
         isSaving = true
         saveErrorMessage = nil

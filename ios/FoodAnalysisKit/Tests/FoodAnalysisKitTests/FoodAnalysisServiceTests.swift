@@ -63,14 +63,18 @@ private actor SwitchingAccountProvider: AccountAccessTokenProviding {
 private actor RecordingPerformer: URLRequestPerforming {
     private(set) var requests: [URLRequest] = []
     let firstStatus: Int
+    let responseData: Data?
 
-    init(firstStatus: Int) { self.firstStatus = firstStatus }
+    init(firstStatus: Int, responseData: Data? = nil) {
+        self.firstStatus = firstStatus
+        self.responseData = responseData
+    }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         requests.append(request)
         if requests.count == 1 && firstStatus == 0 { throw URLError(.timedOut) }
         let status = requests.count == 1 ? firstStatus : 200
-        let data = Data(#"{"estimate":{"food_name":"synthetic","calories":1,"protein_grams":0,"carbohydrate_grams":0,"fat_grams":0,"confidence":0.5,"warnings":[]}}"#.utf8)
+        let data = responseData ?? Data(#"{"estimate":{"food_name":"synthetic","calories":1,"protein_grams":0,"carbohydrate_grams":0,"fat_grams":0,"confidence":0.5,"warnings":[]}}"#.utf8)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
 }
@@ -93,6 +97,25 @@ private func assertThrowsFoodAnalysisError(
 
 final class FoodAnalysisServiceTests: XCTestCase {
     private let baseURL = URL(string: "https://example.test/api")!
+
+    @MainActor
+    func testRefusedHTTPResponseNeverOpensAReviewOrRetries() async {
+        let data = Data(#"{"error":{"code":"gateway_upstream_error","message":"private-refusal-marker"},"estimate":{"food_name":"synthetic","calories":1,"protein_grams":0,"carbohydrate_grams":0,"fat_grams":0,"confidence":0.9,"warnings":[],"assumptions":[]}}"#.utf8)
+        let performer = RecordingPerformer(firstStatus: 502, responseData: data)
+        let service = FoodAnalysisService(baseURL: baseURL, session: performer)
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+
+        await model.analyze()
+
+        XCTAssertEqual(model.lastError, .analysisFailed)
+        XCTAssertNil(model.reviewSession)
+        XCTAssertNil(model.reviewDraft)
+        XCTAssertFalse(model.isAnalyzing)
+        XCTAssertFalse(model.errorMessage?.contains("private-refusal-marker") ?? false)
+        let requests = await performer.requests
+        XCTAssertEqual(requests.count, 1)
+    }
 
     @MainActor
     func testDelayedLoginCompletionPreservesSnapshotUnlessExplicitlyCancelled() async throws {

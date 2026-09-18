@@ -131,7 +131,9 @@ def test_azure_mock_preserves_gateway_and_backend_public_contract(monkeypatch, o
         calls.append(request)
         if outcome == "rate_limit":
             return httpx2.Response(429, json={"error": {"message": "sensitive-provider-marker"}})
-        data = {**estimate, "calories": -1} if outcome == "invalid" else estimate
+        data = {**estimate, "declared_nutrition": None}
+        if outcome == "invalid":
+            data["calories"] = -1
         return httpx2.Response(200, headers={"x-request-id": "private-provider-id"}, json={
             "id": "private-completion-id", "created": 1, "object": "chat.completion",
             "model": "private-model", "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},

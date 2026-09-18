@@ -32,6 +32,7 @@ _VALID_DATA = {
     "fat_grams": 5.0,
     "confidence": 0.9,
     "warnings": [],
+    "declared_nutrition": None,
 }
 
 
@@ -82,6 +83,70 @@ def test_execute_rejects_invalid_provider_output():
 
     with pytest.raises(ProviderOutputInvalidError):
         asyncio.run(use_case.execute(_food_request()))
+
+
+@pytest.mark.parametrize("quantity,basis,source,expected", [
+    ("125", "100", "per 100 g", 100),
+    ("25", "50", "per serving of 50 g", 40),
+    ("75", "75", "for the entire 75 g", 80),
+    ("10", "30", "per 30 g prepared", 80 / 3),
+])
+def test_declared_reference_sizes_preserve_packaging_calories(quantity, basis, source, expected):
+    from decimal import localcontext, ROUND_UP
+    from app.schemas.food_analysis import TextNutritionExtraction
+
+    quantity_source = f"I ate {quantity} g prepared food"
+    nutrition_source = f"{source}: 80 kcal, protein 2 g, carbohydrate 3 g, fat 1 g"
+    extraction = TextNutritionExtraction.model_validate({
+        **_VALID_DATA, "declared_nutrition": {"complete": True, "components": [{
+            "quantity_source": quantity_source, "nutrition_source": nutrition_source,
+            "quantity_grams": quantity, "basis_grams": basis, "calories": "80",
+            "protein_grams": "2", "carbohydrate_grams": "3", "fat_grams": "1",
+        }]},
+    })
+    with localcontext() as context:
+        context.prec = 3
+        context.rounding = ROUND_UP
+        result = FoodAnalysisUseCase._declared_estimate(extraction, f"{quantity_source}. {nutrition_source}.")
+    assert result.calories == expected
+    assert result.protein_grams == float(Decimal("2") * Decimal(quantity) / Decimal(basis))
+    assert result.calories != 4 * result.protein_grams + 4 * result.carbohydrate_grams + 9 * result.fat_grams
+
+
+@pytest.mark.parametrize("description", [
+    "One serving: 80 kcal, protein 2 g, carbohydrate 3 g, fat 1 g. I ate one serving.",
+    "100 g dry rice: 350 kcal, protein 7 g, carbohydrate 78 g, fat 1 g. I ate 150 g cooked rice.",
+    "I ate 50 g. Per 100 g: 80 kcal and protein 2 g. Other nutrients are unknown.",
+    "I ate half of the package. Per 100 g: 80 kcal, protein 2 g, carbohydrate 3 g, fat 1 g.",
+])
+def test_incomplete_declared_extraction_cannot_fall_back_to_plausible_totals(description):
+    provider = _CapturingProvider({**_VALID_DATA, "declared_nutrition": {"complete": False, "components": []}})
+    use_case = FoodAnalysisUseCase(provider, 1, "food_text_v1")
+    with pytest.raises(ProviderOutputInvalidError):
+        asyncio.run(use_case.execute(FoodAnalysisRequest(food_description=description)))
+    assert provider.calls == 1
+    instructions = provider.last_request.messages[0].content
+    for rule in ("actually consumed", "per-serving", "whole-amount", "dry/raw", "missing nutrient with zero"):
+        assert rule in instructions
+
+
+def test_half_refinement_returns_model_totals_without_second_scaling():
+    data = {**_VALID_DATA, "calories": 100, "protein_grams": 15, "fat_grams": 2.5}
+    del data["declared_nutrition"]
+    provider = _CapturingProvider(data)
+    use_case = FoodAnalysisUseCase(provider, 1, "food_text_v1")
+    payload = _refinement_request().model_dump()
+    payload["refinement"]["current_estimate"] = {**_VALID_DATA, "assumptions": []}
+    payload["refinement"]["current_estimate"].pop("declared_nutrition")
+    payload["refinement"]["correction_text"] = "die Haelfte"
+    result = asyncio.run(use_case.execute(FoodAnalysisRequest.model_validate(payload)))
+    assert result.estimate.calories == 100
+    assert result.estimate.protein_grams == 15
+    assert provider.calls == 1
+    assert "declared_nutrition" not in provider.last_request.output_json_schema["properties"]
+    assert not provider.last_request.attachments
+    supplied = json.loads(provider.last_request.messages[1].content)["untrusted_user_data"]
+    assert supplied["current_estimate"]["calories"] == 200
 
 
 def test_business_validation_keeps_internal_metadata_but_not_sensitive_error_context():
@@ -137,9 +202,11 @@ def test_execute_enforces_real_timeout_and_cancels_provider():
 class _CapturingProvider(StructuredGenerationProvider):
     def __init__(self, data: dict):
         self._data = data
+        self.calls = 0
         self.last_request: StructuredGenerationRequest | None = None
 
     async def generate(self, request: StructuredGenerationRequest) -> StructuredGenerationResult:
+        self.calls += 1
         self.last_request = request
         return StructuredGenerationResult(data=self._data)
 

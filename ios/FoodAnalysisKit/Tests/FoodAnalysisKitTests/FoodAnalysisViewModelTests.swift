@@ -146,6 +146,71 @@ private func makeEstimate() -> FoodAnalysisResponseDTO.Estimate {
 
 @MainActor
 final class FoodAnalysisViewModelTests: XCTestCase {
+    func testFailedReplacementCannotLeaveAnOldEstimateConfirmable() async throws {
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "first meal"
+        await model.analyze()
+        let previous = try XCTUnwrap(model.reviewSession)
+        service.result = .failure(FoodAnalysisError.analysisFailed)
+        model.descriptionText = "different meal"
+
+        await model.analyze()
+
+        XCTAssertEqual(service.callCount, 2)
+        XCTAssertEqual(model.lastError, .analysisFailed)
+        XCTAssertNil(model.reviewDraft)
+        XCTAssertNil(model.reviewSession)
+        XCTAssertFalse(previous.canConfirmCurrentDraft)
+        XCTAssertFalse(previous.persistenceCoordinator.hasCommitted)
+    }
+
+    func testReplacementDoesNotUndoPreviouslyCommittedEntry() async throws {
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "first meal"
+        await model.analyze()
+        let previous = try XCTUnwrap(model.reviewSession)
+        var storedNames: [String] = []
+        XCTAssertEqual(previous.persistenceCoordinator.save(
+            insert: { storedNames.append(previous.currentDraft.name) },
+            persist: {}, rollback: { storedNames.removeLast() }
+        ), .saved)
+        service.result = .failure(FoodAnalysisError.analysisFailed)
+        model.descriptionText = "replacement meal"
+
+        await model.analyze()
+
+        XCTAssertEqual(storedNames, ["Apfel"])
+        XCTAssertTrue(previous.persistenceCoordinator.hasCommitted)
+        XCTAssertFalse(previous.canConfirmCurrentDraft)
+        XCTAssertNil(model.reviewSession)
+        XCTAssertEqual(model.lastError, .analysisFailed)
+    }
+
+    func testUnknownRefinementRequiresConfirmationBeforeReplacement() async throws {
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "first meal"
+        await model.analyze()
+        let previous = try XCTUnwrap(model.reviewSession)
+        service.result = .failure(FoodAnalysisError.timeout)
+        previous.correctionText = "half"
+        await previous.refine()
+        model.descriptionText = "replacement meal"
+
+        await model.analyze()
+
+        XCTAssertTrue(model.requiresNewOperationConfirmation)
+        XCTAssertEqual(service.callCount, 2)
+        XCTAssertEqual(model.reviewSession?.id, previous.id)
+        service.result = .success(makeEstimate())
+        await model.analyze(confirmNewOperation: true)
+        XCTAssertEqual(service.callCount, 3)
+        XCTAssertNotEqual(model.reviewSession?.id, previous.id)
+        XCTAssertFalse(previous.canConfirmCurrentDraft)
+    }
+
     func testLateInterruptedAnswerCannotClearNewerAttempt() async throws {
         let service = GatedService()
         let model = FoodAnalysisViewModel(service: service)
@@ -336,7 +401,11 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         XCTAssertTrue(service.isRefinementWaiting)
 
         viewModel.descriptionText = "Eine Banane"
+        XCTAssertTrue(viewModel.requiresNewOperationConfirmation)
         await viewModel.analyze()
+        XCTAssertEqual(viewModel.reviewSession?.id, oldSession.id)
+        XCTAssertEqual(service.analysisResults.count, 1)
+        await viewModel.analyze(confirmNewOperation: true)
         let replacementID = viewModel.reviewSession?.id
         service.completeRefinement(with: FoodAnalysisResponseDTO.Estimate(
             foodName: "Verspäteter Apfel",
@@ -349,6 +418,8 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         await refinement.value
 
         XCTAssertNotEqual(oldSession.id, replacementID)
+        XCTAssertFalse(oldSession.canConfirmCurrentDraft)
+        XCTAssertFalse(oldSession.persistenceCoordinator.hasCommitted)
         XCTAssertEqual(oldSession.currentEstimate, makeEstimate())
         XCTAssertEqual(viewModel.reviewSession?.currentEstimate, replacement)
         XCTAssertEqual(viewModel.reviewDraft?.name, "Banane")

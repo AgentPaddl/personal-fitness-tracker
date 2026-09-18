@@ -42,6 +42,8 @@ public final class FoodAnalysisViewModel: ObservableObject {
 
     public var requiresNewOperationConfirmation: Bool {
         hasUncertainOutcome || lastError?.requiresNewOperationConfirmation == true
+            || reviewSession?.isRefining == true
+            || reviewSession?.requiresNewOperationConfirmation == true
             || (operationCompleted && currentOperation?.input == currentInput)
     }
 
@@ -111,6 +113,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
             return
         }
         guard let operation = currentOperation else { return }
+        closeReviewSession()
         let requestToken = UUID()
         currentRequestToken = requestToken
         isAnalyzing = true

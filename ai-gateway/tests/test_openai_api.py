@@ -541,7 +541,10 @@ def test_food_use_case_through_sdk_for_text_images_and_refinement(mode, caplog):
 
     def handler(request):
         calls.append(json.loads(request.content))
-        return httpx2.Response(200, json=_completion(_food_data()))
+        data = _food_data()
+        if mode == "text":
+            data["declared_nutrition"] = None
+        return httpx2.Response(200, json=_completion(data))
 
     async def run():
         provider = _provider(handler, model_routes={"text-purpose": "text-deployment", "image-purpose": "image-deployment"})
@@ -604,6 +607,45 @@ def test_configured_output_limit_cannot_be_raised_by_request():
 
     asyncio.run(run())
     assert calls[0]["max_completion_tokens"] == 99
+
+
+@pytest.mark.parametrize("kind", ["message_refusal", "content_filter", "prompt_filter"])
+def test_refused_analysis_route_has_no_estimate_or_retry(kind, caplog):
+    from fastapi.testclient import TestClient
+    from app.dependencies import get_food_analysis_use_case
+    from app.main import create_app
+    from app.security import require_authenticated_caller
+
+    calls = []
+    data = {**_food_data(), "declared_nutrition": None}
+
+    def handler(request):
+        calls.append(request)
+        if kind == "prompt_filter":
+            return httpx2.Response(400, json={"error": {"code": "content_filter", "message": "private-refusal-marker"}})
+        completion = _completion(data)
+        if kind == "message_refusal":
+            completion["choices"][0]["message"]["refusal"] = "private-refusal-marker"
+        else:
+            completion["choices"][0]["finish_reason"] = "content_filter"
+        return httpx2.Response(200, json=completion)
+
+    provider = _provider(handler)
+    gateway_app = create_app()
+    gateway_app.dependency_overrides[require_authenticated_caller] = lambda: None
+    gateway_app.dependency_overrides[get_food_analysis_use_case] = lambda: FoodAnalysisUseCase(provider, 1, "purpose-test")
+    try:
+        with TestClient(gateway_app, raise_server_exceptions=False) as client:
+            response = client.post("/v1/food-analysis", json={"food_description": "synthetic-description-marker"})
+        assert response.status_code == 502
+        assert response.json()["error"]["code"] == "provider_output_invalid"
+        assert "estimate" not in response.json()
+        assert len(calls) == 1
+        for marker in ("private-refusal-marker", "synthetic-meal-marker", "synthetic-description-marker"):
+            assert marker not in response.text
+            assert marker not in caplog.text
+    finally:
+        asyncio.run(provider.aclose())
 
 
 def test_prompt_filter_error_is_a_refusal_without_usage():

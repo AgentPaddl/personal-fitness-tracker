@@ -144,6 +144,33 @@ def test_food_analysis_allowed_outside_development_mode_with_easy_auth_principal
     assert response.status_code != 403
 
 
+def test_refused_gateway_response_cannot_become_public_estimate(monkeypatch, caplog):
+    import httpx
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(502, json={
+            "error": {"code": "provider_output_invalid", "message": "private-refusal-marker"},
+            "estimate": {"food_name": "private-meal-marker", "calories": 95, "protein_grams": 0.5,
+                         "carbohydrate_grams": 25, "fat_grams": 0.3, "confidence": 0.9,
+                         "warnings": [], "assumptions": []},
+        })
+
+    client = GatewayClient(base_url="https://gateway.test", transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("api.food_analysis._make_gateway_client", lambda *args: client)
+    response = food_analysis(_request({"food_description": "private-description-marker"}))
+    public = json.loads(response.get_body())
+    assert response.status_code == 502
+    assert public["error"]["code"] == "gateway_upstream_error"
+    assert "estimate" not in public
+    assert len(calls) == 1
+    for marker in ("private-refusal-marker", "private-meal-marker", "private-description-marker"):
+        assert marker not in response.get_body().decode()
+        assert marker not in caplog.text
+
+
 def test_food_analysis_success_maps_to_public_contract(monkeypatch):
     gateway_result = {
         "estimate": {
