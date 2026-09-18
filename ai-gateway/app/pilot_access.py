@@ -44,12 +44,12 @@ def verify(headers, payload):
         raise PilotError("pilot_forbidden") from None
 
 
-def build_coordinator(store=None):
+def build_coordinator(store=None, *, settings=None):
     from app.config import get_settings
     from app.pilot_table import AzureTableStore
 
     try:
-        settings = get_settings()
+        settings = settings if settings is not None else get_settings()
         if settings.ai_provider != "azure_openai":
             raise PilotError()
         policy = PilotPolicy.model_validate_json(os.environ["AI_PILOT_POLICY_JSON"])

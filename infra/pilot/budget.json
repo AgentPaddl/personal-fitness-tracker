@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "pilotResourceGroup": {"type": "string"},
+    "infrastructureResourceGroup": {"type": "string", "defaultValue": ""},
+    "monthlyAmountEUR": {"type": "int", "minValue": 1, "maxValue": 1000},
+    "confirmedBillingCurrency": {"type": "string", "allowedValues": ["EUR"]},
+    "startDate": {"type": "string"}, "endDate": {"type": "string"},
+    "contactEmails": {"type": "array", "minLength": 1, "maxLength": 2}
+  },
+  "resources": [{
+    "type": "Microsoft.Consumption/budgets", "apiVersion": "2023-11-01",
+    "name": "[concat(parameters('pilotResourceGroup'), '-complete-monthly')]",
+    "properties": {"category": "Cost", "amount": "[parameters('monthlyAmountEUR')]", "timeGrain": "Monthly",
+      "timePeriod": {"startDate": "[parameters('startDate')]", "endDate": "[parameters('endDate')]"},
+      "filter": {"dimensions": {"name": "ResourceGroupName", "operator": "In", "values": "[if(empty(parameters('infrastructureResourceGroup')), createArray(parameters('pilotResourceGroup')), createArray(parameters('pilotResourceGroup'), parameters('infrastructureResourceGroup')))]"}},
+      "notifications": {
+        "Actual80": {"enabled": true, "operator": "GreaterThanOrEqualTo", "threshold": 80, "thresholdType": "Actual", "contactEmails": "[parameters('contactEmails')]"},
+        "Actual100": {"enabled": true, "operator": "GreaterThanOrEqualTo", "threshold": 100, "thresholdType": "Actual", "contactEmails": "[parameters('contactEmails')]"},
+        "Forecast100": {"enabled": true, "operator": "GreaterThanOrEqualTo", "threshold": 100, "thresholdType": "Forecasted", "contactEmails": "[parameters('contactEmails')]"}
+      }
+    }
+  }]
+}

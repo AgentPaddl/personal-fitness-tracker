@@ -4,6 +4,22 @@ import httpx
 from api.health import health, readiness
 
 
+def test_api_only_readiness_uses_backend_workload_token(monkeypatch):
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "true")
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "synthetic-service")
+    monkeypatch.setattr("workload_identity.gateway_access_token", lambda: "synthetic-token")
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(200)
+
+    monkeypatch.setattr("api.health.httpx.get", get)
+    assert readiness(func.HttpRequest(method="GET", url="/api/readiness", body=b"")).status_code == 200
+    assert calls == [{"timeout": 3.0, "follow_redirects": False, "headers": {
+        "Authorization": "Bearer synthetic-token", "X-Service-Token": "synthetic-service"}}]
+
+
 def test_health_returns_ok_status():
     req = func.HttpRequest(method="GET", url="/api/health", body=b"")
 

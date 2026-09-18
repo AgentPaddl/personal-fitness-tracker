@@ -4,6 +4,67 @@ import pytest
 from gateway_client import GatewayClient, GatewayClientError
 
 
+@pytest.mark.parametrize("failure", [None, "token", "identity", "flag"])
+def test_api_only_uses_managed_identity_and_existing_assertion_once(monkeypatch, failure):
+    import workload_identity
+
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "invalid" if failure == "flag" else "true")
+    monkeypatch.setenv("AI_PILOT_SIGNING_KEY", "synthetic-signing-key-not-for-use-0000")
+    tokens, calls = [], []
+
+    def token():
+        tokens.append(True)
+        if failure == "token":
+            raise ValueError("private-credential-marker")
+        return "synthetic-token"
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"estimate": {}})
+
+    monkeypatch.setattr(workload_identity, "gateway_access_token", token)
+    client = GatewayClient(base_url="https://gateway.test", transport=httpx.MockTransport(handler),
+                           service_token="synthetic", verified_identity=None if failure == "identity" else ("tenant", "person"),
+                           operation_id="synthetic-operation")
+    try:
+        if failure:
+            with pytest.raises(GatewayClientError) as caught:
+                client.analyze_food_text("private-food")
+            assert caught.value.code == "pilot_unavailable"
+            assert "private" not in str(caught.value)
+            assert not calls
+        else:
+            client.analyze_food_text("synthetic")
+            assert len(calls) == len(tokens) == 1
+            assert calls[0].headers["Authorization"] == "Bearer synthetic-token"
+            assert calls[0].headers["X-Service-Token"] == "synthetic"
+            assert calls[0].headers["X-Pilot-Authorization"]
+    finally:
+        client.close()
+
+
+def test_workload_token_uses_only_configured_identity_and_audience(monkeypatch):
+    import time
+    from types import SimpleNamespace
+    import workload_identity
+
+    identifier = "00000000-0000-4000-8000-000000000001"
+    for name, value in {"APP_ENV": "production", "AI_PILOT_ENABLED": "true", "EASY_AUTH_ENABLED": "true",
+                        "GATEWAY_BACKEND_CLIENT_ID": identifier, "GATEWAY_WORKLOAD_AUDIENCE": identifier,
+                        "AI_PILOT_TENANT_ID": identifier}.items():
+        monkeypatch.setenv(name, value)
+    selected, scopes = [], []
+
+    def credential(client_id):
+        selected.append(client_id)
+        return SimpleNamespace(get_token=lambda scope: (scopes.append(scope) or SimpleNamespace(token="synthetic", expires_on=time.time() + 300)))
+
+    monkeypatch.setattr(workload_identity, "_credential", credential)
+    assert workload_identity.gateway_access_token() == "synthetic"
+    assert selected == [identifier]
+    assert scopes == [f"api://{identifier}/.default"]
+
+
 def test_analyze_food_text_returns_gateway_json():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/food-analysis"

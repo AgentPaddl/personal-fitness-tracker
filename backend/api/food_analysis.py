@@ -57,6 +57,10 @@ def food_analysis(req: func.HttpRequest) -> func.HttpResponse:
             _error_response(401, "authentication_required", "Authentication is required.", request_id),
         )
 
+    if protected and len(req.get_body()) > MAX_IMAGE_BYTES + 65536:
+        return _log_and_respond(request_id, start, "unknown", _error_response(
+            413, "pilot_input", "This input exceeds the pilot request limit.", request_id))
+
     content_type = (req.headers.get("Content-Type") or "").lower()
     if content_type.startswith("multipart/form-data"):
         response = _handle_image_analysis(req, request_id, identity, operation)

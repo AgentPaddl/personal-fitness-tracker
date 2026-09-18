@@ -1,0 +1,192 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "pilotName": {"type": "string", "minLength": 3, "maxLength": 12},
+    "tenantId": {"type": "string"},
+    "nativeClientId": {"type": "string"},
+    "backendAudience": {"type": "string"},
+    "gatewayAudience": {"type": "string"},
+    "allowlist": {"type": "array", "minLength": 2, "maxLength": 2},
+    "policy": {"type": "object"},
+    "allInMonthlyEUR": {"type": "int", "minValue": 1, "maxValue": 1000},
+    "billingCurrency": {"type": "string", "allowedValues": ["EUR"]},
+    "budgetStartDate": {"type": "string"},
+    "budgetEndDate": {"type": "string"},
+    "budgetEmails": {"type": "array", "minLength": 1, "maxLength": 2},
+    "deployGateway": {"type": "bool", "defaultValue": false},
+    "enableAI": {"type": "bool", "defaultValue": false},
+    "imageDigest": {"type": "string", "defaultValue": "", "maxLength": 71},
+    "modelCapacity": {"type": "int", "minValue": 1, "maxValue": 20},
+    "serviceToken": {"type": "securestring", "minLength": 32},
+    "signingKey": {"type": "securestring", "minLength": 32},
+    "fingerprintKey": {"type": "securestring", "minLength": 32},
+    "releaseKey": {"type": "securestring", "minLength": 32},
+    "releaseApproval": {"type": "securestring", "defaultValue": ""},
+    "releaseSignature": {"type": "securestring", "defaultValue": ""}
+  },
+  "variables": {
+    "location": "swedencentral",
+    "suffix": "[uniqueString(resourceGroup().id, parameters('pilotName'), 'private-pilot-v1')]",
+    "prefix": "[concat('pft-pilot-', parameters('pilotName'))]",
+    "storage": "[concat('pftp', variables('suffix'))]",
+    "registry": "[concat('pftp', variables('suffix'))]",
+    "vault": "[concat('pftp-', variables('suffix'))]",
+    "backend": "[concat(variables('prefix'), '-api')]",
+    "gateway": "[concat(variables('prefix'), '-gateway')]",
+    "backendIdentity": "[concat(variables('prefix'), '-backend-id')]",
+    "gatewayIdentity": "[concat(variables('prefix'), '-gateway-id')]",
+    "backendIdentityId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('backendIdentity'))]",
+    "gatewayIdentityId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('gatewayIdentity'))]",
+    "model": "[concat(variables('prefix'), '-model')]",
+    "environment": "[concat(variables('prefix'), '-environment')]",
+    "tags": {"purpose": "private-two-person-pilot", "activation": "separate-signed-approval-required"},
+    "secrets": [
+      {"name": "service-token", "value": "[parameters('serviceToken')]"},
+      {"name": "signing-key", "value": "[parameters('signingKey')]"},
+      {"name": "fingerprint-key", "value": "[parameters('fingerprintKey')]"},
+      {"name": "release-key", "value": "[parameters('releaseKey')]"},
+      {"name": "release-approval", "value": "[if(empty(parameters('releaseApproval')), 'disabled', parameters('releaseApproval'))]"},
+      {"name": "release-signature", "value": "[if(empty(parameters('releaseSignature')), 'disabled', parameters('releaseSignature'))]"}
+    ],
+    "routes": {"food_text_v1": "pilot-mini", "food_image_v1": "pilot-mini"},
+    "profiles": {"pilot-mini": "gpt-5.4-mini-2026-03-17-dz-v1"},
+    "prices": {"version": "azure-sweden-dz-2026-09-18-v1", "currency": "USD", "deployments": {"pilot-mini": {
+      "model": "gpt-5.4-mini-2026-03-17", "input_per_million": "0.825", "cached_input_per_million": "0.0825", "output_per_million": "4.95"
+    }}}
+  },
+  "resources": [
+    {"type": "Microsoft.ManagedIdentity/userAssignedIdentities", "apiVersion": "2023-01-31", "name": "[variables('backendIdentity')]", "location": "[variables('location')]", "tags": "[variables('tags')]"},
+    {"type": "Microsoft.ManagedIdentity/userAssignedIdentities", "apiVersion": "2023-01-31", "name": "[variables('gatewayIdentity')]", "location": "[variables('location')]", "tags": "[variables('tags')]"},
+    {
+      "type": "Microsoft.Storage/storageAccounts", "apiVersion": "2023-05-01", "name": "[variables('storage')]", "location": "[variables('location')]", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}, "tags": "[variables('tags')]",
+      "properties": {"allowSharedKeyAccess": false, "allowBlobPublicAccess": false, "supportsHttpsTrafficOnly": true, "minimumTlsVersion": "TLS1_2", "publicNetworkAccess": "Enabled",
+        "networkAcls": {"defaultAction": "Allow", "bypass": "None", "ipRules": [], "virtualNetworkRules": []}}
+    },
+    {"type": "Microsoft.Storage/storageAccounts/tableServices", "apiVersion": "2023-05-01", "name": "[concat(variables('storage'), '/default')]", "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts', variables('storage'))]"], "properties": {}},
+    {"type": "Microsoft.Storage/storageAccounts/tableServices/tables", "apiVersion": "2023-05-01", "name": "[concat(variables('storage'), '/default/PilotLedger')]", "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts/tableServices', variables('storage'), 'default')]"], "properties": {}},
+    {"type": "Microsoft.Storage/storageAccounts/blobServices", "apiVersion": "2023-05-01", "name": "[concat(variables('storage'), '/default')]", "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts', variables('storage'))]"], "properties": {}},
+    {"type": "Microsoft.Storage/storageAccounts/blobServices/containers", "apiVersion": "2023-05-01", "name": "[concat(variables('storage'), '/default/deployments')]", "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storage'), 'default')]"], "properties": {"publicAccess": "None"}},
+    {
+      "type": "Microsoft.ContainerRegistry/registries", "apiVersion": "2023-07-01", "name": "[variables('registry')]", "location": "[variables('location')]", "sku": {"name": "Basic"}, "tags": "[variables('tags')]",
+      "properties": {"adminUserEnabled": false, "publicNetworkAccess": "Enabled"}
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults", "apiVersion": "2023-07-01", "name": "[variables('vault')]", "location": "[variables('location')]", "tags": "[variables('tags')]",
+      "properties": {"tenantId": "[parameters('tenantId')]", "sku": {"family": "A", "name": "standard"}, "enableRbacAuthorization": true, "enableSoftDelete": true, "softDeleteRetentionInDays": 7, "enablePurgeProtection": true,
+        "publicNetworkAccess": "Enabled", "networkAcls": {"defaultAction": "Allow", "bypass": "None", "ipRules": [], "virtualNetworkRules": []}}
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets", "apiVersion": "2023-07-01", "name": "[concat(variables('vault'), '/', variables('secrets')[copyIndex()].name)]",
+      "copy": {"name": "pilotSecrets", "count": "[length(variables('secrets'))]"}, "dependsOn": ["[resourceId('Microsoft.KeyVault/vaults', variables('vault'))]"],
+      "properties": {"value": "[variables('secrets')[copyIndex()].value]"}
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts", "apiVersion": "2024-10-01", "name": "[variables('model')]", "location": "[variables('location')]", "kind": "OpenAI", "sku": {"name": "S0"}, "tags": "[variables('tags')]",
+      "properties": {"customSubDomainName": "[variables('model')]", "disableLocalAuth": true, "publicNetworkAccess": "Enabled", "networkAcls": {"defaultAction": "Allow", "bypass": "None", "ipRules": [], "virtualNetworkRules": []}}
+    },
+    {"type": "Microsoft.CognitiveServices/accounts/deployments", "apiVersion": "2024-10-01", "name": "[concat(variables('model'), '/pilot-mini')]", "dependsOn": ["[resourceId('Microsoft.CognitiveServices/accounts', variables('model'))]"],
+      "sku": {"name": "DataZoneStandard", "capacity": "[parameters('modelCapacity')]"}, "properties": {"model": {"format": "OpenAI", "name": "gpt-5.4-mini", "version": "2026-03-17"}, "versionUpgradeOption": "NoAutoUpgrade"}},
+    {
+      "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "[guid(resourceGroup().id, 'pilot-table-gateway')]",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', variables('storage'), 'default', 'PilotLedger')]",
+      "dependsOn": ["[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('gatewayIdentity'))]", "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', variables('storage'), 'default', 'PilotLedger')]"],
+      "properties": {"principalId": "[reference(variables('gatewayIdentityId'), '2023-01-31').principalId]", "principalType": "ServicePrincipal", "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')]"}
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "[guid(resourceGroup().id, 'pilot-model-gateway')]", "scope": "[resourceId('Microsoft.CognitiveServices/accounts', variables('model'))]",
+      "dependsOn": ["[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('gatewayIdentity'))]", "[resourceId('Microsoft.CognitiveServices/accounts', variables('model'))]"],
+      "properties": {"principalId": "[reference(variables('gatewayIdentityId'), '2023-01-31').principalId]", "principalType": "ServicePrincipal", "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]"}
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "[guid(resourceGroup().id, 'pilot-acr-gateway')]", "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('registry'))]",
+      "dependsOn": ["[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('gatewayIdentity'))]", "[resourceId('Microsoft.ContainerRegistry/registries', variables('registry'))]"],
+      "properties": {"principalId": "[reference(variables('gatewayIdentityId'), '2023-01-31').principalId]", "principalType": "ServicePrincipal", "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"}
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "[guid(resourceGroup().id, 'pilot-host-blob')]", "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storage'))]",
+      "dependsOn": ["[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('backendIdentity'))]", "[resourceId('Microsoft.Storage/storageAccounts', variables('storage'))]"],
+      "properties": {"principalId": "[reference(variables('backendIdentityId'), '2023-01-31').principalId]", "principalType": "ServicePrincipal", "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]"}
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "[guid(resourceGroup().id, 'pilot-secret', string(copyIndex()))]",
+      "copy": {"name": "secretRoles", "count": 8},
+      "scope": "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('vault'), variables('secrets')[mod(copyIndex(), 6)].name)]",
+      "dependsOn": ["pilotSecrets", "[variables('gatewayIdentityId')]", "[variables('backendIdentityId')]"],
+      "properties": {"principalId": "[reference(if(less(copyIndex(), 6), variables('gatewayIdentityId'), variables('backendIdentityId')), '2023-01-31').principalId]", "principalType": "ServicePrincipal", "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]"}
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments", "apiVersion": "2024-03-01", "name": "[variables('environment')]", "location": "[variables('location')]", "tags": "[variables('tags')]",
+      "properties": {"workloadProfiles": [{"name": "Consumption", "workloadProfileType": "Consumption"}], "appLogsConfiguration": {"destination": "none"}, "zoneRedundant": false}
+    },
+    {
+      "condition": "[parameters('deployGateway')]", "type": "Microsoft.App/containerApps", "apiVersion": "2024-03-01", "name": "[variables('gateway')]", "location": "[variables('location')]", "tags": "[variables('tags')]",
+      "identity": {"type": "UserAssigned", "userAssignedIdentities": {"[variables('gatewayIdentityId')]": {}}},
+      "dependsOn": ["[resourceId('Microsoft.App/managedEnvironments', variables('environment'))]", "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, 'pilot-acr-gateway'))]", "secretRoles"],
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('environment'))]", "workloadProfileName": "Consumption",
+        "configuration": {"activeRevisionsMode": "Single", "ingress": {"external": true, "allowInsecure": false, "targetPort": 8000, "transport": "http", "traffic": [{"latestRevision": true, "weight": 100}]},
+          "registries": [{"server": "[concat(variables('registry'), '.azurecr.io')]", "identity": "[variables('gatewayIdentityId')]"}],
+          "copy": [{"name": "secrets", "count": 6, "input": {"name": "[variables('secrets')[copyIndex('secrets')].name]", "keyVaultUrl": "[concat('https://', variables('vault'), '.vault.azure.net/secrets/', variables('secrets')[copyIndex('secrets')].name)]", "identity": "[variables('gatewayIdentityId')]"}}]
+        },
+        "template": {"scale": {"minReplicas": 0, "maxReplicas": 1, "rules": [{"name": "http", "http": {"metadata": {"concurrentRequests": "2"}}}]},
+          "containers": [{"name": "gateway", "image": "[concat(variables('registry'), '.azurecr.io/gateway@', parameters('imageDigest'))]", "resources": {"cpu": "[json('0.25')]", "memory": "0.5Gi"},
+            "probes": [{"type": "Liveness", "httpGet": {"path": "/healthz", "port": 8000}, "periodSeconds": 30}],
+            "env": [
+              {"name": "APP_ENV", "value": "production"}, {"name": "AI_PROVIDER", "value": "azure_openai"},
+              {"name": "AI_API_ONLY_ENABLED", "value": "[toLower(string(parameters('enableAI')))]"}, {"name": "AI_PILOT_ENABLED", "value": "true"},
+              {"name": "AI_PROVIDER_TIMEOUT_SECONDS", "value": "90"}, {"name": "AI_PROVIDER_MAX_OUTPUT_TOKENS", "value": "2000"}, {"name": "AI_PROVIDER_MAX_CONCURRENCY", "value": "2"},
+              {"name": "AZURE_OPENAI_ENDPOINT", "value": "[concat('https://', variables('model'), '.openai.azure.com')]"},
+              {"name": "AZURE_OPENAI_MODEL_ROUTES_JSON", "value": "[string(variables('routes'))]"}, {"name": "AZURE_OPENAI_PROFILES_JSON", "value": "[string(variables('profiles'))]"}, {"name": "AZURE_OPENAI_PRICES_JSON", "value": "[string(variables('prices'))]"},
+              {"name": "AI_PILOT_RESOURCE_GROUP", "value": "[resourceGroup().name]"}, {"name": "AI_PILOT_TENANT_ID", "value": "[parameters('tenantId')]"}, {"name": "AI_PILOT_ALLOWLIST_JSON", "value": "[string(parameters('allowlist'))]"},
+              {"name": "AI_PILOT_POLICY_JSON", "value": "[string(parameters('policy'))]"}, {"name": "AI_PILOT_ALL_IN_MONTHLY_EUR", "value": "[string(parameters('allInMonthlyEUR'))]"},
+              {"name": "AI_PILOT_TABLE_ENDPOINT", "value": "[concat('https://', variables('storage'), '.table.core.windows.net')]"}, {"name": "AI_PILOT_TABLE_NAME", "value": "PilotLedger"},
+              {"name": "API_ONLY_IMAGE_DIGEST", "value": "[parameters('imageDigest')]"}, {"name": "AI_PILOT_GATEWAY_CLIENT_ID", "value": "[reference(variables('gatewayIdentityId'), '2023-01-31').clientId]"},
+              {"name": "GATEWAY_WORKLOAD_AUDIENCE", "value": "[parameters('gatewayAudience')]"}, {"name": "GATEWAY_BACKEND_PRINCIPAL_ID", "value": "[reference(variables('backendIdentityId'), '2023-01-31').principalId]"}, {"name": "GATEWAY_BACKEND_CLIENT_ID", "value": "[reference(variables('backendIdentityId'), '2023-01-31').clientId]"},
+              {"name": "GATEWAY_SERVICE_TOKEN", "secretRef": "service-token"}, {"name": "AI_PILOT_SIGNING_KEY", "secretRef": "signing-key"}, {"name": "AI_PILOT_FINGERPRINT_KEY", "secretRef": "fingerprint-key"}, {"name": "AI_PILOT_RELEASE_KEY", "secretRef": "release-key"}, {"name": "AI_PILOT_RELEASE_JSON", "secretRef": "release-approval"}, {"name": "AI_PILOT_RELEASE_SIGNATURE", "secretRef": "release-signature"}
+            ]}]
+        }
+      }
+    },
+    {"type": "Microsoft.Web/serverfarms", "apiVersion": "2024-04-01", "name": "[concat(variables('prefix'), '-plan')]", "location": "[variables('location')]", "kind": "functionapp", "sku": {"tier": "FlexConsumption", "name": "FC1"}, "properties": {"reserved": true}, "tags": "[variables('tags')]"},
+    {
+      "condition": "[parameters('deployGateway')]", "type": "Microsoft.Web/sites", "apiVersion": "2024-04-01", "name": "[variables('backend')]", "location": "[variables('location')]", "kind": "functionapp,linux", "tags": "[variables('tags')]",
+      "identity": {"type": "UserAssigned", "userAssignedIdentities": {"[variables('backendIdentityId')]": {}}},
+      "dependsOn": ["[resourceId('Microsoft.Web/serverfarms', concat(variables('prefix'), '-plan'))]", "[variables('backendIdentityId')]", "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('storage'), 'default', 'deployments')]", "[resourceId('Microsoft.App/containerApps', variables('gateway'))]", "secretRoles"],
+      "properties": {"serverFarmId": "[resourceId('Microsoft.Web/serverfarms', concat(variables('prefix'), '-plan'))]", "httpsOnly": true, "publicNetworkAccess": "Enabled", "keyVaultReferenceIdentity": "[variables('backendIdentityId')]",
+        "functionAppConfig": {"runtime": {"name": "python", "version": "3.13"}, "deployment": {"storage": {"type": "blobContainer", "value": "[concat('https://', variables('storage'), '.blob.core.windows.net/deployments')]", "authentication": {"type": "UserAssignedIdentity", "userAssignedIdentityResourceId": "[variables('backendIdentityId')]"}}}, "scaleAndConcurrency": {"maximumInstanceCount": 1, "instanceMemoryMB": 512, "http": {"perInstanceConcurrency": 2}, "alwaysReady": []}},
+        "siteConfig": {"minTlsVersion": "1.2", "ftpsState": "Disabled", "httpLoggingEnabled": false, "detailedErrorLoggingEnabled": false, "appSettings": [
+          {"name": "APP_ENV", "value": "production"}, {"name": "AI_API_ONLY_ENABLED", "value": "true"}, {"name": "AI_PILOT_ENABLED", "value": "true"}, {"name": "EASY_AUTH_ENABLED", "value": "true"},
+          {"name": "AI_GATEWAY_BASE_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('gateway')), '2024-03-01').configuration.ingress.fqdn)]"}, {"name": "AI_GATEWAY_TIMEOUT_SECONDS", "value": "100"},
+          {"name": "GATEWAY_BACKEND_CLIENT_ID", "value": "[reference(variables('backendIdentityId'), '2023-01-31').clientId]"}, {"name": "GATEWAY_WORKLOAD_AUDIENCE", "value": "[parameters('gatewayAudience')]"},
+          {"name": "AI_PILOT_TENANT_ID", "value": "[parameters('tenantId')]"}, {"name": "AI_PILOT_AUDIENCE", "value": "[parameters('backendAudience')]"}, {"name": "AI_PILOT_ISSUER", "value": "[concat('https://login.microsoftonline.com/', parameters('tenantId'), '/v2.0')]"}, {"name": "AI_PILOT_CLIENT_ID", "value": "[parameters('nativeClientId')]"}, {"name": "AI_PILOT_SCOPE", "value": "FoodAnalysis.Access"}, {"name": "AI_PILOT_ALLOWLIST_JSON", "value": "[string(parameters('allowlist'))]"},
+          {"name": "GATEWAY_SERVICE_TOKEN", "value": "[concat('@Microsoft.KeyVault(SecretUri=https://', variables('vault'), '.vault.azure.net/secrets/service-token/)')]"}, {"name": "AI_PILOT_SIGNING_KEY", "value": "[concat('@Microsoft.KeyVault(SecretUri=https://', variables('vault'), '.vault.azure.net/secrets/signing-key/)')]"},
+          {"name": "AzureWebJobsStorage__accountName", "value": "[variables('storage')]"}, {"name": "AzureWebJobsStorage__credential", "value": "managedidentity"}, {"name": "AzureWebJobsStorage__clientId", "value": "[reference(variables('backendIdentityId'), '2023-01-31').clientId]"}, {"name": "FUNCTIONS_REQUEST_BODY_SIZE_LIMIT", "value": "3211264"},
+          {"name": "AzureFunctionsJobHost__logging__logLevel__default", "value": "Warning"}, {"name": "AzureFunctionsJobHost__logging__logLevel__Host.Results", "value": "None"}
+        ]}
+      }
+    },
+    {
+      "condition": "[parameters('deployGateway')]", "type": "Microsoft.Web/sites/config", "apiVersion": "2024-04-01", "name": "[concat(variables('backend'), '/authsettingsV2')]", "dependsOn": ["[resourceId('Microsoft.Web/sites', variables('backend'))]"],
+      "properties": {"platform": {"enabled": true}, "globalValidation": {"requireAuthentication": true, "unauthenticatedClientAction": "Return401", "excludedPaths": ["/api/health"]},
+        "httpSettings": {"requireHttps": true}, "login": {"tokenStore": {"enabled": false}},
+        "identityProviders": {"azureActiveDirectory": {"enabled": true, "registration": {"clientId": "[parameters('backendAudience')]", "openIdIssuer": "[concat('https://login.microsoftonline.com/', parameters('tenantId'), '/v2.0')]"}, "validation": {"allowedAudiences": ["[parameters('backendAudience')]"], "defaultAuthorizationPolicy": {"allowedApplications": ["[parameters('nativeClientId')]"], "allowedPrincipals": {"identities": ["[parameters('allowlist')[0].oid]", "[parameters('allowlist')[1].oid]"]}}}}}}
+    },
+    {
+      "type": "Microsoft.Consumption/budgets", "apiVersion": "2023-11-01", "name": "[concat(variables('prefix'), '-monthly')]",
+      "properties": {"category": "Cost", "amount": "[parameters('allInMonthlyEUR')]", "timeGrain": "Monthly", "timePeriod": {"startDate": "[parameters('budgetStartDate')]", "endDate": "[parameters('budgetEndDate')]"}, "notifications": {
+        "Actual80": {"enabled": true, "operator": "GreaterThanOrEqualTo", "threshold": 80, "thresholdType": "Actual", "contactEmails": "[parameters('budgetEmails')]"},
+        "Forecast100": {"enabled": true, "operator": "GreaterThanOrEqualTo", "threshold": 100, "thresholdType": "Forecasted", "contactEmails": "[parameters('budgetEmails')]"}
+      }}
+    }
+  ],
+  "outputs": {
+    "apiBaseURL": {"type": "string", "value": "[if(parameters('deployGateway'), concat('https://', reference(resourceId('Microsoft.Web/sites', variables('backend')), '2024-04-01').defaultHostName, '/api'), '')]"},
+    "gatewayBaseURL": {"type": "string", "value": "[if(parameters('deployGateway'), concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('gateway')), '2024-03-01').configuration.ingress.fqdn), '')]"},
+    "tenantId": {"type": "string", "value": "[parameters('tenantId')]"}, "nativeClientId": {"type": "string", "value": "[parameters('nativeClientId')]"}, "backendAudience": {"type": "string", "value": "[parameters('backendAudience')]"}, "gatewayAudience": {"type": "string", "value": "[parameters('gatewayAudience')]"},
+    "backendPrincipalId": {"type": "string", "value": "[reference(variables('backendIdentityId'), '2023-01-31').principalId]"}, "backendClientId": {"type": "string", "value": "[reference(variables('backendIdentityId'), '2023-01-31').clientId]"},
+    "gatewayClientId": {"type": "string", "value": "[reference(variables('gatewayIdentityId'), '2023-01-31').clientId]"},
+    "tableEndpoint": {"type": "string", "value": "[concat('https://', variables('storage'), '.table.core.windows.net')]"}, "tableName": {"type": "string", "value": "PilotLedger"},
+    "registry": {"type": "string", "value": "[concat(variables('registry'), '.azurecr.io')]"}, "resourceGroup": {"type": "string", "value": "[resourceGroup().name]"}
+  }
+}

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from urllib.parse import urlsplit
 
@@ -33,7 +34,8 @@ class AzureTableStore:
                 or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
                 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{2,62}", table_name)):
             raise PilotError()
-        credential = ManagedIdentityCredential()
+        client_id = os.environ.get("AI_PILOT_GATEWAY_CLIENT_ID")
+        credential = ManagedIdentityCredential(**({"client_id": client_id} if client_id else {}))
         client = TableClient(endpoint, table_name, credential=credential, retry_total=0,
                              logging_enable=False, logger=_sdk_logger, tracing_enable=False,
                              connection_timeout=2, read_timeout=3)

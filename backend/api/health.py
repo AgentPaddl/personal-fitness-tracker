@@ -1,10 +1,11 @@
 import json
 import logging
+import os
 
 import azure.functions as func
 import httpx
 
-from config import get_gateway_base_url
+from config import get_gateway_base_url, get_gateway_service_token
 
 bp = func.Blueprint()
 
@@ -33,9 +34,17 @@ def readiness(req: func.HttpRequest) -> func.HttpResponse:
     """
 
     try:
-        response = httpx.get(f"{get_gateway_base_url()}/readyz", timeout=3.0)
+        options = {}
+        if os.environ.get("AI_API_ONLY_ENABLED", "false") != "false":
+            from workload_identity import gateway_access_token
+
+            if os.environ.get("AI_API_ONLY_ENABLED") != "true":
+                raise ValueError()
+            options = {"headers": {"Authorization": "Bearer " + gateway_access_token(),
+                                   "X-Service-Token": get_gateway_service_token() or ""}, "follow_redirects": False}
+        response = httpx.get(f"{get_gateway_base_url()}/readyz", timeout=3.0, **options)
         gateway_ready = response.status_code == 200
-    except httpx.HTTPError:
+    except Exception:
         gateway_ready = False
 
     if not gateway_ready:

@@ -1,0 +1,17 @@
+**
+!requirements-api.txt
+!app/
+!app/*.py
+app/benchmark*.py
+!app/api/
+!app/api/*.py
+!app/schemas/
+!app/schemas/*.py
+!app/use_cases/
+!app/use_cases/*.py
+!app/providers/
+!app/providers/__init__.py
+!app/providers/base.py
+!app/providers/openai_api.py
+!app/providers/pricing.py
+!app/providers/strict_schema.py

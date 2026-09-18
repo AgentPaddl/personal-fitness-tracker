@@ -6,6 +6,20 @@ secret values appear anywhere in this document — only resource names, setting
 
 ## Two-person pilot preparation from 19ee4c4
 
+**Local implementation update from `63c81e2`:** see the
+[API-only pilot package](../infra/pilot/README.md) for exact artifact, identity,
+ARM/bootstrap, iOS build, signed activation, rollback and complete monthly cost
+procedures. These replace the earlier minimal implementation proposal below, not
+its benchmark evidence. No deployment, paid call or production switch has occurred.
+Official prices were rechecked on 2026-09-18: the 600/1,200-call scenarios are
+USD 11.95/18.69 before grants, with USD 4.998 fixed for 30 days (ACR Basic).
+Variant B now uses Azure-managed networking without a customer VNet; public
+endpoints retain strict workload identity, request signatures and scoped RBAC.
+EUR 50 is still unapproved; 1,200 calls exceed the unchanged 600-call policy.
+USD 10 remains only the proposed application model ceiling, not total Azure cost.
+Initial owner approval and fixed pilot end are separate from renewable 24-hour
+technical evidence; no daily manual approval or budget reset is assumed.
+
 **Current decision: GPT-5.4-mini is the pilot candidate; activation is blocked.**
 This local-only preparation supersedes the earlier next-benchmark proposals below,
 not their historical evidence. The [completed screening](benchmark-review-2026-09-18.md)

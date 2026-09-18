@@ -169,6 +169,15 @@ class GatewayClient:
 
     def _post_and_handle(self, payload: dict[str, Any]) -> dict[str, Any]:
         headers = dict(self._headers)
+        if os.environ.get("AI_API_ONLY_ENABLED", "false") != "false":
+            try:
+                if os.environ.get("AI_API_ONLY_ENABLED") != "true" or self._verified_identity is None:
+                    raise ValueError()
+                from workload_identity import gateway_access_token
+
+                headers["Authorization"] = "Bearer " + gateway_access_token()
+            except Exception:
+                raise GatewayClientError("pilot_unavailable", 503) from None
         if self._verified_identity is not None:
             try:
                 secret = os.environ["AI_PILOT_SIGNING_KEY"].encode()

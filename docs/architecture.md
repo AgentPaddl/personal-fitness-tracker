@@ -119,6 +119,15 @@ HTTP body. Both risks need boundary-specific checks before external use.
 
 ### Provider selection
 
+**Local API-only migration package from `63c81e2`:** the separate
+[pilot infrastructure and activation plan](../infra/pilot/README.md) now contains
+the API-only image, exact managed-workload authorization, signed/expiring release
+gate, separate ARM resources/budgets and opt-in iOS configuration. It is not
+deployed or activated. Existing production and its legacy artifact are unchanged.
+No compatible API-only rollback has yet passed live acceptance; rollback is AI
+off with manual entry preserved. Later implementation notes below describe the
+previous state where these items were still unimplemented.
+
 **Current pilot decision from `19ee4c4`: GPT-5.4-mini is the selected candidate.**
 The completed [screening review](benchmark-review-2026-09-18.md) distinguishes
 T2 arithmetic failure, P3 partial coverage, T6 refusal, passed examples and

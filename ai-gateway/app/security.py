@@ -41,6 +41,10 @@ async def require_authenticated_caller(request: Request) -> None:
 
     settings = get_settings()
     from app.pilot import enabled
+    from app.pilot_release import is_api_artifact
+
+    if is_api_artifact() and request.scope.get("api_only_workload_verified") is not True:
+        raise AuthenticationRequiredError()
 
     if not enabled() and settings.app_env == "development" and settings.gateway_dev_auth_bypass:
         return

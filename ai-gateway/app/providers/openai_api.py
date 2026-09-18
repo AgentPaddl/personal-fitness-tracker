@@ -150,8 +150,16 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
         status = "invalid_request"
         try:
             if os.environ.get("APP_ENV", "production") not in {"development", "test"}:
+                from app.config import get_settings
+                from app.pilot_release import is_api_artifact, validate_release
+
                 status = "disabled"
-                raise ServiceNotReadyError()
+                if not is_api_artifact() or not self._entra:
+                    raise ServiceNotReadyError()
+                try:
+                    validate_release(get_settings())
+                except Exception:
+                    raise ServiceNotReadyError() from None
             from app.pilot import consume_permit, enabled
 
             profiles = resolve_profiles(self._profile_bindings, self._routes, self._prices, self._max_output_tokens)

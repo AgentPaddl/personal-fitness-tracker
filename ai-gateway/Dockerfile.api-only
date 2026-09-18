@@ -1,0 +1,17 @@
+ARG PYTHON_BASE_IMAGE=python:3.13-alpine3.24@sha256:1a63a53928ce53d2b0baf08092a703f4840ac5dfbd61fd48802dbf48e08c801e
+FROM ${PYTHON_BASE_IMAGE}
+RUN apk upgrade --no-cache && addgroup -g 1000 gateway && adduser -D -u 1000 -G gateway -s /sbin/nologin gateway
+WORKDIR /app
+COPY requirements-api.txt ./requirements.txt
+RUN pip install --only-binary=:all: --no-cache-dir -r requirements.txt && pip check && pip uninstall --yes pip \
+	&& rm -rf /usr/local/lib/python3.13/ensurepip
+COPY app/__init__.py app/config.py app/concurrency.py app/dependencies.py app/errors.py app/image_validation.py app/main.py app/pilot.py app/pilot_access.py app/pilot_table.py app/request_id.py app/security.py ./app/
+COPY app/api ./app/api
+COPY app/schemas ./app/schemas
+COPY app/use_cases ./app/use_cases
+COPY app/providers/__init__.py app/providers/base.py app/providers/openai_api.py app/providers/pricing.py app/providers/strict_schema.py ./app/providers/
+COPY app/api_runtime.py app/workload_auth.py app/pilot_release.py ./app/
+RUN touch /app/app/.api-only
+USER gateway
+EXPOSE 8000
+CMD ["uvicorn", "app.api_runtime:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--limit-concurrency", "8", "--timeout-keep-alive", "5"]

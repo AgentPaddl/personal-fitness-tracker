@@ -1,0 +1,13 @@
+{
+  "version": "private-pilot-v1",
+  "person": {"minute": 2, "day": 20, "month": 300, "concurrent": 1, "daily_usd": "1", "monthly_usd": "5"},
+  "total": {"minute": 4, "day": 40, "month": 600, "concurrent": 2, "daily_usd": "2", "monthly_usd": "10"},
+  "operation_max_age_seconds": 900,
+  "retention_seconds": 2678400,
+  "max_text_schema_bytes": 65536,
+  "max_image_bytes": 3145728,
+  "max_image_dimension": 1280,
+  "max_output_tokens": 2000,
+  "deployment_verified_until": 0,
+  "benchmark": null
+}

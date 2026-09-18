@@ -63,6 +63,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8D2BD6FE3030CBA3007993A4 /* Build configuration list for PBXNativeTarget "Trainingsplan" */;
 			buildPhases = (
+				FA00000000000000000000E1 /* Validate Pilot Configuration */,
 				8D2BD6ED3030CBA2007993A4 /* Sources */,
 				8D2BD6EE3030CBA2007993A4 /* Frameworks */,
 				8D2BD6EF3030CBA2007993A4 /* Resources */,
@@ -134,6 +135,21 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FA00000000000000000000E1 /* Validate Pilot Configuration */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ("$(SRCROOT)/Config/validate_pilot.py",);
+			name = "Validate Pilot Configuration";
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${PILOT_BUILD:-NO}\" = YES ]; then /usr/bin/python3 \"${SRCROOT}/Config/validate_pilot.py\"; fi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8D2BD6ED3030CBA2007993A4 /* Sources */ = {

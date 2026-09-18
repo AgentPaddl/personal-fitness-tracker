@@ -84,6 +84,15 @@ def get_gateway_service_token() -> str | None:
 def validate_config() -> None:
     """Fail closed at startup on any invalid configuration."""
 
+    if os.environ.get("AI_API_ONLY_ENABLED", "false") != "false":
+        try:
+            from workload_identity import validate_workload_config
+
+            if os.environ.get("AI_API_ONLY_ENABLED") != "true":
+                raise ValueError()
+            validate_workload_config()
+        except Exception:
+            raise ConfigError("Pilot workload configuration is incomplete.") from None
     app_env = get_app_env()
     if app_env not in ALLOWED_APP_ENVS:
         raise ConfigError(f"Unsupported APP_ENV '{app_env}'. Supported values: {sorted(ALLOWED_APP_ENVS)}.")

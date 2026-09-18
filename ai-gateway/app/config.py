@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     ai_provider_max_concurrency: int = Field(default=2, alias="AI_PROVIDER_MAX_CONCURRENCY")
 
     def validate(self) -> None:
+        from app.pilot_release import is_api_artifact, validate_release
+
+        if is_api_artifact():
+            validate_release(self)
         if self.app_env not in ALLOWED_APP_ENVS:
             raise ValueError(
                 f"Unsupported APP_ENV '{self.app_env}'. Supported values: {sorted(ALLOWED_APP_ENVS)}."
@@ -151,10 +155,10 @@ class Settings(BaseSettings):
         if self.ai_provider == "azure_openai":
             from app.providers.openai_api import validate_endpoint
 
-            if self.app_env == "production":
+            if self.app_env == "production" and not is_api_artifact():
                 raise ValueError("AI_PROVIDER=azure_openai is local-only until the production migration is approved.")
             validate_endpoint(self.azure_openai_endpoint)
-            if self.azure_openai_api_key is None or not self.azure_openai_api_key.get_secret_value().strip():
+            if not is_api_artifact() and (self.azure_openai_api_key is None or not self.azure_openai_api_key.get_secret_value().strip()):
                 raise ValueError("AZURE_OPENAI_API_KEY is required for the Azure adapter.")
             routes = self.azure_openai_model_routes()
             if any(purpose not in routes for purpose in (self.food_text_model_purpose, self.food_image_model_purpose)):
