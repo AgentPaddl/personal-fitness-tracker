@@ -1,10 +1,11 @@
-"""Offline continuation proposal. No credentials, resource creation or dispatch."""
+"""Cumulative continuation proposal and explicitly gated execution."""
 
 from dataclasses import asdict
 from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import time
 
 from app.benchmark import Approval, code_hash, load_cases, make_coordinator, sha
 from app.pilot import PilotError, digest
@@ -14,7 +15,123 @@ from app.providers.pricing import GPT_54_MINI
 PRIORITY = ("P1", "L1", "R1", "P2", "L2", "R2", "P3", "P4", "R3", "R4", "P5", "P6", "T6")
 
 
-def continuation_plan(directory):
+def execution_evidence(directory):
+    directory = Path(directory)
+    proposal = continuation_plan(directory)
+    probe = json.loads((directory / "ledger-probe-result.json").read_text())
+    if probe.get("outcome") != "matched" or probe.get("ledger_hash_matches") is not True:
+        raise PilotError()
+    for scenario in ("adopt_claim_race", "lost_reserve_ack", "unknown_settlement"):
+        receipt = json.loads((directory / ("parent-table-" + scenario + "-result.json")).read_text())
+        if receipt.get("passed") is not True or receipt.get("cleaned") is not True:
+            raise PilotError()
+    review = json.loads((directory / "continuation-cost-review.json").read_text())
+    if (review.get("code_hash") != code_hash() or not 0 <= time.time() - review.get("verified_at", 0) < 3600
+            or review.get("parent_approval_hash") != proposal["parent_approval_hash"]
+            or review.get("billing_delay_risk_accepted") is not True or review.get("booked_billing") != "unknown"
+            or review.get("storage_verified") is not True or review.get("model_absent") is not True
+            or review.get("network_verified") is not True or review.get("prices_verified") is not True
+            or Decimal(review["ancillary_projection_eur"]) > Decimal("2.00")
+            or Decimal(review["ancillary_projection_eur"]) < 0
+            or Decimal(review["full_projection_eur"]) != Decimal(proposal["aggregate"]["full_projection_eur"])
+            or Decimal(review["full_projection_eur"]) > Decimal("10.00")):
+        raise PilotError()
+    return proposal
+
+
+async def execute_continuation(args):
+    from app.benchmark import run_one, write_result
+    from app.benchmark_azure import AzureBenchmark
+    from app.benchmark_parent import ParentStore
+    directory = Path(args.evidence)
+    if not args.apply:
+        raise PilotError()
+    if args.command == "continuation-stop":
+        await stop_continuation(directory)
+        return
+    execution_evidence(directory)
+    approval = Approval.model_validate_json((directory / "approval.json").read_text())
+    async with AzureBenchmark(approval) as azure:
+        await azure.attest()
+        base = azure.store()
+        try:
+            parent = ParentStore(base, directory)
+            if args.command == "continuation-adopt":
+                write_result(directory, "continuation-adopt-started.json", {"binding": parent.binding, "retry": False})
+                await parent.adopt()
+                write_result(directory, "continuation-adopt-result.json", {"binding": parent.binding, "status": "completed"})
+            else:
+                provider = azure.provider(parent.control)
+                try:
+                    result = await run_one(parent.state, provider, azure.attest, directory / "continuation-results")
+                    print(json.dumps({key: result[key] for key in ("case_id", "status", "provider_ms", "total_ms", "usage_known", "charged_usd")}))
+                    if result["status"] != "succeeded":
+                        raise PilotError()
+                finally:
+                    await provider.aclose()
+        finally:
+            await base.close()
+
+
+async def stop_continuation(directory):
+    from azure.identity.aio import AzureCliCredential
+    from app.benchmark import write_result
+    from app.benchmark_azure import CheckedCredential, TableRequestBudget, local_guard
+    from app.benchmark_diagnostics import BenchmarkDiagnostics, BenchmarkTableClient, BenchmarkTableStore
+    from app.benchmark_infra import check_group, check_identity, delete_model
+    from app.benchmark_parent import ParentStore
+    from app.pilot_table import _sdk_logger
+    import asyncio
+    import logging
+
+    directory = Path(directory)
+    approval = Approval.model_validate_json((directory / "approval.json").read_text())
+    local_guard()
+    check_identity(approval)
+    check_group(approval)
+    write_result(directory, "continuation-stop-started.json", {"started_at": int(time.time()), "retry": False})
+    for name in ("azure.identity", "azure.identity.aio._internal.decorators", "azure.identity.aio._credentials.azure_cli"):
+        logging.getLogger(name).disabled = True
+    raw = AzureCliCredential(subscription=str(approval.subscription_id))
+    diagnostics = BenchmarkDiagnostics()
+    credential = CheckedCredential(raw, approval, ledger_cleanup=True, diagnostics=diagnostics)
+    closed, snapshot_saved, deleted = False, False, {"deployment_deleted": False, "account_deleted": False}
+    try:
+        async with BenchmarkTableClient(f"https://{approval.storage_name}.table.core.windows.net", "MiniBenchmark",
+                credential=credential, retry_total=0, redirect_max=0, retry_to_secondary=False,
+                logging_enable=False, tracing_enable=False, logger=_sdk_logger,
+                raw_request_hook=TableRequestBudget(approval, cleanup=True), connection_timeout=2, read_timeout=3) as client:
+            base = BenchmarkTableStore(client, partition="benchmark-" + approval.run_id, diagnostics=diagnostics)
+            parent = ParentStore(base, directory, cleanup=True)
+            summary = await parent.close()
+            closed = True
+            records = []
+            async with asyncio.timeout(15):
+                async for entity in client.query_entities("PartitionKey eq @partition",
+                        parameters={"partition": base.partition}, results_per_page=100):
+                    records.append({"key": entity["RowKey"], "data": json.loads(entity["data"])})
+                    if len(records) > 80:
+                        raise PilotError()
+            old = json.loads((directory / "closed-ledger-snapshot.json").read_text())["records"]
+            actual = {record["key"]: record["data"] for record in records}
+            if any(actual.get(record["key"]) != record["data"] for record in old):
+                raise PilotError()
+            write_result(directory, "continuation-closed-snapshot.json", {"summary": summary, "records": records})
+            snapshot_saved = True
+    except Exception:
+        pass
+    finally:
+        await raw.close()
+        deleted = delete_model(approval)
+        receipt = {"closed": closed, "snapshot_saved": snapshot_saved, **deleted,
+                   "finished_at": int(time.time()), "diagnostics": diagnostics.snapshot()}
+        write_result(directory, "continuation-stop-result.json", receipt)
+        print(json.dumps(receipt))
+    if not closed or not snapshot_saved or not all(deleted.values()):
+        raise PilotError()
+
+
+def continuation_plan(directory, *, cleanup=False):
     directory = Path(directory)
     approval = Approval.model_validate_json((directory / "approval.json").read_text())
     if not approval.billing_delay_risk_accepted:
@@ -93,7 +210,7 @@ def continuation_plan(directory):
             or any(line not in {"1", "100", "1000"} for line in lines[1:])):
         raise PilotError()
     request_count, units = len(lines) - 1, sum(map(int, lines[1:]))
-    if request_count >= 2500 or units >= 40000:
+    if request_count >= (3000 if cleanup else 2500) or units >= (50000 if cleanup else 40000):
         raise PilotError()
     reserve = GPT_54_MINI.reserve_usd(2000)
     unknown = reserve

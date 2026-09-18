@@ -10,11 +10,15 @@ from uuid import uuid4
 
 import pytest
 
-from app.benchmark import Approval, RunState, load_cases, make_coordinator
-from app.benchmark_azure import AzureBenchmark
+from app.benchmark import Approval, RunState, load_cases, make_coordinator, write_result
+from app.benchmark_azure import AzureBenchmark, CheckedCredential, TableRequestBudget
+from app.benchmark_diagnostics import BenchmarkDiagnostics, BenchmarkTableClient, BenchmarkTableStore
+from app.benchmark_parent import PARENT_KEY, ParentStore, RESERVE
 from app.pilot import Conflict, Coordinator, PilotError, digest
+from app.pilot_table import _sdk_logger
 from app.providers.base import GenerationMetadata, TokenUsage
 from app.providers.pricing import GPT_54_MINI
+from tests.test_benchmark import closed_benchmark_evidence
 
 
 pytestmark = pytest.mark.skipif(os.environ.get("RUN_BENCHMARK_TABLE_TESTS") != "1",
@@ -113,4 +117,103 @@ def test_real_benchmark_table(scenario, monkeypatch):
                     await second.client.delete_entity(partition, entity["RowKey"])
                 await first.close()
                 await second.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("scenario", ["adopt_claim_race", "lost_reserve_ack", "unknown_settlement"])
+def test_real_parent_cas(scenario, closed_benchmark_evidence, monkeypatch):
+    from azure.core import MatchConditions
+    from azure.identity.aio import AzureCliCredential
+    import json
+    import logging
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Parent integration must never construct a model provider")
+
+    monkeypatch.setattr(AzureBenchmark, "provider", forbidden)
+    for name in ("azure.identity", "azure.identity.aio._internal.decorators", "azure.identity.aio._credentials.azure_cli"):
+        logging.getLogger(name).disabled = True
+
+    async def run():
+        config = Approval.model_validate_json(Path(os.environ["BENCHMARK_APPROVAL_FILE"]).read_text())
+        evidence = Path(os.environ["BENCHMARK_APPROVAL_FILE"]).parent
+        partition = "test-parent-" + uuid4().hex
+        write_result(evidence, "parent-table-" + scenario + "-started.json", {"partition": partition, "scenario": scenario})
+        raw = AzureCliCredential(subscription=str(config.subscription_id))
+        diagnostics = BenchmarkDiagnostics()
+        credential = CheckedCredential(raw, config, ledger_cleanup=True, diagnostics=diagnostics)
+        options = dict(credential=credential, retry_total=0, redirect_max=0, retry_to_secondary=False,
+                       logging_enable=False, tracing_enable=False, logger=_sdk_logger,
+                       raw_request_hook=TableRequestBudget(config), connection_timeout=2, read_timeout=3)
+        passed, cleaned = False, False
+        try:
+            async with BenchmarkTableClient(f"https://{config.storage_name}.table.core.windows.net", "MiniBenchmark", **options) as client:
+                async with BenchmarkTableClient(f"https://{config.storage_name}.table.core.windows.net", "MiniBenchmark", **options) as another_client:
+                    first = BenchmarkTableStore(client, partition=partition, diagnostics=diagnostics)
+                    second = BenchmarkTableStore(another_client, partition=partition, diagnostics=diagnostics)
+                    records = json.loads((closed_benchmark_evidence / "closed-ledger-snapshot.json").read_text())["records"]
+                    try:
+                        await first.commit([(record["key"], record["data"], None) for record in records])
+                        owner, competitor = ParentStore(first, closed_benchmark_evidence), ParentStore(second, closed_benchmark_evidence)
+                        if scenario == "adopt_claim_race":
+                            outcomes = await asyncio.gather(owner.adopt(), competitor.adopt(), return_exceptions=True)
+                            assert sum(outcome is None for outcome in outcomes) == 1
+                            assert sum(isinstance(outcome, Conflict) for outcome in outcomes) == 1
+                        else:
+                            await owner.adopt()
+                        instant = time.time() + 61
+                        monkeypatch.setattr(time, "time", lambda: instant)
+                        owner.control.clock = competitor.control.clock = lambda: instant
+                        if scenario == "adopt_claim_race":
+                            outcomes = await asyncio.gather(owner.state.claim(), competitor.state.claim(), return_exceptions=True)
+                            assert sum(isinstance(outcome, tuple) for outcome in outcomes) == 1
+                            assert sum(isinstance(outcome, (Conflict, PilotError)) for outcome in outcomes) == 1
+                        else:
+                            _, request, operation = await owner.state.claim()
+                            if scenario == "lost_reserve_ack":
+                                commit = first.commit
+
+                                async def lost_ack(changes):
+                                    await commit(changes)
+                                    raise PilotError()
+
+                                monkeypatch.setattr(first, "commit", lost_ack)
+                                with pytest.raises(PilotError):
+                                    await owner.control.reserve(owner.approval.identity, operation,
+                                        digest(owner.control.secret, "request", asdict(request)), owner.control.bound(request),
+                                        owner.control.admission(request))
+                                monkeypatch.setattr(first, "commit", commit)
+                            else:
+                                key = await owner.control.reserve(owner.approval.identity, operation,
+                                    digest(owner.control.secret, "request", asdict(request)), owner.control.bound(request),
+                                    owner.control.admission(request))
+                                await owner.control.mark_dispatched(key)
+                                await owner.control.settle(key, "unknown", None)
+                        with pytest.raises(PilotError):
+                            await ParentStore(second, closed_benchmark_evidence).state.claim()
+                        parent, _ = await second.read(PARENT_KEY)
+                        assert parent["slots"] == 6 and parent["technical_reserved"] == 6 * RESERVE
+                        assert parent["unknown_reserve"] == 2 * RESERVE
+                        for record in records:
+                            assert (await second.read(record["key"]))[0] == record["data"]
+                        passed = True
+                    finally:
+                        entities = []
+                        async with asyncio.timeout(15):
+                            async for entity in another_client.query_entities(
+                                    "PartitionKey eq @partition", parameters={"partition": partition}, results_per_page=100):
+                                entities.append(entity)
+                                if len(entities) > 60:
+                                    raise PilotError()
+                            if entities:
+                                await another_client.submit_transaction([
+                                    ("delete", {"PartitionKey": partition, "RowKey": entity["RowKey"]},
+                                     {"etag": entity.metadata["etag"], "match_condition": MatchConditions.IfNotModified})
+                                    for entity in entities])
+                            cleaned = True
+        finally:
+            await raw.close()
+            write_result(evidence, "parent-table-" + scenario + "-result.json", {
+                "partition": partition, "scenario": scenario, "passed": passed, "cleaned": cleaned,
+                "diagnostics": diagnostics.snapshot()})
     asyncio.run(run())

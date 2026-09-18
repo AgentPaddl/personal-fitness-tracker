@@ -311,6 +311,10 @@ async def run_one(state, provider, attestation, output_dir):
 
 async def execute(args):
     manifest, cases = load_cases()
+    if args.command in {"continuation-adopt", "continuation-next", "continuation-stop"}:
+        from app.benchmark_continuation import execute_continuation
+        await execute_continuation(args)
+        return
     if args.command == "continuation-plan":
         from app.benchmark_continuation import continuation_plan
         plan = continuation_plan(args.evidence)
@@ -365,6 +369,10 @@ def main():
     continuation = commands.add_parser("continuation-plan")
     continuation.add_argument("--evidence", required=True)
     continuation.add_argument("--output", required=True)
+    for name in ("continuation-adopt", "continuation-next", "continuation-stop"):
+        command = commands.add_parser(name)
+        command.add_argument("--evidence", required=True)
+        command.add_argument("--apply", action="store_true")
     review = commands.add_parser("review")
     review.add_argument("--result", required=True)
     review.add_argument("--usable", choices=("yes", "no"), required=True)

@@ -23,6 +23,66 @@ TEMPLATE = ROOT.parent / "infra/benchmark/main.json"
 RETENTION = 2678400
 
 
+def restore_template(approval):
+    template = json.loads(TEMPLATE.read_text())["resources"][1]["properties"]["template"]
+    template["resources"] = [resource for resource in template["resources"] if (
+        resource["type"].startswith("Microsoft.CognitiveServices/accounts")
+        or resource["type"] == "Microsoft.Authorization/roleAssignments"
+        and "CognitiveServices/accounts" in resource.get("scope", ""))]
+    if len(template["resources"]) != 3:
+        raise PilotError()
+    template["resources"][0]["properties"]["restore"] = True
+    parameters = {"accountName": approval.account_name, "storageName": approval.storage_name,
+                  "operatorId": str(approval.operator_id), "egressIPv4": approval.egress_ipv4,
+                  "capacity": approval.capacity, "tags": {
+                      "purpose": "pft-public-benchmark", "benchmarkRun": approval.run_id,
+                      "manifestSha256": MANIFEST_HASH, "expiresAt": str(approval.expires_at)}}
+    return template, {"parameters": {key: {"value": value} for key, value in parameters.items()}}
+
+
+def restore_model(approval, directory):
+    from app.benchmark_continuation import execution_evidence
+    execution_evidence(directory)
+    approval.check_window()
+    check_identity(approval)
+    check_group(approval)
+    template, parameters = restore_template(approval)
+    write_result(directory, "model-restore-started.json", {"approval_hash": sha(approval.model_dump(mode="json")),
+                 "template_hash": sha(template), "started_at": int(time.time()), "retry": False})
+    try:
+        with tempfile.TemporaryDirectory(prefix="pft-benchmark-restore-") as temporary:
+            template_file, parameters_file = Path(temporary) / "template.json", Path(temporary) / "parameters.json"
+            template_file.write_bytes(canonical(template))
+            parameters_file.write_bytes(canonical(parameters))
+            template_file.chmod(0o600)
+            parameters_file.chmod(0o600)
+            az("deployment", "group", "create", "--subscription", str(approval.subscription_id),
+               "--resource-group", approval.resource_group, "--name", "pft-bench-" + approval.run_id,
+               "--template-file", str(template_file), "--parameters", "@" + str(parameters_file))
+        write_result(directory, "model-restore-result.json", {"status": "completed", "finished_at": int(time.time())})
+    except BaseException:
+        write_result(directory, "model-restore-result.json", {"status": "unknown", "finished_at": int(time.time())})
+        raise
+
+
+def delete_model(approval):
+    deleted = {"deployment_deleted": False, "account_deleted": False}
+    for kind in ("deployment", "account"):
+        try:
+            arguments = ["cognitiveservices", "account"]
+            if kind == "deployment":
+                arguments += ["deployment"]
+            arguments += ["delete", "--subscription", str(approval.subscription_id),
+                          "--resource-group", approval.resource_group, "--name", approval.account_name]
+            if kind == "deployment":
+                arguments += ["--deployment-name", "mini-bench"]
+            az(*arguments)
+            deleted[kind + "_deleted"] = True
+        except Exception:
+            pass
+    return deleted
+
+
 def plan(approval):
     parameters = {
         "runId": approval.run_id, "accountName": approval.account_name, "storageName": approval.storage_name,
@@ -131,11 +191,12 @@ def validate_archive(run, ledger, records):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "prepare-control", "provision", "stop", "destroy"))
+    parser.add_argument("command", choices=("plan", "prepare-control", "provision", "restore", "stop", "destroy"))
     parser.add_argument("--approval", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm")
     parser.add_argument("--archive")
+    parser.add_argument("--evidence")
     args = parser.parse_args()
     try:
         approval = Approval.model_validate_json(Path(args.approval).read_text())
@@ -150,6 +211,12 @@ def main():
             approval.check_window()
             TableRequestBudget(approval).initialize()
             print("Local Table counter initialized once; no cloud requests made.")
+            return
+        if args.command == "restore":
+            if not args.evidence or Path(args.approval).resolve() != (Path(args.evidence) / "approval.json").resolve():
+                raise PilotError()
+            restore_model(approval, args.evidence)
+            print("Isolated model restore completed; storage and ledger were not provisioned.")
             return
         check_identity(approval)
         if args.command == "provision":

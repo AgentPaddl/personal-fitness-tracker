@@ -158,6 +158,105 @@ def test_benchmark_table_preserves_safe_auth_diagnostic(caplog):
     assert "private-token-and-resource" not in caplog.text
 
 
+@pytest.mark.parametrize("outcome", ["matched", "mismatch", "missing", "failed", "cancelled"])
+def test_ledger_probe_is_once_even_after_failure(tmp_path, outcome):
+    from app.benchmark import sha
+    from app.benchmark_diagnostics import BenchmarkDiagnosticError, BenchmarkDiagnostics
+    from app.benchmark_probe import read_once
+
+    class Store:
+        calls = 0
+        diagnostics = BenchmarkDiagnostics()
+
+        async def read(self, key):
+            self.calls += 1
+            assert key == "ledger"
+            if outcome == "failed":
+                error = BenchmarkDiagnosticError("credential_acquisition")
+                self.diagnostics.record("credential", "storage", error)
+                raise error
+            if outcome == "cancelled":
+                raise asyncio.CancelledError()
+            return (None if outcome == "missing" else {"closed": outcome == "matched"}), "etag"
+
+    async def run():
+        store = Store()
+        directory = tmp_path / "probe"
+        if outcome == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await read_once(store, directory, sha({"closed": True}), "binding")
+            assert not (directory / "ledger-probe-result.json").exists()
+        else:
+            result = await read_once(store, directory, sha({"closed": True}), "binding")
+            assert result["outcome"] == outcome
+            assert result["ledger_hash_matches"] is (outcome == "matched")
+            assert json.loads((directory / "ledger-probe-result.json").read_text()) == result
+        with pytest.raises(FileExistsError):
+            await read_once(store, directory, sha({"closed": True}), "binding")
+        assert store.calls == 1
+    asyncio.run(run())
+
+
+def test_ledger_probe_uses_existing_counter_and_storage_only(closed_benchmark_evidence, monkeypatch):
+    from app import benchmark_probe
+
+    directory = closed_benchmark_evidence
+    control_dir = directory / "control"
+    control_dir.chmod(0o700)
+    counter_file = control_dir / "offline-table-requests.log"
+    counter_file.chmod(0o600)
+    original_counter = counter_file.read_bytes()
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    monkeypatch.setenv("AZURE_CONFIG_DIR", "/unused-offline")
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(control_dir))
+    observed = {}
+
+    class Credential:
+        def __init__(self, **kwargs):
+            observed["credential"] = kwargs
+
+        async def close(self):
+            observed["closed"] = True
+
+    class Client:
+        def __init__(self, endpoint, table, **kwargs):
+            observed.update(endpoint=endpoint, table=table, options=kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    async def read(store, key):
+        observed.setdefault("reads", []).append(key)
+        observed["partition"] = store.partition
+        records = json.loads((directory / "closed-ledger-snapshot.json").read_text())["records"]
+        return next(record["data"] for record in records if record["key"] == key), "etag"
+
+    monkeypatch.setattr(benchmark_probe, "AzureCliCredential", Credential)
+    monkeypatch.setattr(benchmark_probe, "BenchmarkTableClient", Client)
+    monkeypatch.setattr(benchmark_probe.BenchmarkTableStore, "read", read)
+    result = asyncio.run(benchmark_probe.execute(directory))
+    assert result["outcome"] == "matched"
+    assert observed["reads"] == ["ledger"] and observed["closed"] is True
+    assert observed["partition"] == "benchmark-offline"
+    assert observed["endpoint"] == "https://pftbenchoffline.table.core.windows.net"
+    assert observed["table"] == "MiniBenchmark"
+    assert observed["credential"] == {"subscription": str(approval().subscription_id)}
+    options = observed["options"]
+    assert options["credential"].ledger_cleanup is True
+    assert options["retry_total"] == options["redirect_max"] == 0
+    assert options["retry_to_secondary"] is options["logging_enable"] is options["tracing_enable"] is False
+    counter = options["raw_request_hook"]
+    assert counter.filename == counter_file and (counter.max_requests, counter.max_units) == (2500, 40000)
+    assert counter_file.read_bytes() == original_counter
+    with pytest.raises(PilotError):
+        asyncio.run(benchmark_probe.execute(directory))
+    assert observed["reads"] == ["ledger"]
+
+
 @pytest.mark.parametrize("failure,category,attempts", [
     ("read403", "http_auth", 0), ("read429", "http_throttled", 0),
     ("read_timeout", "timeout", 0), ("read_payload", "table_local_error", 0),
@@ -478,6 +577,260 @@ def closed_benchmark_evidence(monkeypatch, tmp_path):
     (directory / "analysis-baseline.json").write_text(json.dumps({
         "artifact_sha256": hashes, "binding": binding, "code_hash": benchmark.code_hash()}))
     return directory
+
+
+@pytest.mark.parametrize("scenario", ["success", "claim_race", "adopt_race", "lost_claim_ack", "unknown",
+                                      "lost_reserved_ack", "lost_dispatched_ack", "lost_settled_ack", "exhausted"])
+def test_parent_cas_preserves_closed_run_and_allowance(closed_benchmark_evidence, scenario, monkeypatch):
+    from copy import deepcopy
+    from app.benchmark_parent import PARENT_KEY, ParentStore, RESERVE
+    from app.providers.base import GenerationMetadata, StructuredGenerationResult, TokenUsage
+    from tests.test_openai_api import _food_data
+
+    directory = closed_benchmark_evidence
+
+    class Provider:
+        calls = 0
+
+        async def generate(self, request):
+            self.calls += 1
+            if scenario == "unknown":
+                raise TimeoutError()
+            return StructuredGenerationResult(_food_data(), GenerationMetadata(
+                "azure_openai", "mini-bench", GPT_54_MINI.price.model, None, 1, "success", TokenUsage(100, 20, 0, 0),
+                price_version=GPT_54_MINI.price_version, profile_id=GPT_54_MINI.identifier, service_tier="default"))
+
+    async def run():
+        base = MemoryCAS()
+        records = json.loads((directory / "closed-ledger-snapshot.json").read_text())["records"]
+        await base.commit([(record["key"], record["data"], None) for record in records])
+        originals = {record["key"]: deepcopy(record["data"]) for record in records}
+        first, second = ParentStore(base, directory), ParentStore(base, directory)
+        if scenario == "adopt_race":
+            outcomes = await asyncio.gather(first.adopt(), second.adopt(), return_exceptions=True)
+            assert sum(outcome is None for outcome in outcomes) == 1
+            assert sum(isinstance(outcome, Conflict) for outcome in outcomes) == 1
+        else:
+            await first.adopt()
+        with pytest.raises(Conflict):
+            await second.adopt()
+        clock = [time.time() + 61]
+        monkeypatch.setattr(time, "time", lambda: clock[0])
+        first.control.clock = second.control.clock = lambda: clock[0]
+        provider = Provider()
+        if scenario in {"lost_reserved_ack", "lost_dispatched_ack", "lost_settled_ack"}:
+            commit = base.commit
+            failed_state = scenario.removeprefix("lost_").removesuffix("_ack")
+
+            async def lost_operation_ack(changes):
+                await commit(changes)
+                if any(key == PARENT_KEY and data["state"] == failed_state for key, data, _ in changes):
+                    raise PilotError()
+
+            monkeypatch.setattr(base, "commit", lost_operation_ack)
+        if scenario == "claim_race":
+            outcomes = await asyncio.gather(first.state.claim(), second.state.claim(), return_exceptions=True)
+            assert sum(isinstance(outcome, tuple) for outcome in outcomes) == 1
+        elif scenario == "lost_claim_ack":
+            commit = base.commit
+
+            async def lost_ack(changes):
+                await commit(changes)
+                raise PilotError()
+
+            monkeypatch.setattr(base, "commit", lost_ack)
+            with pytest.raises(PilotError):
+                await first.state.claim()
+            monkeypatch.setattr(base, "commit", commit)
+        elif scenario != "adopt_race":
+            for _ in range(13 if scenario == "exhausted" else 1):
+                first = ParentStore(base, directory)
+                first.control.clock = lambda: clock[0]
+                result = await run_one(first.state, provider, {}, directory / "continuation-results")
+                assert result["status"] == ("succeeded" if scenario in {"success", "exhausted"} else "halted")
+                clock[0] += 61
+            assert provider.calls == (0 if scenario in {"lost_reserved_ack", "lost_dispatched_ack"}
+                                      else 13 if scenario == "exhausted" else 1)
+        parent, _ = await base.read(PARENT_KEY)
+        assert parent["slots"] == (5 if scenario == "adopt_race" else 18 if scenario == "exhausted" else 6)
+        assert parent["technical_reserved"] == parent["slots"] * RESERVE
+        assert parent["unknown_reserve"] == (RESERVE if scenario in {"success", "adopt_race", "exhausted", "lost_settled_ack"}
+                                             else 2 * RESERVE)
+        if scenario not in {"success", "adopt_race"}:
+            with pytest.raises(PilotError):
+                await ParentStore(base, directory).state.claim()
+        if scenario == "exhausted":
+            clock[0] += 40 * 86400
+            assert (await second.parent())[0]["technical_reserved"] == 4217400000
+            with pytest.raises(PilotError):
+                await second.state.claim()
+        for key, original in originals.items():
+            assert (await base.read(key))[0] == original
+        closed = await first.close()
+        assert closed["state"] == "closed" and closed["slots"] == parent["slots"]
+        with pytest.raises(PilotError):
+            await second.parent()
+    asyncio.run(run())
+
+
+def test_parent_claim_counter_lock_stops_before_provider(closed_benchmark_evidence, monkeypatch):
+    from app.benchmark_diagnostics import BenchmarkDiagnosticError
+    from app.benchmark_parent import PARENT_KEY, ParentStore, RESERVE
+
+    class Provider:
+        calls = 0
+
+        async def generate(self, request):
+            self.calls += 1
+            raise AssertionError("No provider allowed after rejected claim")
+
+    async def run():
+        directory = closed_benchmark_evidence
+        base = MemoryCAS()
+        records = json.loads((directory / "closed-ledger-snapshot.json").read_text())["records"]
+        await base.commit([(record["key"], record["data"], None) for record in records])
+        parent = ParentStore(base, directory)
+        await parent.adopt()
+        instant = time.time() + 61
+        monkeypatch.setattr(time, "time", lambda: instant)
+        parent.control.clock = lambda: instant
+        writes = []
+
+        async def locked(changes):
+            writes.append(changes)
+            raise BenchmarkDiagnosticError("counter_locked")
+
+        monkeypatch.setattr(base, "commit", locked)
+        provider = Provider()
+        with pytest.raises(PilotError):
+            await run_one(parent.state, provider, {}, directory / "continuation-results")
+        assert len(writes) == 1 and provider.calls == 0
+        assert not (directory / "continuation-results/P1.json").exists()
+        assert (await parent.read("case-P1"))[0]["state"] == "ready"
+        summary, _ = await base.read(PARENT_KEY)
+        assert summary["slots"] == 5 and summary["unknown_reserve"] == RESERVE
+        assert summary["inflight"] is None
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mutation", ["adoption_toctou", "request", "new_operation", "new_binding", "reinitialize"])
+def test_parent_cas_rejects_changed_authority(closed_benchmark_evidence, mutation, monkeypatch):
+    from dataclasses import asdict
+    from app.benchmark_parent import PARENT_KEY, ParentStore
+    from app.pilot import digest
+    from tests.test_pilot import operation
+
+    directory = closed_benchmark_evidence
+
+    async def run():
+        base = MemoryCAS()
+        records = json.loads((directory / "closed-ledger-snapshot.json").read_text())["records"]
+        await base.commit([(record["key"], record["data"], None) for record in records])
+        store = ParentStore(base, directory)
+        if mutation == "adoption_toctou":
+            commit = base.commit
+
+            async def concurrent_write(changes):
+                ledger, etag = await base.read("ledger")
+                ledger["last_time"] += 1
+                await commit([("ledger", ledger, etag)])
+                await commit(changes)
+
+            monkeypatch.setattr(base, "commit", concurrent_write)
+            with pytest.raises(Conflict):
+                await store.adopt()
+            assert (await base.read(PARENT_KEY))[0] is None
+            return
+        await store.adopt()
+        instant = time.time() + 61
+        monkeypatch.setattr(time, "time", lambda: instant)
+        store.control.clock = lambda: instant
+        if mutation == "reinitialize":
+            with pytest.raises(PilotError):
+                await store.state.initialize()
+        elif mutation == "new_binding":
+            store.binding = "different-child-does-not-mint-credit"
+            with pytest.raises(PilotError):
+                await store.state.claim()
+        else:
+            _, request, identifier = await store.state.claim()
+            fingerprint = digest(store.control.secret, "request", asdict(request))
+            with pytest.raises(PilotError):
+                await store.control.reserve(store.approval.identity,
+                    operation(instant, 99) if mutation == "new_operation" else identifier,
+                    "altered" if mutation == "request" else fingerprint,
+                    store.control.bound(request), store.control.admission(request))
+            assert (await store.read("ledger"))[0]["benchmark"]["attempts"] == 5
+        parent, _ = await base.read(PARENT_KEY)
+        assert parent["slots"] == (6 if mutation in {"request", "new_operation"} else 5)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("fail_deployment", [False, True])
+def test_model_cleanup_attempts_account_even_after_deployment_failure(monkeypatch, fail_deployment):
+    from app import benchmark_infra
+    calls = []
+
+    def az(*arguments):
+        calls.append(arguments)
+        if fail_deployment and "deployment" in arguments:
+            raise PilotError()
+
+    monkeypatch.setattr(benchmark_infra, "az", az)
+    result = benchmark_infra.delete_model(approval())
+    assert result == {"deployment_deleted": not fail_deployment, "account_deleted": True}
+    assert len(calls) == 2 and "deployment" in calls[0] and "deployment" not in calls[1]
+    assert all("delete" in call and approval().account_name in call for call in calls)
+
+
+def test_cleanup_can_use_reserved_table_headroom(closed_benchmark_evidence):
+    from app.benchmark_continuation import continuation_plan
+    directory = closed_benchmark_evidence
+    with (directory / "control/offline-table-requests.log").open("a") as output:
+        output.write("1000\n" * 40)
+    with pytest.raises(PilotError):
+        continuation_plan(directory)
+    assert continuation_plan(directory, cleanup=True)["table_counter"]["units"] == 40101
+
+
+def test_restore_template_contains_only_isolated_model_resources():
+    from app.benchmark_infra import restore_template
+    template, parameters = restore_template(approval())
+    resources = template["resources"]
+    assert [resource["type"] for resource in resources] == ["Microsoft.CognitiveServices/accounts",
+        "Microsoft.CognitiveServices/accounts/deployments", "Microsoft.Authorization/roleAssignments"]
+    assert resources[0]["properties"]["restore"] is True
+    assert resources[0]["properties"]["disableLocalAuth"] is True
+    assert resources[0]["properties"]["networkAcls"]["defaultAction"] == "Deny"
+    assert resources[1]["sku"]["name"] == "DataZoneStandard"
+    assert resources[1]["properties"]["model"]["version"] == "2026-03-17"
+    assert "CognitiveServices/accounts" in resources[2]["scope"]
+    assert parameters["parameters"]["egressIPv4"]["value"] == approval().egress_ipv4
+
+
+@pytest.mark.parametrize("mutation", ["none", "code", "budget", "ancillary", "network", "probe", "test", "stale"])
+def test_continuation_execution_requires_verified_evidence(closed_benchmark_evidence, mutation):
+    from app.benchmark import code_hash
+    from app.benchmark_continuation import continuation_plan, execution_evidence
+    directory = closed_benchmark_evidence
+    proposal = continuation_plan(directory)
+    (directory / "ledger-probe-result.json").write_text(json.dumps({"outcome": "failed" if mutation == "probe" else "matched",
+                                                                  "ledger_hash_matches": True}))
+    for scenario in ("adopt_claim_race", "lost_reserve_ack", "unknown_settlement"):
+        (directory / ("parent-table-" + scenario + "-result.json")).write_text(json.dumps({"passed": mutation != "test", "cleaned": True}))
+    review = {"code_hash": "changed" if mutation == "code" else code_hash(),
+              "verified_at": time.time() - (3601 if mutation == "stale" else 0),
+              "parent_approval_hash": proposal["parent_approval_hash"], "billing_delay_risk_accepted": True,
+              "booked_billing": "unknown", "storage_verified": True, "model_absent": True,
+              "network_verified": mutation != "network", "prices_verified": True,
+              "ancillary_projection_eur": "2.01" if mutation == "ancillary" else "1.89486",
+              "full_projection_eur": "10.01" if mutation == "budget" else proposal["aggregate"]["full_projection_eur"]}
+    (directory / "continuation-cost-review.json").write_text(json.dumps(review))
+    if mutation == "none":
+        assert execution_evidence(directory)["aggregate"]["max_additional_cases"] == 13
+    else:
+        with pytest.raises(PilotError):
+            execution_evidence(directory)
 
 
 @pytest.mark.parametrize("mutation", ["none", "result", "counter_truncated", "counter_exhausted", "attempt_reset", "t2_reclassified"])

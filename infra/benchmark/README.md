@@ -96,6 +96,12 @@ aggregate checkpoint carrying all earlier attempts, reserves and ancillary costs
 
 ## Completed screening: continuation preparation
 
+The following preparation history is superseded operationally by the closed
+[authorized continuation outcome](../../docs/benchmark-review-2026-09-18.md#authorized-continuation-outcome).
+Five new calls succeeded; R2 stopped on a local `counter_locked` claim, without
+retry. Both runs are closed and the model resource has been deleted. Commands
+below describe the reviewed mechanisms, not permission to resume this run.
+
 The [reassessed review](../../docs/benchmark-review-2026-09-18.md) separates direct
 historical observations from code inference and reproduction. The earlier local
 T5 reserve release is superseded for planning: retain USD 0.2343 and five consumed
@@ -134,7 +140,14 @@ The proposal explicitly has `execution_authorized=false`. It carries:
 
 ### Smallest later Table diagnostic
 
-Not authorized or performed by this offline review. After specific permission:
+The separately authorized one-shot read has now completed successfully. Its
+exclusive start marker prevents repeating it. Generic command:
+
+```sh
+.venv/bin/python -B -m app.benchmark_probe --evidence "$EVIDENCE" --apply
+```
+
+Implemented safeguards:
 
 1. Use the original approval, retained Storage account/Table, same restricted IP,
   tenant/user and original counter. No model account, deployment or new role is
@@ -160,19 +173,25 @@ Not authorized or performed by this offline review. After specific permission:
   approved, bounded create/read/ETag-conflict/delete test in a disposable `test-`
   partition follow. Never experiment on the closed benchmark records.
 
-### Required parent ledger before live continuation
+### Implemented cumulative parent ledger
 
-This is a concrete implementation contract, not an already enabled live runner.
-`init`/`next` cannot consume the proposal. Do not use fresh approvals/run IDs with
-the old CLI to bypass that missing enforcement. Implement and review this gate
-before requesting model/resource execution:
+`ParentStore` now wraps the existing Coordinator store without changing production
+admission. `init`/`next` are not continuation commands. The reviewed implementation
+uses `continuation-adopt`, `continuation-next` and `continuation-stop`, each with
+`--evidence "$EVIDENCE" --apply`. There is exactly one child namespace, not a
+caller-selected run ID or partition. Original approval/window remain binding;
+this implementation does not authorize execution after that window expires.
 
-1. Create-once parent authorization record in the retained Table, in a dedicated
-  single partition shared by all continuation control records. Bind the original
+1. Create-once parent authorization record in the retained Table, in the original
+  partition shared by old and continuation control records. Bind the original
   approval hash, closed snapshot/result hashes, reviewed evidence, plan digest,
   allowed thirteen case/request hashes and exactly one approved child allocation.
   Seed consumed slots=5, technical allocation=1.1715 USD, known cost and full T5
-  allowance. Closed parent-run rows are never reopened or modified.
+  allowance. Adoption reads and compares all original rows, then submits their
+  identical payloads with original ETags together with all new parent/child rows
+  in one transaction. Their service ETags change, but closed payloads/counters
+  remain identical; the transaction rejects concurrent changes or second adoption.
+  No cross-partition atomicity is assumed.
 2. In one ETag/CAS transaction, reserve the next unique case plus increment parent
   slots/lifetime allocation and set parent in-flight. Child run IDs are metadata,
   not counter partitions. An unlisted child/request, second initialization, stale
@@ -186,9 +205,11 @@ before requesting model/resource execution:
   takeover after unknown state. Settlement can replace financial allowance with
   known usage, never reduce slot count or lifetime technical allocation.
 4. Reconcile current resources and billing/FX/tax/retention before allocation.
-  Existing storage and its eventual cleanup belong to this same budget; the model
-  account is deleted and would require separately approved isolated provisioning.
-  If the two-account/extended-retention projection no longer fits EUR 2 ancillary
+  Existing storage and its eventual cleanup belong to this same budget. Model-only
+  `benchmark_infra restore` derives only the account, pinned deployment and
+  account-scoped role from the original template, with `restore=true`; it cannot
+  reprovision Storage. Its exclusive marker prevents a second submission.
+  If the extended-retention projection no longer fits EUR 2 ancillary
   or EUR 10 total, stop rather than opening another budget. Earlier billing
   queries remain consumed; no unbounded polling or new query allowance.
 5. Regression gates before execution: competing children cannot oversubscribe the
@@ -198,9 +219,28 @@ before requesting model/resource execution:
   rows are unchanged. Finish/stop the child, delete its model resource, and retain
   the shared authorization/evidence without lowering counters.
 
-Until those gates and explicit execution permission exist, the executable output
-is preparation only. The read probe above also needs its own approval. No Cloud
-operation is implied by generating or inspecting the local plan.
+The proposal remains offline and is not a permit. Execution additionally requires
+fresh code-bound resource/cost evidence, the matched one-shot read and three passed,
+cleaned real-Table scenarios. Adoption/dispatch still require live attestation.
+Claims charge the parent slot/reserve before provider admission; reservation,
+dispatch marker and settlement each update parent and child in one transaction.
+Uncertain outcomes cannot be taken over. A claim rejected before commit produces
+no durable slot: record that attempted case privately and stop, never treat it as
+free retry credit. Original counter/cleanup headroom remain shared.
+
+`continuation-stop` uses storage-only credentials even after expiry, closes parent
+and child atomically, saves an immutable snapshot, then deletes deployment and
+account. Model deletion is attempted even if ledger closure fails; every outcome
+must be inspected. Storage is retained. Unknown records and the historical archive
+gap still forbid automatic destruction. The operator supplies the existing
+explicit authorization; local evidence files are not signed approval credentials.
+
+The three real parent tests are selected with `-k real_parent_cas` in
+`tests/test_benchmark_table_integration.py`, using the original control directory
+and approval. They create only bounded `test-parent-` partitions and delete those
+with ETags. Start/result markers prevent rerunning a scenario inadvertently.
+The earlier `test_real_benchmark_table` scenarios are not part of continuation
+execution and must not be selected as additional unbudgeted testing.
 
 ### Separate quality work package
 

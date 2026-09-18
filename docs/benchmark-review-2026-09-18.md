@@ -1,4 +1,105 @@
-# Completed screening: offline review
+# Screening Review And Authorized Continuation
+
+## Authorized continuation outcome
+
+The separately authorized continuation from commit `88ab4b4` is now closed.
+Exactly one storage-only diagnostic read matched the original closed ledger.
+After offline validation, three bounded real Table integration scenarios passed
+and their disposable partitions were deleted. The same isolated model account
+was restored and re-attested; no production, backend, iOS, prompt, schema,
+model-profile or fixture behavior changed. No new budget was created.
+
+Five new calls succeeded: P1, L1, R1, P2 and L2. R2 then stopped at the Table
+claim with safe diagnostic `counter_locked`, HTTP status absent. The claim batch
+was rejected by the local append-only counter's nonblocking lock; its exact
+holder is not established. This is not evidence of a Storage 401/403 or of T5's
+historical cause. R2 remained `ready`, with no operation or provider entry.
+There was no retry, replacement case, lock bypass or subsequent model call.
+
+The original ledger remains closed with four permanent attempts and USD 0.9372
+lifetime reservations. Its 24 payloads still match the original snapshot. The
+separate parent record in the **same partition** closed with ten consumed slots,
+USD 2.343 lifetime allocation, USD 0.01084875 known cost and the original
+USD 0.2343 T5 allowance. The failed R2 command was rejected before the atomic slot
+increment; count eleven touched cases conservatively in planning, not ten attempts
+as a claim of complete coverage. An additional discretionary USD 0.2343 R2 hold
+is retained in the private report without falsifying or lowering durable counters.
+Neither closed run can resume and unused slots are not a new execution grant.
+
+### Coverage and quality
+
+| Type | Returned / planned | Observed quality |
+| --- | --- | --- |
+| Text | 4 / 6 | T1 correct; T2 remains a failure; T3/T4 disclose assumptions. T5 failed technically; T6 untested. |
+| Photos/control | 2 / 6 | P1 recognizes rice; P2 recognizes flakes, berries and yogurt-like food and excludes the separate glass. Portions are explicit assumptions. P3-P6, including abstention and image injection, remain untested. |
+| Labels | 2 / 2 | L1 and L2 match all four reference values exactly, including per-portion versus per-100-g scaling. L2 returns English despite German input. |
+| Refinements | 1 / 4 | R1 halves all four values exactly. R2 fails before model entry; R3/R4 remain untested. |
+
+Nine schema-valid responses are not nine proven usable estimates. Four of five
+returned arithmetic cases pass all preregistered tolerances; 19/20 individual
+fields pass (18/20 are exact). T2's protein remains 20.2 g versus 13.2 g, with
+confidence 0.98; its incorrect calories happen to pass the tolerance. Photo
+confidence 0.90/0.84 is not calibrated accuracy, and no weighed-photo reference
+exists. No human scores or usable flags were fabricated; no LLM judge was called.
+This is incomplete screening, not a full-matrix accuracy or production-readiness
+claim. Seven cases were never reached and two encountered infrastructure failure.
+
+### Latency and cost
+
+All measurements are cold-process calls. Provider time excludes ARM attestation
+and the scheduled >=62-second spacing; runner time also excludes that preflight.
+
+| Type | n | Provider median (range), seconds | Runner median, seconds |
+| --- | --- | --- | --- |
+| Text | 4 | 2.506 (2.332-2.663) | 3.120 |
+| Photos | 2 | 3.485 (2.995-3.976) | 4.208 |
+| Labels | 2 | 2.405 (2.278-2.531) | 3.132 |
+| Refinement | 1 | 1.974 | 2.728 |
+
+There is insufficient data for p95. Combined known usage is 5,638 input and
+1,252 output tokens, zero cached/reasoning tokens, priced at **USD 0.01084875**.
+This is usage-derived pricing, not a posted invoice. Two earlier billing queries
+remain consumed/unknown; the third remains reserved for retention review.
+
+Fresh model/LRS retail checks left the full prospective projection at
+**EUR 7.911153875**, an estimate, not an invoice guarantee. The shared EUR 2
+ancillary reserve includes all 50,000 weighted Table units, 1 GB-month storage
+allowance covering the small ledger's extended retention, transfer, tax and
+cleanup. Its itemized estimate remains EUR 1.89486. At closure, known cost plus
+T5 and that full reserve projects EUR 2.44126775; with the extra discretionary
+R2 hold, **EUR 2.86300775**. The same EUR 10 operational stop threshold and
+accepted delayed-billing risk apply. Final Table counter: 807 requests / 24,549
+weighted units; no reset or separate continuation counter.
+
+### Closure and recommendation
+
+Continuation closed **2026-09-18 17:41:02 UTC**; review retention no earlier than
+**2026-10-19 17:41:02 UTC**. The deployment was explicitly deleted before the
+model account. Resource inventory confirms account absence; a group-scoped role
+read confirms model-role absence. An initially invalid CLI `--scope --all`
+combination was rejected locally, diagnosed from its command log, then replaced
+with one correctly scoped ARM read. Remaining: existing StorageV2/LRS account,
+Table, resource group, RG Reader and table-scoped Data Contributor. Soft-delete
+and ARM deployment metadata may remain. No future cleanup scheduler exists.
+Snapshots, usage/results, failure/start markers, runtime archive and deletion
+receipts remain private outside Git. The old five-case/four-operation archive
+gate still blocks automatic destruction; do not alter evidence to satisfy it.
+
+Recommendation: keep GPT-5.4-mini as a **provisional candidate**, not a production
+recommendation. Labels and one refinement are encouraging, but T2 demonstrates
+unreliable arithmetic, photo accuracy is unmeasured, and hard-photo, abstention,
+injection and later-refinement coverage is missing. Resolve counter contention
+offline before any separately reviewed execution. Implement deterministic
+nutrition arithmetic only as a subsequent, separately versioned work package;
+do not rewrite this benchmark's failures or change the production gate.
+
+Validation: 505 offline gateway tests passed before model restoration; the final
+suite with the observed counter-lock claim regression reports **506 passed,
+12 skipped**, with external networking blocked. Three real parent-CAS tests
+passed separately. Shared production admission and Table implementations remain
+unchanged. The dedicated Azure CLI session was logged out after verification.
+
+## Historical offline review
 
 This review covers the completed public-data GPT-5.4-mini screening and its
 uncommitted benchmark-only changes. No resources, Azure diagnostics or model calls
