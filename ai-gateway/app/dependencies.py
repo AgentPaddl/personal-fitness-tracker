@@ -12,6 +12,10 @@ from app.use_cases.food_analysis import FoodAnalysisUseCase
 
 
 def _build_provider(settings: Settings) -> StructuredGenerationProvider:
+    from app.pilot import PilotError, enabled
+
+    if enabled() and settings.ai_provider != "azure_openai":
+        raise PilotError()
     if settings.ai_provider == "azure_openai":
         from app.providers.openai_api import AzureOpenAIProvider
 

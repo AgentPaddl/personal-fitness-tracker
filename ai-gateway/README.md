@@ -30,6 +30,13 @@ key (never exposed through the public API).
 
 ## Local Azure API adapter (2026-09-17)
 
+The later pilot admission implementation is documented in the
+[operations runbook](../docs/operations-runbook.md#protected-two-person-pilot-local-implementation).
+It is opt-in, uses a single Azure Table admission authority, and does not remove
+the production guard below. Pilot mode accepts no Copilot/fake fallback and no
+development authentication bypass. Offline mocks are not a deployed Table or
+Easy Auth integration certification.
+
 This is the first local package from the
 [paid API decision](../docs/architecture.md#paid-api-migration-decision-2026-09-17),
 not a production switch or authorization for paid/personal-data calls. Existing
@@ -123,7 +130,10 @@ package does not claim a verified account, quota, model/vision capability or
 regional deployment. `/readyz` therefore stays 503 for Azure; `/healthz` remains
 the existing liveness check. Client shutdown is bounded to one second. Enabling
 real readiness, funding, privacy approval, token-input budgeting, distributed
-admission/idempotency and API-only rollback belong to later approved work.
+admission activation and API-only rollback belong to later approved work.
+The pilot code now includes distributed admission/idempotency and a conservative
+full-context cost reserve, but its cloud integration and deployment mapping have
+not been verified against an account.
 
 Offline verification with the installed gateway test dependencies:
 

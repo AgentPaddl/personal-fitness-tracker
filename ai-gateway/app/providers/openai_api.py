@@ -134,6 +134,10 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             if os.environ.get("APP_ENV", "production") not in {"development", "test"}:
                 status = "disabled"
                 raise ServiceNotReadyError()
+            from app.pilot import consume_permit, enabled
+
+            if enabled():
+                consume_permit(request)
             if deployment is None:
                 status = "model_unavailable"
                 raise ModelUnavailableError()

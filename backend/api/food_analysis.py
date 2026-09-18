@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from uuid import UUID
 
 import azure.functions as func
 from pydantic import ValidationError
@@ -17,7 +18,7 @@ from schemas import (
     map_gateway_response_to_public,
     map_public_refinement_to_gateway,
 )
-from security import caller_is_authenticated
+from security import caller_is_authenticated, pilot_enabled, pilot_identity
 
 bp = func.Blueprint()
 
@@ -31,7 +32,26 @@ def food_analysis(req: func.HttpRequest) -> func.HttpResponse:
     request_id = sanitize_request_id(req.headers.get(_REQUEST_ID_HEADER))
     start = time.perf_counter()
 
-    if not caller_is_authenticated(req.headers):
+    identity = None
+    operation = req.headers.get("X-Operation-Id")
+    try:
+        protected = pilot_enabled()
+        if protected:
+            identity = pilot_identity(req.headers)
+    except ValueError:
+        return _log_and_respond(request_id, start, "unknown", _error_response(
+            403, "pilot_forbidden", "This identity is not authorized for the pilot.", request_id))
+
+    try:
+        if operation is not None:
+            operation = str(UUID(operation))
+        if protected and (operation is None or UUID(operation).version != 7):
+            raise ValueError()
+    except ValueError:
+        return _log_and_respond(request_id, start, "unknown", _error_response(
+            400, "operation_required", "A valid operation ID is required; the pilot requires a current UUIDv7.", request_id))
+
+    if identity is None and not caller_is_authenticated(req.headers):
         return _log_and_respond(
             request_id, start, "unknown",
             _error_response(401, "authentication_required", "Authentication is required.", request_id),
@@ -39,10 +59,10 @@ def food_analysis(req: func.HttpRequest) -> func.HttpResponse:
 
     content_type = (req.headers.get("Content-Type") or "").lower()
     if content_type.startswith("multipart/form-data"):
-        response = _handle_image_analysis(req, request_id)
+        response = _handle_image_analysis(req, request_id, identity, operation)
         use_case = "image"
     else:
-        response = _handle_text_analysis(req, request_id)
+        response = _handle_text_analysis(req, request_id, identity, operation)
         use_case = "text"
 
     return _log_and_respond(request_id, start, use_case, response)
@@ -62,7 +82,7 @@ def _log_and_respond(
     return response
 
 
-def _handle_text_analysis(req: func.HttpRequest, request_id: str) -> func.HttpResponse:
+def _handle_text_analysis(req: func.HttpRequest, request_id: str, identity=None, operation=None) -> func.HttpResponse:
     try:
         body = req.get_json()
     except ValueError:
@@ -78,7 +98,7 @@ def _handle_text_analysis(req: func.HttpRequest, request_id: str) -> func.HttpRe
             request_id,
         )
 
-    client = _make_gateway_client(request_id)
+    client = _make_gateway_client(request_id, identity, operation)
     try:
         if public_request.refinement is not None:
             gateway_response = client.analyze_food_refinement(
@@ -97,7 +117,7 @@ def _handle_text_analysis(req: func.HttpRequest, request_id: str) -> func.HttpRe
     return _respond_with_gateway_result(gateway_response, request_id)
 
 
-def _handle_image_analysis(req: func.HttpRequest, request_id: str) -> func.HttpResponse:
+def _handle_image_analysis(req: func.HttpRequest, request_id: str, identity=None, operation=None) -> func.HttpResponse:
     # Malformed multipart bodies raise inside werkzeug's parser (triggered
     # lazily by accessing .files/.form); never let that raw exception
     # escape as an unhandled 500.
@@ -165,7 +185,7 @@ def _handle_image_analysis(req: func.HttpRequest, request_id: str) -> func.HttpR
             request_id,
         )
 
-    client = _make_gateway_client(request_id)
+    client = _make_gateway_client(request_id, identity, operation)
     try:
         gateway_response = client.analyze_food_image(image_bytes, mime_type, food_description=food_description)
     except GatewayClientError as exc:
@@ -181,12 +201,14 @@ def _handle_image_analysis(req: func.HttpRequest, request_id: str) -> func.HttpR
     return _respond_with_gateway_result(gateway_response, request_id)
 
 
-def _make_gateway_client(request_id: str) -> GatewayClient:
+def _make_gateway_client(request_id: str, identity=None, operation=None) -> GatewayClient:
     return GatewayClient(
         base_url=get_gateway_base_url(),
         timeout=get_gateway_timeout_seconds(),
         service_token=get_gateway_service_token(),
         request_id=request_id,
+        verified_identity=identity,
+        operation_id=operation,
     )
 
 

@@ -5,7 +5,7 @@ Public responses never include provider or model identifiers.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.dependencies import get_food_analysis_use_case, get_provider
 from app.errors import ServiceNotReadyError
@@ -43,6 +43,15 @@ async def readyz(provider: StructuredGenerationProvider = Depends(get_provider))
 @v1_router.post("/food-analysis", response_model=FoodAnalysisResponse)
 async def analyze_food(
     request: FoodAnalysisRequest,
+    http_request: Request,
     use_case: FoodAnalysisUseCase = Depends(get_food_analysis_use_case),
 ) -> FoodAnalysisResponse:
-    return await use_case.execute(request)
+    from app.pilot_access import _context, verify
+
+    identity = verify(http_request.headers, await http_request.json())
+    context = (*identity, request.model_dump(mode="json")) if identity else None
+    token = _context.set(context)
+    try:
+        return await use_case.execute(request)
+    finally:
+        _context.reset(token)

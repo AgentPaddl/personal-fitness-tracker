@@ -14,6 +14,11 @@ is read (safely) to decide which whitelisted backend status/code applies.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
+import os
+import time
 from typing import Any
 
 import httpx
@@ -23,6 +28,14 @@ import httpx
 #: Any other gateway error code (or a malformed/unparseable error body) is
 #: treated as untrusted and normalized to "gateway_upstream_error" (502).
 _UPSTREAM_CODE_TO_BACKEND: dict[str, tuple[str, int]] = {
+    "pilot_unavailable": ("pilot_unavailable", 503),
+    "pilot_forbidden": ("pilot_forbidden", 403),
+    "operation_required": ("operation_required", 400),
+    "operation_conflict": ("operation_conflict", 409),
+    "operation_consumed": ("operation_consumed", 409),
+    "pilot_limit": ("pilot_limit", 429),
+    "pilot_input": ("pilot_input", 413),
+    "service_not_ready": ("gateway_service_unavailable", 503),
     "provider_timeout": ("gateway_timeout", 504),
     "provider_rate_limited": ("gateway_rate_limited", 429),
     "provider_unavailable": ("gateway_service_unavailable", 503),
@@ -30,6 +43,13 @@ _UPSTREAM_CODE_TO_BACKEND: dict[str, tuple[str, int]] = {
 }
 
 _BACKEND_MESSAGES: dict[str, str] = {
+    "pilot_unavailable": "Analysis admission is unavailable. Do not automatically repeat this operation.",
+    "pilot_forbidden": "This identity is not authorized for the pilot.",
+    "operation_required": "A current UUIDv7 X-Operation-Id is required for pilot analysis.",
+    "operation_conflict": "This operation ID was already used with different content.",
+    "operation_consumed": "This operation was already accepted. Its result cannot be retrieved or automatically repeated.",
+    "pilot_limit": "The configured pilot usage limit has been reached.",
+    "pilot_input": "This input exceeds the configured pilot analysis limits.",
     "gateway_timeout": "The AI gateway did not respond in time.",
     "gateway_rate_limited": "The AI provider is currently rate limited. Try again later.",
     "gateway_service_unavailable": "The AI gateway or provider is currently unavailable.",
@@ -107,11 +127,17 @@ class GatewayClient:
         client: httpx.Client | None = None,
         service_token: str | None = None,
         request_id: str | None = None,
+        verified_identity: tuple[str, str] | None = None,
+        operation_id: str | None = None,
     ):
         # ``client`` allows tests to inject a fully-configured httpx.Client
         # (e.g. Starlette's TestClient) that talks to the gateway in-process.
         self._client = client or httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
         self._headers: dict[str, str] = {}
+        self._verified_identity = verified_identity
+        self._operation_id = operation_id
+        if operation_id:
+            self._headers["X-Operation-Id"] = operation_id
         if service_token:
             # Proves to the gateway this call came from the backend, not an
             # arbitrary caller - the gateway is never a public API.
@@ -142,8 +168,23 @@ class GatewayClient:
         return self._post_and_handle(payload)
 
     def _post_and_handle(self, payload: dict[str, Any]) -> dict[str, Any]:
+        headers = dict(self._headers)
+        if self._verified_identity is not None:
+            try:
+                secret = os.environ["AI_PILOT_SIGNING_KEY"].encode()
+                if len(secret) < 32 or not self._operation_id:
+                    raise ValueError()
+                serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+                envelope = {"tid": self._verified_identity[0], "oid": self._verified_identity[1],
+                            "operation": self._operation_id, "issued": int(time.time()),
+                            "body": hashlib.sha256(serialized).hexdigest(), "aud": "fitness-gateway-pilot-v1"}
+                encoded = base64.urlsafe_b64encode(json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()).decode()
+                signature = hmac.new(secret, encoded.encode(), hashlib.sha256).hexdigest()
+                headers["X-Pilot-Authorization"] = encoded + "." + signature
+            except (KeyError, ValueError):
+                raise GatewayClientError("pilot_unavailable", 503) from None
         try:
-            response = self._client.post("/v1/food-analysis", json=payload, headers=self._headers)
+            response = self._client.post("/v1/food-analysis", json=payload, headers=headers)
         except httpx.TimeoutException as exc:
             raise GatewayClientError("gateway_timeout", 504) from exc
         except httpx.RequestError as exc:

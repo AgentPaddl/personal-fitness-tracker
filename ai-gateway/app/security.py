@@ -40,7 +40,9 @@ async def require_authenticated_caller(request: Request) -> None:
     """
 
     settings = get_settings()
-    if settings.app_env == "development" and settings.gateway_dev_auth_bypass:
+    from app.pilot import enabled
+
+    if not enabled() and settings.app_env == "development" and settings.gateway_dev_auth_bypass:
         return
 
     provided_token = request.headers.get("X-Service-Token")

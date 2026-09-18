@@ -124,7 +124,12 @@ class FoodAnalysisUseCase:
         return FoodAnalysisResponse(estimate=estimate)
 
     async def _generate_with_timeout(self, generation_request: StructuredGenerationRequest):
+        from app.pilot import enabled
+        from app.pilot_access import generate
+
         try:
+            if enabled():
+                return await generate(self._provider, generation_request)
             return await asyncio.wait_for(
                 self._provider.generate(generation_request), timeout=self._timeout_seconds
             )

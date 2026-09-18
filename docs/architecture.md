@@ -72,6 +72,25 @@ The existing Gateway and Backend regression suites are also required. No cloud,
 contract, secret, device-data, deployment, iOS or build-number change accompanies
 this package.
 
+### Subsequent local pilot controls (2026-09-17)
+
+The local implementation now adds strict Easy Auth claim/allowlist checks in the
+backend, request-bound backend assertions, and one gateway Coordinator backed
+by Azure Table ETag transactions. The Coordinator reserves person/global counts,
+concurrency and worst-case token cost together with an operation tombstone before
+granting a single adapter dispatch. It retains reservations for unknown outcomes;
+it does not store estimates or provide result replay. Operations use UUIDv7 with
+a bounded acceptance window to make metadata deletion compatible with rejecting
+old IDs. See the [pilot runbook](operations-runbook.md#protected-two-person-pilot-local-implementation)
+for exact configuration, retention, trust assumptions and test limitations.
+
+This supersedes earlier statements that distributed controls are unimplemented
+only as a description of local code. No Table resource/ledger, deployed Easy Auth
+claim chain, real identities or cost policy has been configured or approved.
+The Azure production guard remains unchanged; the existing private Copilot path
+is not reclassified as external-ready. Stable iOS operations, API-only packaging,
+external privacy/funding approval and real integration tests remain release gates.
+
 ### Rechecked implementation baseline (before local package)
 
 Repository: `personal-fitness-tracker`, branch `main`, HEAD
