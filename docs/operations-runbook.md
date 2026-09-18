@@ -181,16 +181,83 @@ still requires authorization and a full fresh reservation. Acceptance is inclusi
 from server time minus `operation_max_age_seconds` through server time plus 30 seconds.
 The signed assertion has its separate, shorter 60-second age/five-second future window.
 
-Future iOS contract (not implemented in this package): mint one UUIDv7 with a current
-UTC millisecond timestamp and cryptographically random remaining bits per logical
-analysis action. Retain it together with the immutable submitted payload and account
-across timeout, app restart and manual transport retry; do not regenerate it per HTTP
-attempt or refresh its timestamp. Preserve the same image bytes/base64 and normalized
-fields. Editing content, accepting a new refinement step, or changing account creates
-a separate explicitly confirmed action. Use a distinct diagnostic request ID.
-Do not automatically replace an expired/rejected/consumed operation with a new ID.
-An uncertain response has no result-replay endpoint: present the uncertainty and
-require explicit user confirmation before a new potentially chargeable analysis.
+### iOS operation lifecycle
+
+`FoodAnalysisOperation` creates one UUIDv7 before authentication/first dispatch for
+text, image and refinement actions, using a UTC millisecond timestamp and Swift's
+system random generator for the remaining bits. `X-Operation-Id` carries its canonical
+lowercase UUID. The operation holds immutable input, encoded body and content type in
+memory. Explicit transport retries reuse the entire snapshot, including JPEG bytes
+and the multipart boundary; images are not reprocessed for retries. The separate
+local request token rejects late responses and is not the operation ID.
+The server fingerprints normalized JSON (including the image base64), not multipart
+framing. Different boundaries with identical image bytes and normalized fields are
+therefore valid for the same operation; retaining the boundary is a stricter client
+snapshot guarantee, not a server requirement. This was checked offline through the
+real backend parser, gateway serialization and fingerprint function with mock transport.
+
+`FoodAnalysisViewModel` and the existing stable `FoodAnalysisReviewSession` own these
+operations. A changed submitted input or a new refinement round creates a new ID;
+an identical retry keeps its ID even after token renewal. Each explicit attempt
+acquires a token again. Entra supplies the actual selected account identifier together
+with that token; a transient binding blocks an existing operation if interactive
+sign-in switches accounts. This is only a client guard, not authorization: the server
+still scopes operations to verified identity. Legacy token-only test/custom providers
+cannot supply this account guard. No bearer token is retained in an operation.
+
+No timeout, connection loss, HTTP 401, cancellation or foreground transition causes
+an automatic retry. Unknown outcomes remain unknown even when a later retry fails
+before dispatch (for example, at login). The UI separates resending the same request
+from an explicitly confirmed **new calculation** that may consume provider resources
+and incur provider costs again. There is no user purchase/billing system; the UI does
+not claim a user was charged. A new calculation never promises to recover a lost
+result. It does not replace an expired, rejected or
+consumed ID automatically. The server owns age validation; its configured window is
+not available to iOS, so the client does not invent a local expiry or refresh the UUID
+timestamp. `operation_required` covers invalid/expired IDs and suggests checking the
+device clock. Conflict and consumed responses disable identical retries; consumed
+does not reveal whether the server is still running, finished or uncertain. All
+public pilot codes use fixed, provider-neutral messages, never raw backend text.
+
+Lifecycle boundaries are deliberately transient:
+
+- Becoming inactive, moving to the **background**, or temporarily hiding a view does
+  not cancel the operation or close the review: MSAL may use an external sign-in
+  app/browser and must be allowed to return. The same in-memory task can finish after
+  its token callback; foregrounding starts no additional request or retry. iOS may
+  suspend/terminate the process, so background completion is not guaranteed.
+- Explicit local cancellation cancels the task and invalidates its response token.
+  This does not prove that no model call occurred. Input/snapshot remain available
+  while their owner lives. A token callback after explicit cancellation cannot dispatch.
+- Actually dismissing/cancelling the review sheet closes its session, cancels pending
+  refinement and releases its snapshot;
+  late responses cannot update the draft or save anything. The initial screen keeps
+  the possible unknown outcome while its view model lives. A successfully received
+  initial analysis is not resent by a second tap. A temporarily hidden review retains
+  the same session, refinement count and persistence coordinator when shown again.
+  A closed session is terminal, not reopened/reset; only a separate explicit new
+  analysis creates a fresh review session.
+- Process termination, app restart or destruction of the view model loses IDs,
+  snapshots and unsaved review state. Startup never restores/sends unfinished work.
+  There is **no cross-restart retry/idempotency guarantee** and no result retrieval.
+  Re-entering content starts a new explicit operation and may incur additional cost;
+  the app cannot recognize its relationship to a lost operation after restart.
+  No new disk storage of meal content, images, operation IDs or fingerprints was
+  introduced just to implement idempotency.
+
+Only successful refinements consume one of the existing three rounds; each new
+round has a fresh ID and sends the current visible estimate/correction, never the
+image. The review session and its `FoodEntryPersistenceCoordinator` remain stable.
+Only **Uebernehmen** persists, at most once; retries, cancellation and sheet dismissal
+never save. Existing SwiftData and backup formats are unchanged.
+
+The header remains compatible with the existing private API, but that path does
+**not** enforce pilot idempotency. Its manual retry may execute again despite using
+the same ID; the UI makes no free-retry guarantee and warns before resending. These
+client changes do not activate the pilot, remove any production guard or demonstrate
+live Azure billing/isolation. Offline package tests cover UUID format, byte-identical
+retries/token renewal, account changes, double submission, new inputs/rounds,
+uncertainty, cancellation, late responses and existing confirmation behavior.
 
 Crash after reservation leaves `pending` and its full reserve/slot. Crash after
 the second write leaves `unknown`, whether the remote model received anything or
@@ -275,9 +342,9 @@ existing table, tests two clients racing, and removes its records afterward.
 Do not set the flag during ordinary tests. No real Table test was run here; multi-
 process interruption/network-fault testing and billing reconciliation remain gates.
 
-Before any external release: stable iOS UUIDv7 operations preserved across retries
-of the same logical action (not yet implemented); review/confirmation before creating
-a replacement operation; claim-chain and Table integration evidence; privately funded
+Before any external release: validate the implemented transient iOS operation and
+replacement-confirmation flow end to end, including its explicit restart limits;
+claim-chain and Table integration evidence; privately funded
 account/privacy approvals; budget approval and verified deployment/rates; API-only
 production artifact and rollback with old Copilot routes/credentials closed. Removing
 the Azure production guard requires a separate approved change. Do not disable the

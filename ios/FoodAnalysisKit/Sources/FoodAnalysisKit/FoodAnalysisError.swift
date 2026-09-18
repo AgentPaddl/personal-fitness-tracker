@@ -23,6 +23,31 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
     /// `.unauthorized`, which is the backend itself rejecting the request
     /// after it was sent.
     case authenticationRequired
+    case operationInterrupted
+    case operationAccountChanged
+    case operationConsumed
+    case operationConflict
+    case operationRequired
+    case pilotUnavailable
+    case pilotForbidden
+    case pilotLimit
+    case pilotInput
+
+    public var canRetryOperation: Bool {
+        isRetryEligible || self == .authenticationRequired || self == .unauthorized
+            || self == .operationInterrupted || self == .pilotUnavailable || self == .pilotLimit
+    }
+
+    public var requiresNewOperationConfirmation: Bool {
+        switch self {
+        case .noConnection, .timeout, .backendUnavailable, .rateLimited, .invalidResponse,
+             .analysisFailed, .operationInterrupted, .operationConsumed, .operationConflict,
+             .operationRequired, .pilotUnavailable, .operationAccountChanged:
+            return true
+        default:
+            return false
+        }
+    }
 
     /// Whether an explicit "Erneut versuchen" retry action makes sense for
     /// this failure. Only failures where an identical retry could
@@ -35,7 +60,11 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
         case .noConnection, .timeout, .backendUnavailable, .rateLimited, .analysisFailed:
             return true
         case .unauthorized, .invalidResponse, .imageProcessingFailed, .imageMissingOrEmpty,
-            .unsupportedImageType, .imageTooLarge, .authenticationRequired:
+            .unsupportedImageType, .imageTooLarge, .authenticationRequired, .operationInterrupted,
+            .operationConsumed, .operationConflict, .operationRequired, .pilotUnavailable,
+            .pilotForbidden, .pilotLimit, .pilotInput:
+            return false
+        case .operationAccountChanged:
             return false
         }
     }
@@ -43,19 +72,19 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
     public var userMessage: String {
         switch self {
         case .noConnection:
-            return "Keine Internetverbindung. Bitte überprüfe deine Verbindung und versuche es erneut."
+            return "Die Verbindung ist unterbrochen. Die Analyse könnte serverseitig trotzdem ausgeführt worden sein."
         case .timeout:
-            return "Die Analyse hat zu lange gedauert. Bitte versuche es erneut."
+            return "Keine rechtzeitige Antwort. Ob die Analyse ausgeführt wurde, ist unklar."
         case .backendUnavailable:
-            return "Der Analysedienst ist derzeit nicht erreichbar. Bitte versuche es später erneut."
+            return "Der Analysedienst ist nicht erreichbar. Der Ausgang dieser Anfrage ist unklar."
         case .rateLimited:
             return "Zu viele Anfragen. Bitte warte einen Moment und versuche es erneut."
         case .unauthorized:
             return "Die Analyse ist momentan nicht verfügbar."
         case .invalidResponse:
-            return "Die Antwort konnte nicht verarbeitet werden. Bitte versuche es erneut."
+            return "Die Antwort konnte nicht verarbeitet werden. Beim KI-Anbieter könnte bereits Verbrauch entstanden sein."
         case .analysisFailed:
-            return "Die Analyse ist fehlgeschlagen. Bitte versuche es erneut."
+            return "Es liegt kein nutzbares Ergebnis vor. Ob beim KI-Anbieter Verbrauch entstanden ist, ist unklar."
         case .imageProcessingFailed:
             return "Das Foto konnte nicht verarbeitet werden. Bitte wähle ein anderes Foto."
         case .imageMissingOrEmpty:
@@ -66,6 +95,24 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
             return "Das Foto ist zu groß. Bitte wähle ein kleineres Foto."
         case .authenticationRequired:
             return "Anmeldung erforderlich. Bitte versuche es erneut."
+        case .operationInterrupted:
+            return "Die Anfrage wurde hier abgebrochen. Serverseitig kann sie weiterlaufen; ihr Ausgang ist unklar."
+        case .operationAccountChanged:
+            return "Das angemeldete Konto hat gewechselt. Der bestehende Vorgang wird mit diesem Konto nicht erneut gesendet. Eine neue Berechnung muss ausdrücklich bestätigt werden."
+        case .operationConsumed:
+            return "Diese Anfrage wurde bereits angenommen. Sie kann noch laufen, abgeschlossen oder ihr Ausgang unbekannt sein. Das Ergebnis kann nicht erneut abgerufen werden."
+        case .operationConflict:
+            return "Die Vorgangs-ID gehört zu einem anderen Anfrageinhalt. Diese Anfrage wird nicht erneut gesendet."
+        case .operationRequired:
+            return "Die Vorgangs-ID ist ungültig oder abgelaufen. Sie wird nicht automatisch ersetzt. Bitte prüfe auch die Gerätezeit."
+        case .pilotUnavailable:
+            return "Die Anfrage konnte nicht sicher bestätigt werden. Beim KI-Anbieter könnte bereits Verbrauch entstanden sein."
+        case .pilotForbidden:
+            return "Dieses Konto ist nicht für die Analyse freigegeben."
+        case .pilotLimit:
+            return "Das freigegebene Nutzungslimit ist erreicht. Es wird keine neue Anfrage gestartet."
+        case .pilotInput:
+            return "Die Eingabe überschreitet die freigegebenen Analysegrenzen."
         }
     }
 }

@@ -21,16 +21,39 @@ public protocol AccessTokenProviding: Sendable {
     func acquireAccessToken() async throws -> String
 }
 
+public struct AccountAccessToken: Sendable {
+    public let token: String
+    public let accountIdentifier: String
+
+    public init(token: String, accountIdentifier: String) {
+        self.token = token
+        self.accountIdentifier = accountIdentifier
+    }
+}
+
+public protocol AccountAccessTokenProviding: AccessTokenProviding {
+    func acquireAccountAccessToken() async throws -> AccountAccessToken
+}
+
 /// Public contract for the text food-analysis networking call.
 public protocol FoodAnalysisServicing: Sendable {
-    func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate
-    func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate
-    /// Uploads an already-preprocessed image (and optional text) via
-    /// `multipart/form-data`. `description`, if non-nil/non-blank, is sent
-    /// alongside the image.
+    func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate
+}
+
+public extension FoodAnalysisServicing {
+    func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
+        try await perform(operation: FoodAnalysisOperation(input: .text(description)))
+    }
+
+    func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate {
+        try await perform(operation: FoodAnalysisOperation(input: .refinement(request)))
+    }
+
     func analyzeImage(
-        data: Data, mimeType: String, description: String?
-    ) async throws -> FoodAnalysisResponseDTO.Estimate
+        data: Data, mimeType: String, description: String? = nil
+    ) async throws -> FoodAnalysisResponseDTO.Estimate {
+        try await perform(operation: FoodAnalysisOperation(input: .image(data: data, mimeType: mimeType, description: description)))
+    }
 }
 
 /// Calls the Fitness API backend's `POST /api/food-analysis` endpoint.
@@ -61,51 +84,35 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         self.tokenProvider = tokenProvider
     }
 
-    public func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
+    public func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate {
         var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        try await applyAuthorization(to: &request)
+        request.setValue(operation.contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue(operation.id.uuidString.lowercased(), forHTTPHeaderField: FoodAnalysisOperation.headerName)
+        request.httpBody = operation.body
+        try Task.checkCancellation()
+        try await applyAuthorization(to: &request, operation: operation)
+        try Task.checkCancellation()
         request.timeoutInterval = timeoutInterval
-        request.httpBody = try JSONEncoder().encode(FoodAnalysisRequestDTO(foodDescription: description))
 
         return try await perform(request)
     }
 
-    public func refine(
-        request refinementRequest: FoodAnalysisRefinementRequestDTO
-    ) async throws -> FoodAnalysisResponseDTO.Estimate {
-        var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        try await applyAuthorization(to: &request)
-        request.timeoutInterval = timeoutInterval
-        request.httpBody = try JSONEncoder().encode(refinementRequest)
-
-        return try await perform(request)
-    }
-
-    public func analyzeImage(
-        data: Data, mimeType: String, description: String? = nil
-    ) async throws -> FoodAnalysisResponseDTO.Estimate {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var request = URLRequest(url: baseURL.appendingPathComponent("food-analysis"))
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        try await applyAuthorization(to: &request)
-        request.timeoutInterval = timeoutInterval
-        request.httpBody = Self.multipartBody(
-            boundary: boundary, imageData: data, mimeType: mimeType, description: description
-        )
-
-        return try await perform(request)
-    }
-
-    private func applyAuthorization(to request: inout URLRequest) async throws {
+    private func applyAuthorization(to request: inout URLRequest, operation: FoodAnalysisOperation) async throws {
         guard let tokenProvider else { return }
         let token: String
         do {
-            token = try await tokenProvider.acquireAccessToken()
+            if let accountProvider = tokenProvider as? AccountAccessTokenProviding {
+                let credential = try await accountProvider.acquireAccountAccessToken()
+                try await operation.accountBinding.validate(credential.accountIdentifier)
+                token = credential.token
+            } else {
+                token = try await tokenProvider.acquireAccessToken()
+            }
+        } catch is CancellationError {
+            throw FoodAnalysisError.operationInterrupted
+        } catch FoodAnalysisError.operationAccountChanged {
+            throw FoodAnalysisError.operationAccountChanged
         } catch {
             throw FoodAnalysisError.authenticationRequired
         }
@@ -118,6 +125,8 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
+        } catch is CancellationError {
+            throw FoodAnalysisError.operationInterrupted
         } catch let urlError as URLError {
             throw Self.mapURLError(urlError)
         } catch {
@@ -171,6 +180,8 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
             return .noConnection
         case .timedOut:
             return .timeout
+        case .cancelled:
+            return .operationInterrupted
         default:
             return .analysisFailed
         }
@@ -182,6 +193,20 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         // rate-limit or timeout at the gateway boundary).
         if let code = (try? JSONDecoder().decode(BackendErrorEnvelope.self, from: data))?.error.code {
             switch code {
+            case "operation_consumed":
+                return .operationConsumed
+            case "operation_conflict":
+                return .operationConflict
+            case "operation_required":
+                return .operationRequired
+            case "pilot_unavailable":
+                return .pilotUnavailable
+            case "pilot_forbidden":
+                return .pilotForbidden
+            case "pilot_limit":
+                return .pilotLimit
+            case "pilot_input":
+                return .pilotInput
             case "gateway_rate_limited":
                 return .rateLimited
             case "gateway_timeout":

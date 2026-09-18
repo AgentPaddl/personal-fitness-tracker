@@ -7,6 +7,7 @@ import FoodAnalysisKit
 
 struct NutritionView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
 
     @Query(sort: \FoodEntry.date, order: .reverse)
     private var foodEntries: [FoodEntry]
@@ -30,6 +31,8 @@ struct NutritionView: View {
     @State private var isLoadingPickedPhoto = false
     @State private var isCameraSheetPresented = false
     @State private var showsLongRunningAnalysisHint = false
+    @State private var confirmsNewAnalysis = false
+    @State private var confirmsAnalysisRetry = false
     private let isCameraHardwareAvailable = UIImagePickerController.isSourceTypeAvailable(.camera)
 
     var body: some View {
@@ -182,17 +185,19 @@ struct NutritionView: View {
                                 showsLongRunningAnalysisHint = true
                             }
                         }
-                    } else {
-                        Button("Analysieren") {
-                            showsLongRunningAnalysisHint = false
-                            Task { await foodAnalysisViewModel.analyze() }
+                        Button("Anfrage abbrechen", role: .cancel) {
+                            foodAnalysisViewModel.interruptAnalysis()
                         }
-                        .disabled(
-                            (foodAnalysisViewModel.descriptionText
-                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                && foodAnalysisViewModel.selectedImage == nil)
-                                || isLoadingPickedPhoto
-                        )
+                    } else {
+                        Button(foodAnalysisViewModel.requiresNewOperationConfirmation ? "Neue Berechnung …" : "Analysieren") {
+                            showsLongRunningAnalysisHint = false
+                            if foodAnalysisViewModel.requiresNewOperationConfirmation {
+                                confirmsNewAnalysis = true
+                            } else {
+                                Task { await foodAnalysisViewModel.analyze() }
+                            }
+                        }
+                        .disabled(!foodAnalysisViewModel.canAnalyze || isLoadingPickedPhoto)
                     }
 
                     if let errorMessage = foodAnalysisViewModel.errorMessage {
@@ -200,9 +205,9 @@ struct NutritionView: View {
                             .font(.caption)
                             .foregroundStyle(.red)
 
-                        if foodAnalysisViewModel.lastError?.isRetryEligible == true {
-                            Button("Erneut versuchen") {
-                                Task { await foodAnalysisViewModel.analyze() }
+                        if foodAnalysisViewModel.canRetryOperation {
+                            Button("Dieselbe Anfrage erneut senden …") {
+                                confirmsAnalysisRetry = true
                             }
                             .disabled(foodAnalysisViewModel.isAnalyzing)
                         }
@@ -252,9 +257,7 @@ struct NutritionView: View {
             }) { _ in
                 if let session = foodAnalysisViewModel.reviewSession {
                     FoodAnalysisReviewView(session: session) {
-                        foodAnalysisViewModel.descriptionText = ""
-                        foodAnalysisViewModel.removeSelectedImage()
-                        foodAnalysisViewModel.closeReviewSession()
+                        foodAnalysisViewModel.clearAfterSave()
                     }
                 }
             }
@@ -286,6 +289,28 @@ struct NutritionView: View {
                     }
                 )
                 .ignoresSafeArea()
+            }
+            .confirmationDialog("Neue Berechnung starten?", isPresented: $confirmsNewAnalysis, titleVisibility: .visible) {
+                Button("Neue Berechnung starten") {
+                    Task { await foodAnalysisViewModel.analyze(confirmNewOperation: true) }
+                }
+                Button("Abbrechen", role: .cancel) {}
+            } message: {
+                Text("Der vorherige Vorgang könnte beim KI-Anbieter bereits Ressourcen verbraucht haben. Eine neue Berechnung kann dort erneut Verbrauch und Kosten verursachen. Ein fehlendes Ergebnis wird dadurch nicht wiederhergestellt.")
+            }
+            .confirmationDialog("Dieselbe Anfrage erneut senden?", isPresented: $confirmsAnalysisRetry, titleVisibility: .visible) {
+                Button("Mit derselben Vorgangs-ID senden") {
+                    Task { await foodAnalysisViewModel.retryOperation() }
+                }
+                Button("Abbrechen", role: .cancel) {}
+            } message: {
+                Text("Inhalt und Vorgangs-ID bleiben gleich. Ein bereits angenommenes Ergebnis kann nicht abgerufen werden. Ohne aktivierten serverseitigen Wiederholungsschutz ist erneuter Verbrauch beim KI-Anbieter möglich.")
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background {
+                    confirmsNewAnalysis = false
+                    confirmsAnalysisRetry = false
+                }
             }
         }
     }

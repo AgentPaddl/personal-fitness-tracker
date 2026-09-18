@@ -17,7 +17,7 @@ import Foundation
 /// keychain-backed token cache is the only place a token or refresh token
 /// lives. This type only ever holds the non-secret `EntraConfiguration`
 /// and delegates every acquisition to the injected `EntraTokenAcquiring`.
-public final class EntraAuthService: AccessTokenProviding {
+public final class EntraAuthService: AccountAccessTokenProviding {
     private let configuration: EntraConfiguration
     private let acquirer: EntraTokenAcquiring
     private let accountStore: EntraAccountStoring
@@ -55,12 +55,17 @@ public final class EntraAuthService: AccessTokenProviding {
     /// `FoodAnalysisService.applyAuthorization`), never a crash or a
     /// silently-unauthenticated request.
     public func acquireAccessToken() async throws -> String {
+        try await acquireAccountAccessToken().token
+    }
+
+    public func acquireAccountAccessToken() async throws -> AccountAccessToken {
         if let selectedIdentifier = accountStore.loadSelectedAccountIdentifier() {
             if try await acquirer.accountExists(identifier: selectedIdentifier) {
                 do {
-                    return try await acquirer.acquireTokenSilently(
+                    let token = try await acquirer.acquireTokenSilently(
                         accountIdentifier: selectedIdentifier, scope: configuration.apiScope
                     )
+                    return AccountAccessToken(token: token, accountIdentifier: selectedIdentifier)
                 } catch EntraTokenError.interactionRequired {
                     return try await acquireInteractively()
                 }
@@ -76,7 +81,8 @@ public final class EntraAuthService: AccessTokenProviding {
         case .single(let identifier):
             accountStore.saveSelectedAccountIdentifier(identifier)
             do {
-                return try await acquirer.acquireTokenSilently(accountIdentifier: identifier, scope: configuration.apiScope)
+                let token = try await acquirer.acquireTokenSilently(accountIdentifier: identifier, scope: configuration.apiScope)
+                return AccountAccessToken(token: token, accountIdentifier: identifier)
             } catch EntraTokenError.interactionRequired {
                 return try await acquireInteractively()
             }
@@ -85,10 +91,10 @@ public final class EntraAuthService: AccessTokenProviding {
         }
     }
 
-    private func acquireInteractively() async throws -> String {
+    private func acquireInteractively() async throws -> AccountAccessToken {
         let result = try await acquirer.acquireTokenInteractively(scope: configuration.apiScope)
         accountStore.saveSelectedAccountIdentifier(result.accountIdentifier)
-        return result.accessToken
+        return AccountAccessToken(token: result.accessToken, accountIdentifier: result.accountIdentifier)
     }
 }
 

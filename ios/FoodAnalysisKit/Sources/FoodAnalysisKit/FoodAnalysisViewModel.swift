@@ -22,9 +22,39 @@ public final class FoodAnalysisViewModel: ObservableObject {
     /// ready for upload, if the user picked one. Held only in memory for
     /// the duration of this flow; never persisted.
     @Published public private(set) var selectedImage: PreprocessedFoodImage?
+    @Published public private(set) var currentOperation: FoodAnalysisOperation?
+    @Published public private(set) var currentRequestToken: UUID?
 
     private let service: FoodAnalysisServicing?
     private let configurationErrorMessage: String?
+    private var analysisTask: Task<FoodAnalysisResponseDTO.Estimate, Error>?
+    private var operationCompleted = false
+    @Published private var hasUncertainOutcome = false
+
+    private var currentInput: FoodAnalysisOperation.Input {
+        let trimmed = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let selectedImage {
+            return .image(data: selectedImage.data, mimeType: selectedImage.mimeType,
+                          description: trimmed.isEmpty ? nil : trimmed)
+        }
+        return .text(trimmed)
+    }
+
+    public var requiresNewOperationConfirmation: Bool {
+        hasUncertainOutcome || lastError?.requiresNewOperationConfirmation == true
+            || (operationCompleted && currentOperation?.input == currentInput)
+    }
+
+    public var canRetryOperation: Bool {
+        !isAnalyzing && !operationCompleted && currentOperation?.input == currentInput
+            && lastError?.canRetryOperation == true
+    }
+
+    public var canAnalyze: Bool {
+        !isAnalyzing && (!descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImage != nil)
+            && (currentOperation == nil || currentOperation?.input != currentInput
+                || canRetryOperation || requiresNewOperationConfirmation)
+    }
 
     /// Real usage: resolves the backend base URL from the environment/
     /// build target. If resolution fails (fail-closed configuration), no
@@ -57,7 +87,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
     /// Guards against duplicate submissions. Leaves the typed text and
     /// selected image untouched so the user can retry after an error.
     /// If both text and an image are present, both are sent together.
-    public func analyze() async {
+    public func analyze(confirmNewOperation: Bool = false) async {
         let trimmed = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || selectedImage != nil, !isAnalyzing else { return }
 
@@ -66,31 +96,58 @@ public final class FoodAnalysisViewModel: ObservableObject {
             return
         }
 
+        do {
+            if currentOperation?.input == currentInput && !confirmNewOperation {
+                guard canRetryOperation else { return }
+            } else {
+                guard !requiresNewOperationConfirmation || confirmNewOperation else { return }
+                currentOperation = try FoodAnalysisOperation(input: currentInput)
+                operationCompleted = false
+                hasUncertainOutcome = false
+            }
+        } catch {
+            lastError = .analysisFailed
+            errorMessage = FoodAnalysisError.analysisFailed.userMessage
+            return
+        }
+        guard let operation = currentOperation else { return }
+        let requestToken = UUID()
+        currentRequestToken = requestToken
         isAnalyzing = true
         errorMessage = nil
         lastError = nil
-        defer { isAnalyzing = false }
+        let task = Task { try await service.perform(operation: operation) }
+        analysisTask = task
 
         do {
-            let estimate: FoodAnalysisResponseDTO.Estimate
-            if let selectedImage {
-                estimate = try await service.analyzeImage(
-                    data: selectedImage.data,
-                    mimeType: selectedImage.mimeType,
-                    description: trimmed.isEmpty ? nil : trimmed
-                )
-            } else {
-                estimate = try await service.analyze(description: trimmed)
+            let estimate = try await withTaskCancellationHandler(operation: {
+                try await task.value
+            }, onCancel: { task.cancel() })
+            guard currentRequestToken == requestToken else { return }
+            guard !Task.isCancelled, !task.isCancelled, operation.input == currentInput else {
+                interruptAnalysis()
+                return
             }
             let sourceKind: FoodAnalysisSourceKind
-            if selectedImage != nil {
-                sourceKind = trimmed.isEmpty ? .image : .textAndImage
-            } else {
+            let originalDescription: String?
+            switch operation.input {
+            case .text(let description):
                 sourceKind = .text
+                originalDescription = description
+            case .image(_, _, let description):
+                sourceKind = description == nil ? .image : .textAndImage
+                originalDescription = description
+            case .refinement:
+                return
             }
+            operationCompleted = true
+            hasUncertainOutcome = false
+            isAnalyzing = false
+            currentRequestToken = nil
+            analysisTask = nil
             reviewSession?.close()
             let session = FoodAnalysisReviewSession(
-                originalDescription: trimmed.isEmpty ? nil : trimmed,
+                originalDescription: originalDescription,
                 sourceKind: sourceKind,
                 initialEstimate: estimate,
                 service: service
@@ -98,13 +155,44 @@ public final class FoodAnalysisViewModel: ObservableObject {
             reviewSession = session
             // Kept as the stable sheet presentation item for the existing UI.
             reviewDraft = session.currentDraft
-        } catch let error as FoodAnalysisError {
-            errorMessage = Self.userMessage(for: error)
-            lastError = error
         } catch {
-            errorMessage = Self.userMessage(for: .analysisFailed)
-            lastError = .analysisFailed
+            guard currentRequestToken == requestToken else { return }
+            let failure = Task.isCancelled || task.isCancelled
+                ? FoodAnalysisError.operationInterrupted : (error as? FoodAnalysisError ?? .analysisFailed)
+            errorMessage = failure.userMessage
+            lastError = failure
+            hasUncertainOutcome = hasUncertainOutcome || failure.requiresNewOperationConfirmation
+            currentRequestToken = nil
+            isAnalyzing = false
+            analysisTask = nil
         }
+    }
+
+    public func retryOperation() async {
+        guard canRetryOperation else { return }
+        await analyze()
+    }
+
+    public func interruptAnalysis() {
+        guard isAnalyzing else { return }
+        currentRequestToken = nil
+        analysisTask?.cancel()
+        analysisTask = nil
+        isAnalyzing = false
+        lastError = .operationInterrupted
+        hasUncertainOutcome = true
+        errorMessage = FoodAnalysisError.operationInterrupted.userMessage
+    }
+
+    public func clearAfterSave() {
+        closeReviewSession()
+        currentOperation = nil
+        operationCompleted = false
+        hasUncertainOutcome = false
+        descriptionText = ""
+        selectedImage = nil
+        lastError = nil
+        errorMessage = nil
     }
 
     /// Preprocesses and stores a freshly picked photo (resize/JPEG-compress,
@@ -126,6 +214,11 @@ public final class FoodAnalysisViewModel: ObservableObject {
 
     public func closeReviewSession() {
         reviewSession?.close()
+        if reviewSession?.requiresNewOperationConfirmation == true {
+            hasUncertainOutcome = true
+            lastError = .operationInterrupted
+            errorMessage = FoodAnalysisError.operationInterrupted.userMessage
+        }
         reviewSession = nil
         reviewDraft = nil
     }

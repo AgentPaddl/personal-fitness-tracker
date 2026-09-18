@@ -7,6 +7,18 @@ import XCTest
 
 @MainActor
 private final class StubService: FoodAnalysisServicing {
+    private(set) var operations: [FoodAnalysisOperation] = []
+
+    func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate {
+        operations.append(operation)
+        switch operation.input {
+        case .text(let description): return try await analyze(description: description)
+        case .image(let data, let mimeType, let description):
+            return try await analyzeImage(data: data, mimeType: mimeType, description: description)
+        case .refinement(let request): return try await refine(request: request)
+        }
+    }
+
     var result: Result<FoodAnalysisResponseDTO.Estimate, Error>
     private(set) var callCount = 0
     private(set) var lastImageMimeType: String?
@@ -42,20 +54,28 @@ private final class StubService: FoodAnalysisServicing {
 /// satisfies the `FoodAnalysisServicing: Sendable` requirement.
 @MainActor
 private final class GatedService: FoodAnalysisServicing {
+    private(set) var operations: [FoodAnalysisOperation] = []
+
+    func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate {
+        operations.append(operation)
+        return try await analyze(description: "")
+    }
+
     private(set) var callCount = 0
-    private var continuation: CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>?
+    private var continuations: [CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>] = []
+    var pendingCount: Int { continuations.count }
 
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
         callCount += 1
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
+            continuations.append(continuation)
         }
     }
 
     func refine(request: FoodAnalysisRefinementRequestDTO) async throws -> FoodAnalysisResponseDTO.Estimate {
         callCount += 1
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
+            continuations.append(continuation)
         }
     }
 
@@ -64,20 +84,28 @@ private final class GatedService: FoodAnalysisServicing {
     ) async throws -> FoodAnalysisResponseDTO.Estimate {
         callCount += 1
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
+            continuations.append(continuation)
         }
     }
 
     func resume(with estimate: FoodAnalysisResponseDTO.Estimate) {
-        continuation?.resume(returning: estimate)
-        continuation = nil
+        guard !continuations.isEmpty else { return }
+        continuations.removeFirst().resume(returning: estimate)
     }
 }
 
 @MainActor
 private final class ReplacementService: FoodAnalysisServicing {
+    func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate {
+        switch operation.input {
+        case .refinement(let request): return try await refine(request: request)
+        default: return try await analyze(description: "")
+        }
+    }
+
     var analysisResults: [FoodAnalysisResponseDTO.Estimate]
     private var refinementContinuation: CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>?
+    var isRefinementWaiting: Bool { refinementContinuation != nil }
 
     init(analysisResults: [FoodAnalysisResponseDTO.Estimate]) {
         self.analysisResults = analysisResults
@@ -118,6 +146,148 @@ private func makeEstimate() -> FoodAnalysisResponseDTO.Estimate {
 
 @MainActor
 final class FoodAnalysisViewModelTests: XCTestCase {
+    func testLateInterruptedAnswerCannotClearNewerAttempt() async throws {
+        let service = GatedService()
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        let first = Task { await model.analyze() }
+        for _ in 0..<1000 where service.pendingCount < 1 { await Task.yield() }
+        XCTAssertEqual(service.pendingCount, 1)
+        let snapshot = try XCTUnwrap(model.currentOperation)
+        model.interruptAnalysis()
+        let retry = Task { await model.retryOperation() }
+        for _ in 0..<1000 where service.pendingCount < 2 { await Task.yield() }
+        XCTAssertEqual(service.pendingCount, 2)
+        let retryToken = model.currentRequestToken
+        service.resume(with: makeEstimate())
+        await first.value
+        XCTAssertTrue(model.isAnalyzing)
+        XCTAssertEqual(model.currentRequestToken, retryToken)
+        XCTAssertNil(model.reviewSession)
+        XCTAssertEqual(service.operations, [snapshot, snapshot])
+        service.resume(with: makeEstimate())
+        await retry.value
+        XCTAssertFalse(model.isAnalyzing)
+        XCTAssertNotNil(model.reviewSession)
+    }
+
+    func testClosingPendingReviewKeepsUncertaintyAndNeverReopensIt() async throws {
+        let service = ReplacementService(analysisResults: [makeEstimate()])
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        await model.analyze()
+        let session = try XCTUnwrap(model.reviewSession)
+        session.correctionText = "half"
+        let refinement = Task { await session.refine() }
+        for _ in 0..<1000 where !service.isRefinementWaiting { await Task.yield() }
+        XCTAssertTrue(service.isRefinementWaiting)
+        model.closeReviewSession()
+        model.descriptionText = "changed"
+        XCTAssertTrue(model.requiresNewOperationConfirmation)
+        XCTAssertNil(session.currentOperation)
+        XCTAssertFalse(session.canConfirmCurrentDraft)
+        await model.analyze()
+        XCTAssertNil(model.reviewSession)
+        service.completeRefinement(with: makeEstimate())
+        await refinement.value
+        XCTAssertNil(model.reviewSession)
+        XCTAssertEqual(session.successfulRefinementCount, 0)
+    }
+
+    func testAuthFailureOnRetryDoesNotEraseEarlierUncertainty() async throws {
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        await model.analyze()
+        let original = try XCTUnwrap(model.currentOperation)
+        service.result = .failure(FoodAnalysisError.authenticationRequired)
+        await model.retryOperation()
+        XCTAssertEqual(service.operations, [original, original])
+        XCTAssertTrue(model.requiresNewOperationConfirmation)
+        model.descriptionText = "changed"
+        await model.analyze()
+        XCTAssertEqual(service.operations.count, 2)
+        await model.analyze(confirmNewOperation: true)
+        XCTAssertNotEqual(model.currentOperation?.id, original.id)
+        XCTAssertFalse(model.requiresNewOperationConfirmation)
+    }
+
+    func testTimeoutRetryRetainsOperationAndChangedInputRequiresConfirmedReplacement() async throws {
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        await model.analyze()
+        let original = try XCTUnwrap(model.currentOperation)
+        XCTAssertEqual(service.callCount, 1)
+        XCTAssertTrue(model.requiresNewOperationConfirmation)
+        await model.retryOperation()
+        XCTAssertEqual(service.operations, [original, original])
+        model.descriptionText = "changed"
+        await model.analyze()
+        XCTAssertEqual(service.callCount, 2)
+        await model.analyze(confirmNewOperation: true)
+        XCTAssertNotEqual(model.currentOperation?.id, original.id)
+        XCTAssertEqual(service.operations.last?.input, .text("changed"))
+    }
+
+    func testImageRetryKeepsEncodedBytes() async throws {
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let model = FoodAnalysisViewModel(service: service)
+        model.setPickedImage(rawData: makeTestJPEGData())
+        await model.analyze()
+        await model.retryOperation()
+        XCTAssertEqual(service.operations.count, 2)
+        XCTAssertEqual(service.operations.first, service.operations.last)
+    }
+
+    func testInterruptIgnoresLateAnswerAndRestartDoesNotResume() async throws {
+        let service = GatedService()
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        let task = Task { await model.analyze() }
+        for _ in 0..<100 where service.callCount == 0 { await Task.yield() }
+        let original = try XCTUnwrap(model.currentOperation)
+        model.interruptAnalysis()
+        XCTAssertEqual(model.currentOperation, original)
+        XCTAssertEqual(model.lastError, .operationInterrupted)
+        service.resume(with: makeEstimate())
+        await task.value
+        XCTAssertNil(model.reviewSession)
+        XCTAssertEqual(service.callCount, 1)
+        let restarted = FoodAnalysisViewModel(service: service)
+        XCTAssertNil(restarted.currentOperation)
+        XCTAssertEqual(restarted.descriptionText, "")
+        XCTAssertEqual(service.callCount, 1)
+    }
+
+    func testRapidSecondTapAfterSuccessDoesNotStartAnotherOperation() async {
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        await model.analyze()
+        await model.analyze()
+        XCTAssertEqual(service.callCount, 1)
+        model.descriptionText = "changed"
+        await model.analyze()
+        XCTAssertEqual(service.callCount, 2)
+        XCTAssertNotEqual(service.operations[0].id, service.operations[1].id)
+    }
+
+    func testConsumedAndExpiredOperationsAreNotRetriedOrReplaced() async {
+        for error in [FoodAnalysisError.operationConsumed, .operationRequired, .operationConflict] {
+            let service = StubService(result: .failure(error))
+            let model = FoodAnalysisViewModel(service: service)
+            model.descriptionText = "synthetic"
+            await model.analyze()
+            let original = model.currentOperation
+            await model.analyze()
+            await model.retryOperation()
+            XCTAssertEqual(service.callCount, 1)
+            XCTAssertEqual(model.currentOperation, original)
+            XCTAssertTrue(model.requiresNewOperationConfirmation)
+        }
+    }
+
     func testAnalyzeIgnoresBlankDescription() async {
         let service = StubService(result: .success(makeEstimate()))
         let viewModel = FoodAnalysisViewModel(service: service)
@@ -162,7 +332,8 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         let oldSession = try! XCTUnwrap(viewModel.reviewSession)
         oldSession.correctionText = "Nur die Hälfte"
         let refinement = Task { await oldSession.refine() }
-        for _ in 0..<100 where !oldSession.isRefining { await Task.yield() }
+        for _ in 0..<1000 where !service.isRefinementWaiting { await Task.yield() }
+        XCTAssertTrue(service.isRefinementWaiting)
 
         viewModel.descriptionText = "Eine Banane"
         await viewModel.analyze()
@@ -204,7 +375,8 @@ final class FoodAnalysisViewModelTests: XCTestCase {
 
         // Let the first call reach its suspension point (the gated network
         // call) before attempting a duplicate submission.
-        for _ in 0..<5 { await Task.yield() }
+        for _ in 0..<1000 where service.pendingCount == 0 { await Task.yield() }
+        XCTAssertEqual(service.pendingCount, 1)
         XCTAssertTrue(viewModel.isAnalyzing)
 
         await viewModel.analyze()  // must be a no-op: isAnalyzing is already true

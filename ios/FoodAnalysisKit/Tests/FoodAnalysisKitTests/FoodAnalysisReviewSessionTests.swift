@@ -4,6 +4,14 @@ import XCTest
 
 @MainActor
 private final class RefinementStubService: FoodAnalysisServicing {
+    private(set) var operations: [FoodAnalysisOperation] = []
+
+    func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate {
+        operations.append(operation)
+        guard case .refinement(let request) = operation.input else { fatalError("Expected refinement") }
+        return try await refine(request: request)
+    }
+
     var results: [Result<FoodAnalysisResponseDTO.Estimate, Error>]
     private(set) var requests: [FoodAnalysisRefinementRequestDTO] = []
 
@@ -29,8 +37,17 @@ private final class RefinementStubService: FoodAnalysisServicing {
 
 @MainActor
 private final class GatedRefinementService: FoodAnalysisServicing {
+    private(set) var operations: [FoodAnalysisOperation] = []
+
+    func perform(operation: FoodAnalysisOperation) async throws -> FoodAnalysisResponseDTO.Estimate {
+        operations.append(operation)
+        guard case .refinement(let request) = operation.input else { fatalError("Expected refinement") }
+        return try await refine(request: request)
+    }
+
     private(set) var requests: [FoodAnalysisRefinementRequestDTO] = []
     private var continuation: CheckedContinuation<FoodAnalysisResponseDTO.Estimate, Error>?
+    var isWaiting: Bool { continuation != nil }
 
     func analyze(description: String) async throws -> FoodAnalysisResponseDTO.Estimate {
         fatalError("Initial analysis is not used by these session tests")
@@ -75,6 +92,82 @@ private func sessionEstimate(name: String = "Reis", calories: Double = 620) -> F
 
 @MainActor
 final class FoodAnalysisReviewSessionTests: XCTestCase {
+    func testAuthFailureOnRetryDoesNotEraseEarlierUncertainty() async throws {
+        let service = RefinementStubService(results: [.failure(FoodAnalysisError.timeout),
+            .failure(FoodAnalysisError.authenticationRequired), .success(sessionEstimate())])
+        let session = makeSession(service: service)
+        session.correctionText = "half"
+        await session.refine()
+        let original = try XCTUnwrap(session.currentOperation)
+        await session.retryOperation()
+        XCTAssertEqual(service.operations, [original, original])
+        XCTAssertTrue(session.requiresNewOperationConfirmation)
+        session.correctionText = "quarter"
+        await session.refine()
+        XCTAssertEqual(service.operations.count, 2)
+        await session.refine(confirmNewOperation: true)
+        XCTAssertNotEqual(service.operations.last?.id, original.id)
+        XCTAssertFalse(session.requiresNewOperationConfirmation)
+    }
+
+    func testChangedRefinementAfterUnknownNeedsConfirmationAndNewID() async throws {
+        let service = RefinementStubService(results: [.failure(FoodAnalysisError.timeout), .success(sessionEstimate())])
+        let session = makeSession(service: service)
+        session.correctionText = "half"
+        await session.refine()
+        let original = try XCTUnwrap(session.currentOperation)
+        session.correctionText = "quarter"
+        session.currentDraft.calories = "300"
+        XCTAssertFalse(session.canRetryOperation)
+        await session.refine()
+        XCTAssertEqual(service.operations.count, 1)
+        XCTAssertEqual(session.currentOperation, original)
+        await session.refine(confirmNewOperation: true)
+        XCTAssertEqual(service.operations.count, 2)
+        XCTAssertNotEqual(service.operations[1].id, original.id)
+        XCTAssertEqual(service.requests.last?.refinement.correctionText, "quarter")
+        XCTAssertEqual(service.requests.last?.refinement.currentEstimate.calories, 300)
+        XCTAssertEqual(session.successfulRefinementCount, 1)
+    }
+
+    func testLocalInterruptKeepsSnapshotAndIgnoresLateRefinement() async throws {
+        let service = GatedRefinementService()
+        let session = makeSession(service: service)
+        session.correctionText = "half"
+        let first = Task { await session.refine() }
+        await waitUntil { service.isWaiting }
+        let snapshot = try XCTUnwrap(session.currentOperation)
+        session.interruptRefinement()
+        XCTAssertEqual(session.lastError, .operationInterrupted)
+        XCTAssertEqual(session.currentOperation, snapshot)
+        XCTAssertEqual(service.operations.count, 1)
+        service.succeed(with: sessionEstimate(name: "late"))
+        await first.value
+        XCTAssertEqual(session.currentEstimate.foodName, "Reis")
+        XCTAssertEqual(session.successfulRefinementCount, 0)
+        let retry = Task { await session.retryOperation() }
+        await waitUntil { service.isWaiting }
+        XCTAssertEqual(service.operations, [snapshot, snapshot])
+        service.succeed(with: sessionEstimate(name: "accepted"))
+        await retry.value
+        XCTAssertEqual(session.successfulRefinementCount, 1)
+    }
+
+    func testConsumedRefinementRequiresNewExplicitAction() async {
+        let service = RefinementStubService(results: [.failure(FoodAnalysisError.operationConsumed)])
+        let session = makeSession(service: service)
+        session.correctionText = "half"
+        await session.refine()
+        let original = session.currentOperation
+        await session.refine()
+        await session.retryOperation()
+        XCTAssertEqual(service.operations.count, 1)
+        XCTAssertEqual(session.currentOperation, original)
+        XCTAssertTrue(session.requiresNewOperationConfirmation)
+        XCTAssertTrue(session.canConfirmCurrentDraft)
+        XCTAssertEqual(session.successfulRefinementCount, 0)
+    }
+
     func testRefinementButtonEligibilityForEmptyValidTooLongAndInvalidDraft() {
         let service = RefinementStubService(results: [])
         let session = makeSession(service: service)
@@ -104,7 +197,7 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         session.correctionText = "Nur die Hälfte"
 
         let task = Task { await session.refine() }
-        await waitUntil { session.isRefining }
+        await waitUntil { service.isWaiting }
 
         XCTAssertFalse(session.canRefine)
         XCTAssertFalse(session.canConfirmCurrentDraft)
@@ -136,6 +229,7 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         await session.refine()
 
         XCTAssertEqual(service.requests.count, 3)
+        XCTAssertEqual(Set(service.operations.map(\.id)).count, 3)
         XCTAssertEqual(session.successfulRefinementCount, 3)
         XCTAssertNil(session.nextIteration)
         XCTAssertTrue(session.isRefinementLimitReached)
@@ -150,7 +244,7 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         session.correctionText = "Nur die Hälfte"
 
         let first = Task { await session.refine() }
-        await waitUntil { session.isRefining }
+        await waitUntil { service.isWaiting }
         let firstToken = session.currentRequestToken
         service.fail(with: FoodAnalysisError.timeout)
         await first.value
@@ -161,13 +255,14 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         XCTAssertNotNil(session.refinementErrorMessage)
 
         let retry = Task { await session.refine() }
-        await waitUntil { session.isRefining }
+        await waitUntil { service.isWaiting }
         let retryToken = session.currentRequestToken
         XCTAssertNotEqual(retryToken, firstToken)
         service.succeed(with: sessionEstimate(name: "Halbe Portion", calories: 310))
         await retry.value
 
         XCTAssertEqual(service.requests[1].refinement.iteration, 1)
+        XCTAssertEqual(service.operations[0], service.operations[1])
         XCTAssertEqual(session.successfulRefinementCount, 1)
         XCTAssertEqual(session.correctionText, "")
         XCTAssertNil(session.refinementErrorMessage)
@@ -179,7 +274,7 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         session.correctionText = "Nur die Hälfte"
 
         let first = Task { await session.refine() }
-        await waitUntil { session.isRefining }
+        await waitUntil { service.isWaiting }
         await session.refine()
 
         XCTAssertEqual(service.requests.count, 1)
@@ -278,7 +373,7 @@ final class FoodAnalysisReviewSessionTests: XCTestCase {
         session.correctionText = "Nur die Hälfte"
 
         let task = Task { await session.refine() }
-        await waitUntil { session.currentRequestToken != nil }
+        await waitUntil { service.isWaiting }
         session.close()
         service.succeed(with: sessionEstimate(name: "Verspätet", calories: 1))
         await task.value

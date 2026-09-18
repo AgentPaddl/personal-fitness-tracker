@@ -20,6 +20,61 @@ private struct StubTokenProvider: AccessTokenProviding {
     }
 }
 
+private actor RotatingTokenProvider: AccessTokenProviding {
+    private var count = 0
+    func acquireAccessToken() async throws -> String {
+        count += 1
+        return "synthetic-token-\(count)"
+    }
+}
+
+@MainActor
+private final class DeferredAccountProvider: AccountAccessTokenProviding {
+    private var continuation: CheckedContinuation<AccountAccessToken, Never>?
+    var isWaiting: Bool { continuation != nil }
+
+    func acquireAccessToken() async throws -> String {
+        try await acquireAccountAccessToken().token
+    }
+
+    func acquireAccountAccessToken() async throws -> AccountAccessToken {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func completeLogin() {
+        continuation?.resume(returning: AccountAccessToken(token: "synthetic-token", accountIdentifier: "account-a"))
+        continuation = nil
+    }
+}
+
+private actor SwitchingAccountProvider: AccountAccessTokenProviding {
+    private var count = 0
+
+    func acquireAccessToken() async throws -> String {
+        try await acquireAccountAccessToken().token
+    }
+
+    func acquireAccountAccessToken() async throws -> AccountAccessToken {
+        count += 1
+        return AccountAccessToken(token: "synthetic-token-\(count)", accountIdentifier: count <= 2 ? "account-a" : "account-b")
+    }
+}
+
+private actor RecordingPerformer: URLRequestPerforming {
+    private(set) var requests: [URLRequest] = []
+    let firstStatus: Int
+
+    init(firstStatus: Int) { self.firstStatus = firstStatus }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        requests.append(request)
+        if requests.count == 1 && firstStatus == 0 { throw URLError(.timedOut) }
+        let status = requests.count == 1 ? firstStatus : 200
+        let data = Data(#"{"estimate":{"food_name":"synthetic","calories":1,"protein_grams":0,"carbohydrate_grams":0,"fat_grams":0,"confidence":0.5,"warnings":[]}}"#.utf8)
+        return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
 private func assertThrowsFoodAnalysisError(
     _ expression: @autoclosure () async throws -> FoodAnalysisResponseDTO.Estimate,
     _ expected: FoodAnalysisError,
@@ -38,6 +93,138 @@ private func assertThrowsFoodAnalysisError(
 
 final class FoodAnalysisServiceTests: XCTestCase {
     private let baseURL = URL(string: "https://example.test/api")!
+
+    @MainActor
+    func testDelayedLoginCompletionPreservesSnapshotUnlessExplicitlyCancelled() async throws {
+        for cancelExplicitly in [false, true] {
+            let provider = DeferredAccountProvider()
+            let performer = RecordingPerformer(firstStatus: 200)
+            let service = FoodAnalysisService(baseURL: baseURL, session: performer, tokenProvider: provider)
+            let operation = try FoodAnalysisOperation(input: .text("synthetic"))
+            let task = Task { try await service.perform(operation: operation) }
+            for _ in 0..<1000 where !provider.isWaiting { await Task.yield() }
+            XCTAssertTrue(provider.isWaiting)
+            let beforeLogin = await performer.requests
+            XCTAssertTrue(beforeLogin.isEmpty)
+            if cancelExplicitly { task.cancel() }
+            provider.completeLogin()
+            do {
+                _ = try await task.value
+                XCTAssertFalse(cancelExplicitly)
+            } catch is CancellationError {
+                XCTAssertTrue(cancelExplicitly)
+            }
+            let sent = await performer.requests
+            XCTAssertEqual(sent.count, cancelExplicitly ? 0 : 1)
+            if !cancelExplicitly {
+                XCTAssertEqual(sent.first?.httpBody, operation.body)
+                XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "X-Operation-Id"), operation.id.uuidString.lowercased())
+            }
+        }
+    }
+
+    func testRenewalRetainsAccountButAccountSwitchCannotRedispatchExistingOperation() async throws {
+        let performer = RecordingPerformer(firstStatus: 0)
+        let service = FoodAnalysisService(baseURL: baseURL, session: performer, tokenProvider: SwitchingAccountProvider())
+        let operation = try FoodAnalysisOperation(input: .text("synthetic"))
+        await assertThrowsFoodAnalysisError(try await service.perform(operation: operation), .timeout)
+        _ = try await service.perform(operation: operation)
+        await assertThrowsFoodAnalysisError(try await service.perform(operation: operation), .operationAccountChanged)
+        let sent = await performer.requests
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent[0].httpBody, sent[1].httpBody)
+        _ = try await service.perform(operation: FoodAnalysisOperation(input: operation.input))
+        let afterNewOperation = await performer.requests
+        XCTAssertEqual(afterNewOperation.count, 3)
+        XCTAssertNotEqual(sent[0].value(forHTTPHeaderField: "X-Operation-Id"), afterNewOperation[2].value(forHTTPHeaderField: "X-Operation-Id"))
+    }
+
+    func testExplicitRetryAfterTimeoutOrTokenRenewalKeepsExactIDAndPayload() async throws {
+        let refinement = FoodAnalysisRefinementRequestDTO(foodDescription: "synthetic", refinement: .init(
+            correctionText: "half", currentEstimate: .init(foodName: "synthetic", calories: 1, proteinGrams: 0,
+                carbohydrateGrams: 0, fatGrams: 0, confidence: 0.5, warnings: [], assumptions: []),
+            sourceKind: .image, iteration: 1))
+        let inputs: [FoodAnalysisOperation.Input] = [.text("synthetic"),
+            .image(data: Data([1, 2, 3]), mimeType: "image/jpeg", description: "synthetic"), .refinement(refinement)]
+        for input in inputs {
+            for status in [0, 401] {
+                let performer = RecordingPerformer(firstStatus: status)
+                let service = FoodAnalysisService(baseURL: baseURL, session: performer, tokenProvider: RotatingTokenProvider())
+                let operation = try FoodAnalysisOperation(input: input)
+                await assertThrowsFoodAnalysisError(try await service.perform(operation: operation), status == 0 ? .timeout : .unauthorized)
+                let afterFailure = await performer.requests
+                XCTAssertEqual(afterFailure.count, 1)
+                _ = try await service.perform(operation: operation)
+                let sent = await performer.requests
+                XCTAssertEqual(sent.count, 2)
+                XCTAssertEqual(sent[0].httpBody, sent[1].httpBody)
+                XCTAssertEqual(sent[0].value(forHTTPHeaderField: "Content-Type"), sent[1].value(forHTTPHeaderField: "Content-Type"))
+                XCTAssertEqual(sent[0].value(forHTTPHeaderField: "X-Operation-Id"), operation.id.uuidString.lowercased())
+                XCTAssertEqual(sent[0].value(forHTTPHeaderField: "X-Operation-Id"), sent[1].value(forHTTPHeaderField: "X-Operation-Id"))
+                XCTAssertEqual(sent[0].value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-token-1")
+                XCTAssertEqual(sent[1].value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-token-2")
+                XCTAssertNil(sent[0].value(forHTTPHeaderField: "X-Request-Id"))
+                if case .refinement = input {
+                    let json = try XCTUnwrap(JSONSerialization.jsonObject(with: operation.body) as? [String: Any])
+                    XCTAssertNil(json["image"])
+                    XCTAssertEqual(operation.contentType, "application/json")
+                }
+            }
+        }
+    }
+
+    func testPilotPublicStatesMapWithoutTrustingBackendMessages() {
+        let states: [(String, Int, FoodAnalysisError)] = [
+            ("operation_consumed", 409, .operationConsumed), ("operation_conflict", 409, .operationConflict),
+            ("operation_required", 400, .operationRequired), ("pilot_unavailable", 503, .pilotUnavailable),
+            ("pilot_forbidden", 403, .pilotForbidden), ("pilot_limit", 429, .pilotLimit), ("pilot_input", 413, .pilotInput)
+        ]
+        for (code, status, expected) in states {
+            let body = Data("{\"error\":{\"code\":\"\(code)\",\"message\":\"private-marker\"}}".utf8)
+            let error = FoodAnalysisService.mapErrorResponse(statusCode: status, data: body)
+            XCTAssertEqual(error, expected)
+            XCTAssertFalse(error.userMessage.contains("private-marker"))
+            XCTAssertFalse(error.userMessage.isEmpty)
+        }
+        XCTAssertFalse(FoodAnalysisError.operationConsumed.canRetryOperation)
+        XCTAssertFalse(FoodAnalysisError.operationRequired.canRetryOperation)
+        XCTAssertFalse(FoodAnalysisError.operationConflict.canRetryOperation)
+        XCTAssertEqual(FoodAnalysisService.mapURLError(URLError(.cancelled)), .operationInterrupted)
+    }
+
+    func testInvalidUUIDv7TimestampFailsBeforeSending() {
+        for seconds in [-1.0, Double.infinity, Double.nan, 281_474_976_710.656] {
+            XCTAssertThrowsError(try FoodAnalysisOperation(input: .text("synthetic"), now: Date(timeIntervalSince1970: seconds)))
+        }
+    }
+
+    func testOperationUUIDv7ContractAndUniqueRandomness() throws {
+        let now = Date(timeIntervalSince1970: 1_789_646_400.125)
+        var identifiers = Set<UUID>()
+        for _ in 0..<100 {
+            let operation = try FoodAnalysisOperation(input: .text("synthetic"), now: now)
+            let bytes = operation.id.uuid
+            XCTAssertEqual(bytes.6 >> 4, 7)
+            XCTAssertEqual(bytes.8 >> 6, 2)
+            let hex = operation.id.uuidString.replacingOccurrences(of: "-", with: "")
+            XCTAssertEqual(UInt64(hex.prefix(12), radix: 16), 1_789_646_400_125)
+            identifiers.insert(operation.id)
+        }
+        XCTAssertEqual(identifiers.count, 100)
+        XCTAssertEqual(FoodAnalysisOperation.headerName, "X-Operation-Id")
+    }
+
+    func testOperationSnapshotKeepsImageBodyAndBoundary() throws {
+        var image = Data([1, 2, 3])
+        let operation = try FoodAnalysisOperation(input: .image(data: image, mimeType: "image/jpeg", description: "synthetic"))
+        let repeated = operation
+        image.append(4)
+        XCTAssertEqual(operation, repeated)
+        XCTAssertEqual(operation.input, .image(data: Data([1, 2, 3]), mimeType: "image/jpeg", description: "synthetic"))
+        XCTAssertEqual(operation.body, repeated.body)
+        XCTAssertEqual(operation.contentType, repeated.contentType)
+        XCTAssertNotEqual(operation.id, try FoodAnalysisOperation(input: operation.input).id)
+    }
 
     func testSuccessfulAnalysisReturnsEstimateAndSendsExpectedRequest() async throws {
         let baseURL = baseURL

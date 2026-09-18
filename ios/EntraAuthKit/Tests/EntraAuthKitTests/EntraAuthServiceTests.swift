@@ -8,6 +8,39 @@ import XCTest
 final class EntraAuthServiceTests: XCTestCase {
     private let scope = "api://backend-app-id/FoodAnalysis.Access"
 
+    func test_accountCredentialUsesActualSilentAccount() async throws {
+        for selected: String? in [nil, "cached-account"] {
+            let acquirer = FakeTokenAcquirer(
+                resolveResult: .success(.single("cached-account")),
+                accountExistsResults: ["cached-account": .success(true)],
+                silentResult: .success("synthetic-token")
+            )
+            let service = makeService(acquirer: acquirer, accountStore: FakeAccountStore(initialSelectedIdentifier: selected))
+            let credential = try await service.acquireAccountAccessToken()
+            XCTAssertEqual(credential.token, "synthetic-token")
+            XCTAssertEqual(credential.accountIdentifier, "cached-account")
+            XCTAssertEqual(acquirer.silentCallCount, 1)
+            XCTAssertEqual(acquirer.interactiveCallCount, 0)
+        }
+    }
+
+    func test_accountCredentialReportsInteractiveSwitchInsteadOfPreviousAccount() async throws {
+        for selected: String? in [nil, "old-account"] {
+            let acquirer = FakeTokenAcquirer(
+                resolveResult: .success(.single("old-account")),
+                accountExistsResults: ["old-account": .success(true)],
+                silentResult: .failure(EntraTokenError.interactionRequired),
+                interactiveResult: .success(EntraInteractiveResult(accessToken: "synthetic-token", accountIdentifier: "new-account"))
+            )
+            let store = FakeAccountStore(initialSelectedIdentifier: selected)
+            let service = makeService(acquirer: acquirer, accountStore: store)
+            let credential = try await service.acquireAccountAccessToken()
+            XCTAssertEqual(credential.token, "synthetic-token")
+            XCTAssertEqual(credential.accountIdentifier, "new-account")
+            XCTAssertEqual(store.selectedIdentifier, "new-account")
+        }
+    }
+
     private func makeService(
         acquirer: FakeTokenAcquirer, accountStore: FakeAccountStore = FakeAccountStore()
     ) -> EntraAuthService {

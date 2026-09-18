@@ -10,12 +10,15 @@ import FoodAnalysisKit
 struct FoodAnalysisReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
 
     @ObservedObject var session: FoodAnalysisReviewSession
     var onSaved: (() -> Void)?
 
     @State private var isSaving = false
     @State private var saveErrorMessage: String?
+    @State private var confirmsNewRefinement = false
+    @State private var confirmsRefinementRetry = false
 
     private var draft: FoodAnalysisReviewDraft {
         get { session.currentDraft }
@@ -135,8 +138,10 @@ struct FoodAnalysisReviewView: View {
                     }
 
                     Button {
-                        Task {
-                            await session.refine()
+                        if session.requiresNewOperationConfirmation {
+                            confirmsNewRefinement = true
+                        } else {
+                            Task { await session.refine() }
                         }
                     } label: {
                         if session.isRefining {
@@ -150,6 +155,18 @@ struct FoodAnalysisReviewView: View {
                     }
                     .disabled(!session.canRefine || isSaving)
                     .accessibilityLabel("Schätzung neu berechnen")
+
+                    if session.canRetryOperation {
+                        Button("Dieselbe Anfrage erneut senden …") {
+                            confirmsRefinementRetry = true
+                        }
+                        .disabled(isSaving)
+                    }
+                    if session.isRefining {
+                        Button("Anfrage abbrechen", role: .cancel) {
+                            session.interruptRefinement()
+                        }
+                    }
                 }
 
                 if let saveErrorMessage {
@@ -166,6 +183,7 @@ struct FoodAnalysisReviewView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Abbrechen") {
+                        session.close()
                         dismiss()
                     }
                     .disabled(isSaving)
@@ -180,6 +198,28 @@ struct FoodAnalysisReviewView: View {
                         }
                         .disabled(!session.canConfirmCurrentDraft)
                     }
+                }
+            }
+            .confirmationDialog("Neue Berechnung starten?", isPresented: $confirmsNewRefinement, titleVisibility: .visible) {
+                Button("Neue Berechnung starten") {
+                    Task { await session.refine(confirmNewOperation: true) }
+                }
+                Button("Abbrechen", role: .cancel) {}
+            } message: {
+                Text("Der vorige Vorgang könnte beim KI-Anbieter bereits Ressourcen verbraucht haben. Eine neue Berechnung kann dort erneut Verbrauch und Kosten verursachen und stellt kein verlorenes Ergebnis wieder her.")
+            }
+            .confirmationDialog("Dieselbe Anfrage erneut senden?", isPresented: $confirmsRefinementRetry, titleVisibility: .visible) {
+                Button("Mit derselben Vorgangs-ID senden") {
+                    Task { await session.retryOperation() }
+                }
+                Button("Abbrechen", role: .cancel) {}
+            } message: {
+                Text("Inhalt und Vorgangs-ID bleiben gleich. Bereits angenommene Ergebnisse können nicht abgerufen werden. Ohne aktivierten serverseitigen Wiederholungsschutz ist erneuter Verbrauch beim KI-Anbieter möglich.")
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background {
+                    confirmsNewRefinement = false
+                    confirmsRefinementRetry = false
                 }
             }
         }
