@@ -112,6 +112,19 @@ aggregate checkpoint carrying all earlier attempts, reserves and ancillary costs
 
 ## Completed screening: continuation preparation
 
+The final authorized seven-case attempt stopped at fresh Storage Retail-price
+preflight (long filter HTTP 404; shorter filter HTTP 400, detailed cause not
+established). No model resource, new run, test partition or case claim was created.
+Its unpublished second-child draft was archived privately and reversed; the
+published one-child continuation remains closed and must not be resumed.
+The [final assessment](../../docs/benchmark-review-2026-09-18.md#final-assessment-closed-incomplete-screening)
+is conditional suitability after explicit corrections, not current pilot clearance.
+Nine responses remain available; T5/R2 were not repeated and seven cases are missing.
+Final counter: 1,209 requests / 33,168 units. Both holds and the original EUR 10
+authorization remain unchanged. Retained Storage/Table and review roles require
+cleanup review no earlier than 2026-10-19 17:41:02 UTC; no automatic deletion job
+exists, and the historical archive gap still prevents blind destruction.
+
 The following preparation history is superseded operationally by the closed
 [authorized continuation outcome](../../docs/benchmark-review-2026-09-18.md#authorized-continuation-outcome).
 Five new calls succeeded; R2 stopped on a local `counter_locked` claim, without

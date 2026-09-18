@@ -1,5 +1,127 @@
 # Screening Review And Authorized Continuation
 
+## Final Assessment: Closed, Incomplete Screening
+
+**Recommendation: suitable after the specific corrections below**
+(`geeignet nach konkret benannten Korrekturen`). This is not current clearance
+for a two-person pilot, a production recommendation or evidence of population
+accuracy. It supersedes the earlier provisional-candidate recommendation.
+
+### Final Attempt and Stop
+
+The complete published repair diff at `4254596` matched its private review hash;
+the branch was clean and synchronized. No repair changes were recommitted.
+The requested seven-case final round was prepared under the same EUR 10 stop
+threshold, preserving both closed runs and both holds. Its arithmetic maximum
+was EUR 5.81518775 including seven new reserves and the full ancillary reserve,
+but the required fresh Storage price verification **did not complete**.
+
+The existing continuation is deliberately single-child and already closed. A
+fixed second-child handoff was drafted using the same Parent-CAS implementation
+and passed offline tests, without reopening either predecessor. It was never
+adopted or tested against live Table storage. Its unpublished diff was archived
+privately and reversed exactly after the preflight stop; no unvalidated execution
+path was published, no start markers were deleted and no old artifacts overwritten.
+
+Three scoped ARM reads passed the group, Storage and model-absence checks; the
+model Retail API request returned HTTP 200 with three meters. The 3,663-character
+Storage meter filter returned HTTP 404. Bounded diagnostic requests reproduced
+that split; the first shortened filter (1,839 characters) returned HTTP 400.
+The shorter response body was not retained before the assertion, so its detailed
+cause is not established. This may concern the query itself: it is **not proof
+of a general Azure outage or of a model/SDK defect**, nor was a URL-length cause
+proven. No further price attempts or model provisioning followed. The fresh
+price gate remained closed under the requested unexplained-infrastructure stop
+rule; the original cost authorization was not replaced or increased.
+
+**Zero new model calls, claims, test partitions or resource changes.** No third
+run was created, so there was no new run to close. The seven cases remain
+unstarted: P3, P4, R3, R4, P5, P6 and T6. T5 and R2 were not repeated. Both old
+runs remain closed. The requested full-matrix execution could not be completed;
+this is the final assessment of the nine responses actually available.
+
+### Quality of the Nine Returned Answers
+
+| Area | Evidence and limitations |
+| --- | --- |
+| Arithmetic | T1 is exact. **T2 remains a failure:** protein 20.2 g instead of 13.2 g (+7 g); calories 276 instead of 272. Confidence 0.98 and no warning do not mitigate it. Across T1/T2/L1/L2/R1, 4/5 cases and 19/20 fields meet preregistered tolerance; 18/20 fields are exact. T2 calories pass tolerance but are not exact. |
+| Corrections | R1 halves all four values exactly. There is no returned evidence for additive correction, repeated correction or image-origin correction without a new image: R2 failed, R3/R4 remain unstarted. |
+| Labels | L1/L2 match all eight reference values exactly and distinguish per-100-g from per-50-g-portion scaling. These are two clear synthetic labels, not proof of robustness on difficult real packaging. L2, like T2, switches to English despite German input. |
+| Photos | P1 recognizes rice. P2 recognizes flakes, berries and yogurt-like topping and explicitly excludes the separate glass. Visual inspection agrees with those broad descriptions. Portion and recipe assumptions remain unverified; there is no weighed calorie or macro ground truth. Confidence 0.90/0.84 is not calibrated accuracy. Hard/cropped photos P3/P4 are missing. |
+| Ambiguity | T3 discloses assumed portions and unknown yogurt composition (confidence 0.55). T4 discloses conflicting weights and cooked/dry ambiguity (0.42), but still supplies a single assumed portion and total. Neither is a measured quantity. |
+| Unsuitable/adversarial inputs | No positive evidence: P5 non-food abstention, P6 image instruction handling and T6 text injection remain unstarted. Schema-valid ordinary responses do not establish these behaviors. |
+
+This is a qualitative coding-assistant inspection of preserved public fixtures
+and outputs, not a new model/API evaluation. No human scores or usable flags were
+fabricated. Nine schema-valid answers, two technical failures and seven unstarted
+cases must not be represented as eighteen evaluated answers or a quality pass rate.
+
+### Required Corrections Before a Pilot
+
+1. Compute known nutrition deterministically from source-bound amounts and values,
+  with Decimal arithmetic, explicit g/kg and serving units, component summation
+  and correction application exactly once. Keep T2's failed original result and
+  add regression checks rather than rewriting it as successful.
+2. Require user confirmation of uncertain portions, cooked/dry state and label
+  transcription before persistence. Keep assumptions separate from known facts;
+  do not present model confidence as calibrated probability. Preserve the user's
+  language consistently.
+3. Provide and validate an explicit no-food/insufficient-evidence outcome and
+  instruction-as-data handling. Missing abstention, injection, difficult-photo
+  and multi-step-correction coverage must pass independently before pilot entry;
+  the closed runs are not replay authorization.
+4. Resolve the price-preflight diagnostic and validate the closed-to-new-child
+  handoff under the shared counter and reserves before any later funded work.
+  Preserve zero automatic model retries and stop on unknown dispatch.
+
+These are future work conditions, not changes made to production or iOS. The
+small, unrepeated sample cannot support p95, calibrated confidence or general
+food-photo accuracy, even after those corrections are implemented.
+
+### Timing, Usage and Remaining Exposure
+
+| Type | n | Provider median, seconds | Recorded case-runner median, seconds |
+| --- | --- | --- | --- |
+| Text | 4 | 2.506 | 3.120 |
+| Photos | 2 | 3.485 | 4.208 |
+| Labels | 2 | 2.405 | 3.132 |
+| Correction | 1 | 1.974 | 2.728 |
+
+These are cold-process measurements. Provider duration and recorded runner
+duration are distinct: runner includes admission/accounting around generation,
+but excludes resource attestation, setup, scheduled spacing, the final finish
+write and cleanup. A comparable total wall-clock duration covering all of those
+steps was not recorded for every call; do not label the runner figure as complete
+end-to-end latency or estimate p95 from this sample.
+
+Recomputed actual known usage: **5,638 input / 1,252 output tokens**, zero cached
+input/reasoning tokens. At the pinned usage prices this is **USD 0.01084875**;
+it matches all nine recorded charges. T5/R2 have no measured usage and are not
+declared zero-cost. Keep **USD 0.2343 each** plus the complete **EUR 2 ancillary
+reserve**. The unchanged planning estimate is **EUR 2.86300775**, not a fresh
+all-rates verification or invoice. Posted billing remains unknown; no additional
+billing query was consumed and no new EUR 10 allowance was created.
+
+### Verified Closure and Cleanup
+
+Final verification used three scoped ARM reads and six fixed Table point reads.
+All six original/continuation control payloads matched the previous closed
+snapshot. Inventory and scoped-role results confirm no model account, deployment
+or model role; no deletion was necessary because none was recreated. The dedicated
+CLI profile was logged out and the absence of a local login confirmed.
+
+Remaining: isolated StorageV2/Standard_LRS account, MiniBenchmark Table, resource
+group, RG Reader and table-scoped Data Contributor; deployment/soft-delete metadata
+may remain. Counter: **1,209 requests / 33,168 weighted units**; normal headroom
+1,291 / 6,832 plus the protected 500 / 10,000 cleanup allowance. Private evidence
+and the aborted draft remain outside Git. No production or iOS code changed.
+
+**Cleanup review: 2026-10-19 17:41:02 UTC (19:41:02 Europe/Berlin), not earlier.**
+This is a review deadline, not a scheduled deletion: there is no cleanup job.
+Resolve the historical archive gap and uncertainty holds through documented
+reconciliation before destructive removal; never reset counters to satisfy the
+archive gate. Retention/cleanup remains charged to the same authorization.
+
 ## Counter lifecycle investigation from 9437833
 
 This separately authorized follow-up made **no model calls or resource changes**.
@@ -182,7 +304,8 @@ Snapshots, usage/results, failure/start markers, runtime archive and deletion
 receipts remain private outside Git. The old five-case/four-operation archive
 gate still blocks automatic destruction; do not alter evidence to satisfy it.
 
-Recommendation: keep GPT-5.4-mini as a **provisional candidate**, not a production
+Historical recommendation, superseded by the final assessment above: keep
+GPT-5.4-mini as a **provisional candidate**, not a production
 recommendation. Labels and one refinement are encouraging, but T2 demonstrates
 unreliable arithmetic, photo accuracy is unmeasured, and hard-photo, abstention,
 injection and later-refinement coverage is missing. Resolve counter contention
