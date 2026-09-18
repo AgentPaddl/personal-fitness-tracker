@@ -157,8 +157,6 @@ class TableRequestBudget:
     def __call__(self, request):
         try:
             return self._admit(request)
-        except BlockingIOError:
-            raise BenchmarkDiagnosticError("counter_locked") from None
         except OSError:
             raise BenchmarkDiagnosticError("counter_io") from None
         except UnicodeError:
@@ -172,24 +170,31 @@ class TableRequestBudget:
             descriptor = os.open(self.filename, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
             raise BenchmarkDiagnosticError("counter_io") from None
-        with os.fdopen(descriptor, "r+b") as output:
+        with os.fdopen(descriptor, "r+b", buffering=0) as output:
             info = os.fstat(output.fileno())
             if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
                     or info.st_nlink != 1 or info.st_uid != os.getuid()):
                 raise BenchmarkDiagnosticError("counter_integrity")
-            fcntl.flock(output, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            output.seek(0)
-            content = output.read(100001)
-            lines = content.decode().splitlines()
-            if (len(content) > 100000 or not content.endswith(b"\n") or not lines or lines[0] != self.binding
-                    or any(line not in {"1", "100", "1000"} for line in lines[1:])):
-                raise BenchmarkDiagnosticError("counter_integrity")
-            if len(lines) > self.max_requests or sum(map(int, lines[1:])) + units > self.max_units:
-                raise BenchmarkDiagnosticError("counter_limit")
-            output.write(f"{units}\n".encode())
-            output.flush()
-            os.fsync(output.fileno())
-            self._sync_directory()
+            try:
+                fcntl.flock(output, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise BenchmarkDiagnosticError("counter_locked") from None
+            try:
+                output.seek(0)
+                content = output.read(100001)
+                lines = content.decode().splitlines()
+                if (len(content) > 100000 or not content.endswith(b"\n") or not lines or lines[0] != self.binding
+                        or any(line not in {"1", "100", "1000"} for line in lines[1:])):
+                    raise BenchmarkDiagnosticError("counter_integrity")
+                if len(lines) > self.max_requests or sum(map(int, lines[1:])) + units > self.max_units:
+                    raise BenchmarkDiagnosticError("counter_limit")
+                entry = f"{units}\n".encode()
+                if output.write(entry) != len(entry):
+                    raise BenchmarkDiagnosticError("counter_io")
+                os.fsync(output.fileno())
+                self._sync_directory()
+            finally:
+                fcntl.flock(output, fcntl.LOCK_UN)
 
 
 class AzureBenchmark:

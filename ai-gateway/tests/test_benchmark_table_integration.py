@@ -25,6 +25,202 @@ pytestmark = pytest.mark.skipif(os.environ.get("RUN_BENCHMARK_TABLE_TESTS") != "
                                 reason="Requires separate approval for real Table writes, no model calls")
 
 
+COUNTER_SCENARIOS = ("sequence18", "cancel_before_reserve", "lost_reserve_ack", "lost_dispatch_ack",
+                     "unknown_dispatch", "lost_settle_ack")
+
+
+async def exercise_counter_scenario(first, second, config, scenario, keys):
+    from tests.test_pilot import operation
+
+    clock = [time.time()]
+    config = config.model_copy(update={"created_at": int(clock[0]) - 1, "expires_at": int(clock[0]) + 3600})
+    _, cases = load_cases()
+
+    def coordinator(store):
+        control = make_coordinator(store, config)
+        control.clock = lambda: clock[0]
+        return control
+
+    owner, competitor = coordinator(first), coordinator(second)
+    metadata = GenerationMetadata("azure_openai", "mini-bench", GPT_54_MINI.price.model,
+        None, 1, "success", TokenUsage(100, 20, 0, 0), price_version=GPT_54_MINI.price_version,
+        profile_id=GPT_54_MINI.identifier, service_tier="default")
+    if scenario == "sequence18":
+        keys.add("ledger")
+        await first.commit([("ledger", owner.initial_ledger(), None)])
+        ledger, stale = await first.read("ledger")
+        await first.commit([("ledger", ledger, stale)])
+        with pytest.raises(Conflict):
+            await second.commit([("ledger", ledger, stale)])
+        request = cases[0][1]
+        fingerprint = digest(owner.secret, "request", asdict(request))
+        for sequence in range(18):
+            identifier = operation(clock[0], sequence + 1)
+            key = "op-" + digest(owner.secret, "operation", [config.identity, identifier])
+            keys.add(key)
+            arguments = (config.identity, identifier, fingerprint, owner.bound(request), owner.admission(request))
+            if sequence == 5:
+                outcomes = await asyncio.gather(owner.reserve(*arguments), competitor.reserve(*arguments), return_exceptions=True)
+                assert sum(isinstance(outcome, str) for outcome in outcomes) == 1
+                assert sum(isinstance(outcome, PilotError) for outcome in outcomes) == 1
+            else:
+                assert await owner.reserve(*arguments) == key
+            await competitor.mark_dispatched(key)
+            assert await owner.settle(key, "succeeded", metadata) is False
+            ledger, _ = await second.read("ledger")
+            assert ledger["benchmark"]["attempts"] == sequence + 1 and not ledger["active"]
+            assert ledger["benchmark"]["reserved"] == (sequence + 1) * RESERVE
+            owner, competitor = coordinator(second), coordinator(first)
+            clock[0] += 61
+        with pytest.raises(PilotError):
+            await owner.reserve(config.identity, operation(clock[0], 19), fingerprint,
+                                owner.bound(request), owner.admission(request))
+        return {"operations": 18, "settled": 18, "reserved": 18 * RESERVE, "restart_each_operation": True}
+
+    keys.update({"ledger", "benchmark", *("case-" + case["id"] for case, _ in cases)})
+    state = RunState(first, owner, config, cases)
+    await state.initialize()
+    _, request, identifier = await state.claim()
+    key = "op-" + digest(owner.secret, "operation", [config.identity, identifier])
+    keys.add(key)
+    arguments = (config.identity, identifier, digest(owner.secret, "request", asdict(request)),
+                 owner.bound(request), owner.admission(request))
+    commit = first.commit
+
+    async def interrupted(changes):
+        if scenario != "cancel_before_reserve":
+            await commit(changes)
+        raise asyncio.CancelledError()
+
+    if scenario in {"cancel_before_reserve", "lost_reserve_ack"}:
+        first.commit = interrupted
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await owner.reserve(*arguments)
+        finally:
+            first.commit = commit
+    else:
+        await owner.reserve(*arguments)
+        if scenario == "lost_dispatch_ack":
+            first.commit = interrupted
+            try:
+                with pytest.raises(asyncio.CancelledError):
+                    await owner.mark_dispatched(key)
+            finally:
+                first.commit = commit
+        else:
+            await owner.mark_dispatched(key)
+            if scenario == "lost_settle_ack":
+                first.commit = interrupted
+                try:
+                    with pytest.raises(asyncio.CancelledError):
+                        await owner.settle(key, "succeeded", metadata)
+                finally:
+                    first.commit = commit
+            else:
+                await owner.settle(key, "unknown", None)
+    restarted = RunState(second, coordinator(second), config, cases)
+    with pytest.raises(PilotError):
+        await restarted.claim()
+    ledger, _ = await second.read("ledger")
+    record, _ = await second.read(key)
+    attempts = 0 if scenario == "cancel_before_reserve" else 1
+    assert ledger["benchmark"]["attempts"] == attempts
+    assert ledger["benchmark"]["reserved"] == attempts * RESERVE
+    if attempts:
+        with pytest.raises(PilotError):
+            await restarted.control.reserve(*arguments)
+        assert record["state"] == {"lost_reserve_ack": "pending", "lost_dispatch_ack": "unknown",
+                                    "unknown_dispatch": "unknown", "lost_settle_ack": "succeeded"}[scenario]
+        if scenario != "lost_settle_ack":
+            assert key in ledger["active"] and record["reserved"] == RESERVE
+        if scenario == "unknown_dispatch":
+            assert record["charged"] == RESERVE and record["usage_known"] is False
+    else:
+        assert record is None and not ledger["active"]
+    return {"operations": attempts, "reserved": attempts * RESERVE, "restart_blocked": True,
+            "operation_state": record["state"] if record else None}
+
+
+def test_real_counter_lifecycle(monkeypatch):
+    from azure.core import MatchConditions
+    from azure.identity.aio import AzureCliCredential
+    from app.benchmark import code_hash, sha
+    from app.providers.openai_api import AzureOpenAIProvider
+    import hashlib
+    import json
+    import logging
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("No model provider or model attestation is permitted")
+
+    monkeypatch.setattr(AzureBenchmark, "provider", forbidden)
+    monkeypatch.setattr(AzureBenchmark, "attest", forbidden)
+    monkeypatch.setattr(AzureOpenAIProvider, "__init__", forbidden)
+    for name in ("azure.identity", "azure.identity.aio._internal.decorators", "azure.identity.aio._credentials.azure_cli"):
+        logging.getLogger(name).disabled = True
+
+    async def run():
+        config = Approval.model_validate_json(Path(os.environ["BENCHMARK_APPROVAL_FILE"]).read_text())
+        evidence = Path(os.environ["BENCHMARK_APPROVAL_FILE"]).parent
+        review = json.loads((evidence / "counter-lock-cost-review.json").read_text())
+        budget = TableRequestBudget(config)
+        before = budget.filename.read_bytes()
+        lines = before.decode().splitlines()
+        assert review["parent_approval_hash"] == sha(config.model_dump(mode="json"))
+        assert review["counter_sha256"] == hashlib.sha256(before).hexdigest()
+        assert review["code_hash"] == code_hash()
+        assert review["test_sha256"] == hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        assert 0 <= time.time() - review["verified_at"] < 3600
+        assert review["model_calls_permitted"] is False
+        assert Decimal(review["projection_eur"]) <= Decimal(config.total_budget_eur)
+        budget.max_requests = min(budget.max_requests, len(lines) - 1 + 480)
+        budget.max_units = min(budget.max_units, sum(map(int, lines[1:])) + 11980)
+        partitions = {scenario: "test-lock-" + uuid4().hex for scenario in COUNTER_SCENARIOS}
+        write_result(evidence, "counter-lock-tests-started.json", {"partitions": partitions,
+            "max_additional_requests": 480, "max_additional_units": 11980, "model_calls": 0})
+        raw = AzureCliCredential(subscription=str(config.subscription_id))
+        diagnostics = BenchmarkDiagnostics()
+        credential = CheckedCredential(raw, config, ledger_cleanup=True, diagnostics=diagnostics)
+        options = dict(credential=credential, retry_total=0, redirect_max=0, retry_to_secondary=False,
+            logging_enable=False, tracing_enable=False, logger=_sdk_logger, raw_request_hook=budget,
+            connection_timeout=2, read_timeout=3)
+        results, cleaned = {}, []
+        try:
+            async with BenchmarkTableClient(f"https://{config.storage_name}.table.core.windows.net", "MiniBenchmark", **options) as client:
+                async with BenchmarkTableClient(f"https://{config.storage_name}.table.core.windows.net", "MiniBenchmark", **options) as another:
+                    for scenario, partition in partitions.items():
+                        keys = set()
+                        first = BenchmarkTableStore(client, partition=partition, diagnostics=diagnostics)
+                        second = BenchmarkTableStore(another, partition=partition, diagnostics=diagnostics)
+                        try:
+                            results[scenario] = await exercise_counter_scenario(first, second, config, scenario, keys)
+                        finally:
+                            assert len(keys) <= 40
+                            deletes = []
+                            for key in sorted(keys):
+                                data, etag = await second.read(key)
+                                if data is not None:
+                                    deletes.append(("delete", {"PartitionKey": partition, "RowKey": key},
+                                        {"etag": etag, "match_condition": MatchConditions.IfNotModified}))
+                            if deletes:
+                                await another.submit_transaction(deletes)
+                            for key in ("ledger", "benchmark"):
+                                assert (await second.read(key))[0] is None
+                            cleaned.append(scenario)
+        finally:
+            await raw.close()
+            after = budget.filename.read_bytes()
+            assert after.startswith(before)
+            weights = list(map(int, after[len(before):].decode().splitlines()))
+            receipt = {"results": results, "cleaned": cleaned, "model_calls": 0,
+                "requests": len(weights), "units": sum(weights), "diagnostics": diagnostics.snapshot(),
+                "passed": len(results) == len(cleaned) == len(COUNTER_SCENARIOS)}
+            write_result(evidence, "counter-lock-tests-result.json", receipt)
+            print(json.dumps(receipt))
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("scenario", ["claim_race", "lost_ack", "lifetime_cleanup"])
 def test_real_benchmark_table(scenario, monkeypatch):
     def forbidden(*args, **kwargs):

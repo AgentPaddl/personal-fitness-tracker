@@ -1,5 +1,100 @@
 # Screening Review And Authorized Continuation
 
+## Counter lifecycle investigation from 9437833
+
+This separately authorized follow-up made **no model calls or resource changes**.
+It used the retained Table only, under the original EUR 10 authorization and
+shared counter. Neither benchmark run was reopened, claimed or otherwise written.
+T5's USD 0.2343 allowance and the discretionary USD 0.2343 R2 hold remain intact.
+This investigation is not authorization for another benchmark or a replay.
+
+### Established defects versus historical attribution
+
+Three local regressions were reproduced before their fixes:
+
+| Reproduction on the old implementation | Correction |
+| --- | --- |
+| `BlockingIOError` from file or directory `fsync` was incorrectly reported as `counter_locked`. | Classify only contention at `flock(LOCK_EX | LOCK_NB)` as `counter_locked`; other OS errors remain `counter_io`. |
+| A duplicated file descriptor kept the acquired kernel lock alive after the original descriptor closed, on success, OS error and cancellation. | Explicit `LOCK_UN` in `finally`, only after this operation acquired the lock. |
+| A shortened append was accepted. Buffered close could also write after a newly explicit unlock. | Unbuffered append with a full-length write check, retaining file and directory `fsync`. A partial entry fails closed and is never repaired/reset automatically. |
+
+The descriptor-duplication tests reproduce a real macOS lock lifetime, not a
+mocked lock result. They do **not** establish that a duplicated descriptor existed
+during R2. The preserved diagnostic contains no owner PID, descriptor, syscall or
+errno. The original broad exception handler means the category alone did not
+prove lock acquisition failed. The historical holder cannot be identified from
+the available artifacts; ordinary process exit is not evidence of a stale lock.
+
+The frozen-code sequence replay gives a narrower conclusion. L2's finish is
+entry 793. R2's nine reads fit entries 794-802, ending at the parent read; its
+expected 100-unit claim batch is absent. The remaining entries fit three close
+reads, the close batch and the snapshot (803-807). Under the documented writer
+history this supports a **pre-append failure**, not a post-append sync failure.
+The parent read is the preceding admitted operation, not a proven lock owner.
+R2 remains `ready`, the parent has ten consumed slots and no in-flight claim.
+This reconstruction is not an HTTP trace or proof of T5's historical cause.
+
+### Lock scope and verification
+
+The existing local lock remains necessary: it serializes quota validation plus
+durable append across all clients/processes sharing the local request counter.
+Table ETags protect entity transactions, not this file, nor reads and failed HTTP
+attempts. `O_APPEND` alone cannot prevent two clients admitting against the same
+remaining quota. No lease, lock file, retry loop, takeover or new coordinator was
+added. The synchronous hook releases its acquired lock before HTTP; CAS conflict,
+closed run state and unknown provider state cannot themselves own that lock.
+
+Local subprocess tests show contention rejects without appending, then admission
+works after normal exit, an exception and abrupt `os._exit`. The duplicated-FD
+tests cover success, I/O error and cancellation; sync and short-write failures
+retain any appended charge. Existing tests retain corruption, permissions,
+hard-link/symlink, quota, pre-provider rejection and single-HTTP-send coverage.
+
+A create-once, code/test/counter-bound real Table test passed in six random
+`test-lock-` partitions, using two clients and the original normal request budget:
+
+- Eighteen consecutive simulated reserve/dispatch-marker/known-settlement
+  lifecycles, checking cumulative attempts and reservations after every operation.
+  The nineteenth admission is rejected; Coordinator state is rebuilt each time.
+- A stale ETag and a concurrent reservation race produced two observed HTTP 412
+  conflicts. Exactly one competing reservation succeeded.
+- Cancellation before reserve commit and after real reserve, dispatch-marker and
+  settlement commits, plus unknown dispatch settlement. Reconstructed control
+  state rejects re-claim/re-reservation; pending/unknown states retain reserves.
+- All known test rows were deleted with their ETags in one atomic batch per
+  partition, followed by missing-ledger/control checks. Actual benchmark rows
+  were never test cleanup targets. Provider construction and model attestation
+  were forbidden by the harness.
+
+Faults are injected at application boundaries after real Table commits, not
+claimed Azure outages or measured packet loss. Live restart coverage reconstructs
+application state in one process; OS process-death coverage is local and separate.
+The successful test does not retroactively identify R2's holder or prove behavior
+under arbitrary power loss, filesystem faults or uncooperative external writers.
+
+### Consumption and closure
+
+Six bounded point reads before and six after the test matched the original
+ledger, original closed run, parent, child ledger/run and R2 payloads exactly to
+the preserved continuation snapshot. Both runs stay closed. The test itself used
+384 requests / 8,601 weighted units; the full investigation used **396 / 8,613**,
+below the reviewed 500 / 12,000 additional caps. Counter growth was append-only:
+**807 / 24,549 -> 1,203 / 33,162**. Normal headroom is 1,297 requests / 6,838 units;
+the separate 500-request / 10,000-unit cleanup allowance remains protected.
+
+The full EUR 2 ancillary reserve already covers up to 50,000 weighted units and
+retention/cleanup. Including both holds, the conservative projection remains
+**EUR 2.86300775**, not a new budget or a posted invoice. Billing remains unknown;
+no additional billing query was made. Storage retention and its review deadline
+are unchanged; no model resource was created or re-attested. The dedicated CLI
+session was logged out and the absence of a local login confirmed.
+
+Validation: **522 offline gateway tests passed, 13 skipped**, with external socket
+connections blocked; the new real Table test passed separately. Pylance syntax
+and editor diagnostics are clear. Only benchmark-specific runtime code, tests
+and documentation changed; production admission/Table code and iOS are unchanged.
+Private start/result markers, comparisons and cost review remain outside Git.
+
 ## Authorized continuation outcome
 
 The separately authorized continuation from commit `88ab4b4` is now closed.
@@ -11,9 +106,11 @@ model-profile or fixture behavior changed. No new budget was created.
 
 Five new calls succeeded: P1, L1, R1, P2 and L2. R2 then stopped at the Table
 claim with safe diagnostic `counter_locked`, HTTP status absent. The claim batch
-was rejected by the local append-only counter's nonblocking lock; its exact
-holder is not established. This is not evidence of a Storage 401/403 or of T5's
-historical cause. R2 remained `ready`, with no operation or provider entry.
+was rejected by the local append-only counter. The investigation above narrows
+the old diagnostic's meaning: pre-append failure is supported, but the syscall
+and any lock holder are not established. This is not evidence of a Storage
+401/403 or of T5's historical cause. R2 remained `ready`, with no operation or
+provider entry.
 There was no retry, replacement case, lock bypass or subsequent model call.
 
 The original ledger remains closed with four permanent attempts and USD 0.9372
@@ -89,7 +186,8 @@ Recommendation: keep GPT-5.4-mini as a **provisional candidate**, not a producti
 recommendation. Labels and one refinement are encouraging, but T2 demonstrates
 unreliable arithmetic, photo accuracy is unmeasured, and hard-photo, abstention,
 injection and later-refinement coverage is missing. Resolve counter contention
-offline before any separately reviewed execution. Implement deterministic
+before any separately reviewed execution; the follow-up above fixes reproduced
+lifecycle defects but cannot attribute the historical holder. Implement deterministic
 nutrition arithmetic only as a subsequent, separately versioned work package;
 do not rewrite this benchmark's failures or change the production gate.
 

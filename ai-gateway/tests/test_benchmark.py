@@ -516,6 +516,190 @@ def test_table_budget_never_resets_or_dispatches_invalid_counter(monkeypatch, tm
             lock.close()
 
 
+@pytest.mark.parametrize("failure,category,entries", [
+    ("flock", "counter_locked", 0), ("file_sync", "counter_io", 1), ("directory_sync", "counter_io", 1),
+])
+def test_table_budget_distinguishes_lock_from_sync_failure(monkeypatch, tmp_path, failure, category, entries):
+    import errno
+    import fcntl
+    import os
+    import stat
+    from types import SimpleNamespace
+    from app.benchmark_azure import TableRequestBudget
+    from app.benchmark_diagnostics import BenchmarkDiagnosticError
+
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval())
+    budget.initialize()
+    request = SimpleNamespace(http_request=SimpleNamespace(method="POST", url="https://offline.invalid/$batch"))
+    fsync = os.fsync
+    flock = fcntl.flock
+
+    def sync(descriptor):
+        directory = stat.S_ISDIR(os.fstat(descriptor).st_mode)
+        if failure == ("directory_sync" if directory else "file_sync"):
+            raise BlockingIOError(errno.EAGAIN, "private-synchronization-error")
+        return fsync(descriptor)
+
+    def lock(descriptor, flags):
+        if failure == "flock" and flags & fcntl.LOCK_EX:
+            raise BlockingIOError(errno.EAGAIN, "private-lock-error")
+        return flock(descriptor, flags)
+
+    with monkeypatch.context() as injected:
+        injected.setattr(os, "fsync", sync)
+        injected.setattr(fcntl, "flock", lock)
+        with pytest.raises(BenchmarkDiagnosticError) as caught:
+            budget(request)
+    assert budget.filename.read_text().splitlines()[1:] == ["100"] * entries
+    with budget.filename.open("rb") as unlocked:
+        flock(unlocked, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert caught.value.category == category
+    assert "private" not in str(caught.value)
+
+
+@pytest.mark.parametrize("outcome", ["success", "io_error", "cancelled"])
+def test_table_budget_releases_lock_with_duplicate_descriptor(monkeypatch, tmp_path, outcome):
+    import fcntl
+    import os
+    from types import SimpleNamespace
+    from app.benchmark_azure import TableRequestBudget
+
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval())
+    budget.initialize()
+    request = SimpleNamespace(http_request=SimpleNamespace(method="POST", url="https://offline.invalid/$batch"))
+    descriptors = []
+    fsync = os.fsync
+
+    def duplicated(descriptor):
+        if not descriptors:
+            descriptors.append(os.dup(descriptor))
+            if outcome == "io_error":
+                raise OSError("private-sync-error")
+            if outcome == "cancelled":
+                raise asyncio.CancelledError()
+        return fsync(descriptor)
+
+    try:
+        with monkeypatch.context() as injected:
+            injected.setattr(os, "fsync", duplicated)
+            if outcome == "success":
+                budget(request)
+            else:
+                with pytest.raises(asyncio.CancelledError if outcome == "cancelled" else PilotError):
+                    budget(request)
+        assert budget.filename.read_text().splitlines()[1:] == ["100"]
+        with budget.filename.open("rb") as observer:
+            fcntl.flock(observer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+def test_table_budget_partial_append_stops_and_cannot_flush_after_unlock(monkeypatch, tmp_path):
+    import fcntl
+    import os
+    from types import SimpleNamespace
+    from app.benchmark_azure import TableRequestBudget
+    from app.benchmark_diagnostics import BenchmarkDiagnosticError
+
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval())
+    budget.initialize()
+    request = SimpleNamespace(http_request=SimpleNamespace(method="POST", url="https://offline.invalid/$batch"))
+    fdopen = os.fdopen
+    buffers = []
+
+    class Partial:
+        def __init__(self, output):
+            self.output = output
+
+        def __getattr__(self, name):
+            return getattr(self.output, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.output.close()
+
+        def write(self, data):
+            return self.output.write(data[:-1])
+
+    def partial(descriptor, mode, **kwargs):
+        buffers.append(kwargs.get("buffering", -1))
+        return Partial(fdopen(descriptor, mode, **kwargs))
+
+    with monkeypatch.context() as injected:
+        injected.setattr(os, "fdopen", partial)
+        with pytest.raises(BenchmarkDiagnosticError):
+            budget(request)
+    assert buffers == [0]
+    assert budget.filename.read_bytes().endswith(b"\n100")
+    with pytest.raises(BenchmarkDiagnosticError) as caught:
+        budget(request)
+    assert caught.value.category == "counter_integrity"
+    with budget.filename.open("rb") as observer:
+        fcntl.flock(observer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize("ending", ["success", "error", "abort"])
+def test_table_counter_lock_lifetime_across_processes(monkeypatch, tmp_path, ending):
+    import select
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from app.benchmark_azure import TableRequestBudget
+    from app.benchmark_diagnostics import BenchmarkDiagnosticError
+
+    monkeypatch.setenv("BENCHMARK_CONTROL_DIR", str(tmp_path / "control"))
+    budget = TableRequestBudget(approval())
+    budget.initialize()
+    child = subprocess.Popen([sys.executable, "-B", "-c", """
+import fcntl, os, sys
+descriptor = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+print('locked', flush=True)
+ending = input()
+if ending == 'abort':
+    os._exit(2)
+if ending == 'error':
+    raise RuntimeError('synthetic child failure')
+os.close(descriptor)
+""", str(budget.filename)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert select.select([child.stdout], [], [], 5)[0]
+        assert child.stdout.readline().strip() == "locked"
+        request = SimpleNamespace(http_request=SimpleNamespace(method="POST", url="https://offline.invalid/$batch"))
+        before = budget.filename.read_bytes()
+        with pytest.raises(BenchmarkDiagnosticError) as caught:
+            budget(request)
+        assert caught.value.category == "counter_locked" and budget.filename.read_bytes() == before
+        child.communicate(ending + "\n", timeout=5)
+        assert child.returncode == {"success": 0, "error": 1, "abort": 2}[ending]
+        budget(request)
+        assert budget.filename.read_text().splitlines()[1:] == ["100"]
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("scenario", ["sequence18", "cancel_before_reserve", "lost_reserve_ack", "lost_dispatch_ack",
+                                      "unknown_dispatch", "lost_settle_ack"])
+def test_counter_lifecycle_scenarios_offline(scenario):
+    from tests.test_benchmark_table_integration import exercise_counter_scenario
+
+    async def run():
+        store = MemoryCAS()
+        keys = set()
+        result = await exercise_counter_scenario(store, store, approval(), scenario, keys)
+        assert len(keys) <= 40
+        assert result["operations"] == (18 if scenario == "sequence18" else 0 if scenario == "cancel_before_reserve" else 1)
+    asyncio.run(run())
+
+
 def test_frozen_public_requests_are_complete():
     manifest, cases = load_cases()
     assert len(cases) == manifest["max_attempts"] == 18

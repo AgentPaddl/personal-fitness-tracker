@@ -63,6 +63,22 @@ the first Table test/access. Requests never recreate a missing counter. Existing
 logs from the completed screening remain compatible; do not initialize them again.
 Missing, damaged, linked, insecurely permissioned or locked logs block access,
 including cleanup. Review such failures without deleting/replacing the log.
+
+The nonblocking local `flock` protects only the synchronous read/validate/append/
+file-and-directory-sync critical section, not an entire Table transaction or
+benchmark case. It is explicitly released in `finally` before HTTP, including
+error/cancellation paths, even if a duplicate descriptor remains open. There is
+no persistent lock record to expire. Process exit releases the kernel lock when
+all owning descriptors close; a closed benchmark row cannot keep it held.
+`counter_locked` now means acquisition contention only; other OS failures are
+`counter_io`. Before this correction, sync `BlockingIOError` could be mislabeled
+as contention, so old diagnostics do not establish a holder. Appends are unbuffered
+and length-checked; short writes stop before HTTP and damaged logs stay fail-closed.
+Neither a failure nor a CAS conflict refunds an appended request charge.
+Table ETags cannot replace this lock: they do not serialize the local shared
+quota or account for reads/failed requests. Never unlock another operation's
+descriptor, steal/remove a lock, reset the log or replay an uncertain request.
+
 All commands below run from `ai-gateway/` with its `.venv/bin/python`. `$APPROVAL`
 is the external approval JSON path; `$RESULTS` is an external owner-only directory.
 Never use the regular app's resource group, configuration or identity assertions.
@@ -241,6 +257,38 @@ and approval. They create only bounded `test-parent-` partitions and delete thos
 with ETags. Start/result markers prevent rerunning a scenario inadvertently.
 The earlier `test_real_benchmark_table` scenarios are not part of continuation
 execution and must not be selected as additional unbudgeted testing.
+
+### Completed counter lifecycle investigation
+
+The follow-up from `9437833` is complete, with no model/resource operations.
+See the [investigation report](../../docs/benchmark-review-2026-09-18.md#counter-lifecycle-investigation-from-9437833)
+for reproduced defects versus unknown historical attribution and the live receipt.
+The original counter now stands at 1,203 requests / 33,162 weighted units, leaving
+1,297 / 6,838 for normal work and the protected 500 / 10,000 cleanup allowance.
+Both closed runs and both uncertainty holds are unchanged. This is not a retry grant.
+
+`test_real_counter_lifecycle` in `tests/test_benchmark_table_integration.py` uses
+Storage-only checked credentials, the original normal counter and six random
+`test-lock-` partitions. Its exclusive start/result markers are already consumed.
+Do not rerun or delete them. The fresh private cost review binds the approval,
+runtime, test source and counter prefix; it creates no budget. The test adds caps
+of 480 requests / 11,980 units within the reviewed total 500 / 12,000 allowance,
+leaving room for the twelve fixed original-ledger comparison reads. It forbids
+model attestation/provider construction, uses no SDK HTTP retry or redirect and
+deletes only known test rows with ETags. A failure stops further scenarios; any
+incomplete test cleanup must be reviewed, never recovered by resetting the counter.
+
+For local regression validation only, clear live environment flags and use:
+
+```sh
+RUN_BENCHMARK_TABLE_TESTS=0 .venv/bin/python -B -m pytest tests/test_benchmark.py -k 'table_budget or table_counter_lock or counter_lifecycle_scenarios' -q -p no:cacheprovider
+```
+
+The six lifecycle scenarios run against MemoryCAS offline. Live evidence covers
+18 full simulated operations, concurrency/ETags and faults around real commits,
+but application-state reconstruction is not a live OS-process crash test. Local
+subprocess tests separately cover normal/error/abrupt process exits. Neither test
+set can identify an unrecorded historical lock owner or authorize uncertain replay.
 
 ### Separate quality work package
 
