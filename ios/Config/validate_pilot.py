@@ -12,8 +12,8 @@ def validate(values):
     if (values.get("CONFIGURATION") != "Release"
             or values.get("PRODUCT_BUNDLE_IDENTIFIER") != "com.benedikt.Trainingsplan"
             or values.get("DEVELOPMENT_TEAM") != "2SF7PV3WCD"
-            or values.get("CURRENT_PROJECT_VERSION") != "5"):
-        raise ValueError("Pilot requires the unchanged Release app identity and build number.")
+            or values.get("CURRENT_PROJECT_VERSION") not in {"5", "6"}):
+        raise ValueError("Pilot requires the unchanged Release app identity and reviewed build 5 or 6.")
     for public, pilot in (("API_BASE_URL", "PILOT_API_BASE_URL"), ("ENTRA_TENANT_ID", "PILOT_ENTRA_TENANT_ID"),
                           ("ENTRA_CLIENT_ID", "PILOT_ENTRA_CLIENT_ID"), ("ENTRA_API_SCOPE", "PILOT_ENTRA_API_SCOPE")):
         if not values.get(pilot) or values.get(public) != values[pilot] or "$" in values[pilot]:

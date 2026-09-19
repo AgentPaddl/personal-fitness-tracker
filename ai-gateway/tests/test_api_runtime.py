@@ -1514,19 +1514,21 @@ def test_native_analysis_probe_is_nonmanifest_bounded_and_stops_on_mismatch(monk
     assert "private-token" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("mutation", [None, "url", "tenant", "scope", "team", "bundle", "build", "missing", "legacy"])
-def test_pilot_ios_build_requires_complete_separate_configuration(mutation):
+@pytest.mark.parametrize("build", ["5", "6"])
+@pytest.mark.parametrize("mutation", [None, "url", "tenant", "scope", "team", "bundle", "build", "unreviewed_build", "missing", "legacy"])
+def test_pilot_ios_build_requires_complete_separate_configuration(mutation, build):
     validator = load_local_module("ios/Config/validate_pilot.py")
     values = {"PILOT_BUILD": "YES", "CONFIGURATION": "Release", "PRODUCT_BUNDLE_IDENTIFIER": "com.benedikt.Trainingsplan",
-              "DEVELOPMENT_TEAM": "2SF7PV3WCD", "CURRENT_PROJECT_VERSION": "5", "API_BASE_URL": "https://pft-pilot-synthetic-api.azurewebsites.net/api",
+              "DEVELOPMENT_TEAM": "2SF7PV3WCD", "CURRENT_PROJECT_VERSION": build, "API_BASE_URL": "https://pft-pilot-synthetic-api.azurewebsites.net/api",
               "ENTRA_TENANT_ID": TENANT, "ENTRA_CLIENT_ID": CLIENT, "ENTRA_API_SCOPE": f"api://{AUDIENCE}/FoodAnalysis.Access",
               "ENTRA_REDIRECT_URI": "msauth.com.benedikt.Trainingsplan://auth"}
     for name in ("API_BASE_URL", "ENTRA_TENANT_ID", "ENTRA_CLIENT_ID", "ENTRA_API_SCOPE"):
         values["PILOT_" + name] = values[name]
     if mutation:
         field = {"url": "API_BASE_URL", "tenant": "ENTRA_TENANT_ID", "scope": "ENTRA_API_SCOPE", "team": "DEVELOPMENT_TEAM",
-                 "bundle": "PRODUCT_BUNDLE_IDENTIFIER", "build": "CURRENT_PROJECT_VERSION", "missing": "PILOT_API_BASE_URL", "legacy": "PILOT_BUILD"}[mutation]
-        values[field] = "NO" if mutation == "legacy" else ""
+                 "bundle": "PRODUCT_BUNDLE_IDENTIFIER", "build": "CURRENT_PROJECT_VERSION", "unreviewed_build": "CURRENT_PROJECT_VERSION",
+                 "missing": "PILOT_API_BASE_URL", "legacy": "PILOT_BUILD"}[mutation]
+        values[field] = {"legacy": "NO", "unreviewed_build": "7"}.get(mutation, "")
     if mutation in {None, "legacy"}:
         validator.validate(values)
     else:
