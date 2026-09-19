@@ -298,6 +298,28 @@ environment variable is not an installed-app configuration.
   analysis body/HMAC. Invalid authentication is denied even with AI off; a
   valid signed analysis receives503 before dependencies, ledger reservation or
   provider construction. No qualification endpoint or bypass is added.
+  `qualify_auth.py` has separate `auth`, `boundaries` and `foreign` operator modes
+  so already-passed live checks need not be repeated. It targets only the recorded
+  private pilot and never sends an acceptance-manifest payload. Generic token
+  acquisition failure is not proof of a specific role denial. Preserve failed
+  evidence, and do not sign a missing check. Jobs have no ingress/new roles and
+  must be bounded, non-retrying and deleted after use.
+  The actual native analysis mapping requires a personal login, not a reused CLI
+  token. From the repository root, use the existing private CLI context:
+
+  ```sh
+  ai-gateway/.venv/bin/python -B infra/pilot/provision.py login-analysis-probe \
+    --azure-config "$PFT_AZURE_CONFIG" --subscription "$PFT_SUBSCRIPTION" \
+    --tenant "$PFT_TENANT" --name 20260919
+  ```
+
+  These variables must identify the previously verified private CLI context and
+  the subscription/tenant in the private period record, never the default work
+  account. Do not recreate the context or persist its tokens in the repository.
+  This checks AI off before login and uses only nonmanifest analysis payloads.
+  Tokens stay in memory; complete sign-in personally, never paste credentials
+  into chat. A503 alone is not downstream-token proof; inspect the existing
+  content-free gateway boundary logs as well. This command grants no activation.
   In a secure local/operator context, load the exact runtime configuration and
    keys. `python -m app.pilot_release digest` returns its SHA-256 binding, not its
    contents. Capture evidence as one JSON object with the six keys in
@@ -404,7 +426,7 @@ verification. An app-level check is not a complete internet DDoS cost cap.
 ## Content-free diagnosis
 
 The API-only ingress emits server-generated request ID, UTC time, fixed boundary
-(`release`, `workload`, `body`, `ledger`, `domain`, `internal`), HTTP status and
+(`shape`, `workload`, `body`, `assertion`, `release`, `ledger`, `domain`, `internal`), HTTP status and
 latency. No user path/query/header, identity, food, image, output or exception text
 is included. Limit: 60 events/minute/process plus a suppressed-count summary;
 anonymous liveness is not logged. Domain/provider normalized metadata and the

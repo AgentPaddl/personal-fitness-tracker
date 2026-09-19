@@ -8,6 +8,7 @@ from pathlib import Path
 import secrets
 import subprocess
 import sys
+import time
 from uuid import UUID
 
 from prepare import entra_requests
@@ -151,7 +152,7 @@ class Bootstrap:
         print(f"AI-off ARM {mode} completed.")
 
 
-    def login_probe(self):
+    def login_probe(self, *, analysis=False):
         import msal
         import requests
 
@@ -160,6 +161,15 @@ class Bootstrap:
                 or datetime.now(timezone.utc) >= datetime.fromisoformat(state["end"])):
             raise RuntimeError("Pilot ownership or authorized period mismatch.")
         deployment = json.loads((self.directory / "runtime-create.json").read_text())["properties"]["outputs"]
+        if analysis:
+            group = deployment["resourceGroup"]["value"]
+            if group != "pft-pilot-" + self.args.name:
+                raise RuntimeError("Unexpected analysis probe resource group.")
+            enabled = self.cli("containerapp", "show", "--subscription", self.args.subscription,
+                "--resource-group", group, "--name", group + "-gateway", "--query",
+                "properties.template.containers[0].env[?name=='AI_API_ONLY_ENABLED'].value | [0]")
+            if enabled != "false":
+                raise RuntimeError("Native analysis qualification requires AI off.")
         scope = f"api://{deployment['backendAudience']['value']}/FoodAnalysis.Access"
         application = msal.PublicClientApplication(
             deployment["nativeClientId"]["value"],
@@ -177,6 +187,14 @@ class Bootstrap:
         if claims.get("tid") != self.args.tenant or claims.get("oid") != state["owner"]:
             raise RuntimeError("Signed-in pilot identity does not match the sole approved participant.")
         base = deployment["apiBaseURL"]["value"]
+        if analysis:
+            try:
+                record = self.native_analysis_checks(deployment, state, result["access_token"])
+            finally:
+                result.clear()
+            private_json(self.directory / f"native-analysis-probe-{secrets.token_hex(4)}.json", record)
+            print("Native analysis checks: " + json.dumps(record), flush=True)
+            return
         with requests.Session() as client:
             client.mount("https://", requests.adapters.HTTPAdapter(max_retries=0))
             response = client.get(base + "/readiness", headers={"Authorization": "Bearer " + result["access_token"]},
@@ -192,9 +210,44 @@ class Bootstrap:
             raise RuntimeError("Native-to-backend admission needs investigation; no model request made.")
 
 
+    def native_analysis_checks(self, deployment, state, token):
+        import requests
+        from qualify_auth import PAYLOAD, headers
+
+        base = deployment["apiBaseURL"]["value"]
+        gateway = deployment["gatewayBaseURL"]["value"]
+        if (base != "https://pft-pilot-20260919-api.azurewebsites.net/api"
+                or gateway != "https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io"):
+            raise RuntimeError("Unapproved native analysis target.")
+        parameters = json.loads((self.directory / "acceptance-parameters.json").read_text())["parameters"]
+        operation = str(UUID(int=(int(time.time() * 1000) << 80) | (7 << 76) | (2 << 62) | 1))
+        native = {"Authorization": "Bearer " + token}
+        cases = [
+            ("native_analysis_identity", base + "/food-analysis", native, 400, "operation_required"),
+            ("native_analysis_ai_off", base + "/food-analysis", {**native, "X-Operation-Id": operation}, 503, "pilot_unavailable"),
+            ("native_token_denied", gateway + "/v1/food-analysis",
+             headers(token, (self.args.tenant, state["owner"]), operation,
+                 parameters["signingKey"]["value"], parameters["serviceToken"]["value"], PAYLOAD), 403, "pilot_forbidden"),
+        ]
+        checks = []
+        with requests.Session() as client:
+            client.mount("https://", requests.adapters.HTTPAdapter(max_retries=0))
+            for name, target, authorization, expected, code in cases:
+                response = client.post(target, headers=authorization, json=PAYLOAD,
+                                       timeout=(10, 30), allow_redirects=False)
+                passed = response.status_code == expected and response.json().get("error", {}).get("code") == code
+                check = {"check": name, "status": response.status_code, "expected": expected, "passed": passed}
+                checks.append(check)
+                print("NATIVE_CHECK " + json.dumps(check), flush=True)
+                if not passed:
+                    raise RuntimeError("Native analysis qualification failed: " + name)
+        return {"checked_at": datetime.now(timezone.utc).isoformat(), "native_identity_matches": True,
+                "checks": checks, "model_attempts": 0}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("initialize", "validate", "create", "login-probe"))
+    parser.add_argument("command", choices=("initialize", "validate", "create", "login-probe", "login-analysis-probe"))
     parser.add_argument("--azure-config", type=Path, required=True)
     parser.add_argument("--subscription", required=True)
     parser.add_argument("--tenant", required=True)
@@ -211,8 +264,8 @@ def main():
     owner = bootstrap.verify_account()
     if args.command == "initialize":
         bootstrap.initialize(owner)
-    elif args.command == "login-probe":
-        bootstrap.login_probe()
+    elif args.command in {"login-probe", "login-analysis-probe"}:
+        bootstrap.login_probe(analysis=args.command == "login-analysis-probe")
     else:
         bootstrap.deploy(args.command)
 

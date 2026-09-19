@@ -51,7 +51,7 @@ Backend: `https://pft-pilot-20260919-api.azurewebsites.net/api`.
 Gateway: `https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io`.
 The app knows only the backend URL and public Entra configuration.
 
-Published image:
+Initial deployed image (superseded by the auth-first image below):
 `pftposyuw3m453fx4.azurecr.io/gateway@sha256:58a47d0c4ea78d6ffcbb45241464e0ee172b0369a278489c978823bac36fe2a0`.
 Alpine layers reused from the reviewed candidate; new admission code included.
 Trivy: zero reported vulnerabilities and secrets, with the already documented
@@ -222,6 +222,71 @@ EOL-list warning remains. An unpatched public-base probe alternative was scanned
 and rejected due to High findings, not deployed. Live correction evidence follows
 only after actual deployment and probes; no incomplete evidence is signed.
 
+### Live auth-first results
+
+Commit `cbfed3b` was pushed normally and deployed only to the private pilot.
+Revision `pft-pilot-20260919-gateway--0000002` is Healthy/Provisioned with100%
+traffic and the corrected immutable image above. The final readback at
+**08:21:29Z** still has `AI_API_ONLY_ENABLED=false`, and latest/ready revision
+both equal0000002. The CLI update response omitted ordinary environment values;
+a fresh resource readback confirmed unchanged values except the intended image
+digest. Empty `value` fields added alongside unchanged secret references were
+serialization differences, not secret rotation. No grant/signature was issued.
+
+The temporary manual job `pft-pilot-authcheck-20260919` used the same scanned
+image, existing backend/gateway identities and existing secret-reader/AcrPull
+roles. No role, ingress or debug endpoint was added. Each execution had one
+replica,0.25vCPU/0.5GiB,180-second limit and retryLimit0:
+
+- `t5bfl7q`: all nine authentication checks passed at **08:09:29Z**. The actual
+  backend MI JWT plus request HMAC received503 with AI off. Missing workload,
+  damaged JWT signature, wrong service secret, wrong HMAC, changed body,
+  changed operation, expired assertion and foreign signed user each received403.
+- `1ab4av7`: six boundary checks passed: unsupported media415, declared
+  oversize413, malformed/nonobject JSON400, chunked oversize413, and incomplete
+  chunked body408 after10.03seconds. The subsequent foreign-workload token
+  acquisition failed without a specifically recognizable role-denial code.
+  The overall job failed; its passed boundary cases are not a passed full run.
+- `riecq7e`: a targeted diagnostic did not repeat those passed cases. The real
+  ledger remained at attempts0/reserved0/no active operations with the same
+  SHA-256 `8e1995108f21459ea5c269813c8fb6926a04e45ecd79b27c78483a41d6b606c7`.
+  Foreign MI token acquisition again returned `ClientAuthenticationError`, with
+  no extracted AADSTS code or HTTP status. No foreign-token request reached the
+  gateway. This is **not** a verified wrong-workload/role rejection and does not
+  satisfy `foreign_workload_denied`; there is no automatic retry.
+
+The terminal did not expose tokens, key values or raw identity errors. Receipts
+are private `auth-job-evidence-*`, `boundary-job-evidence-*`,
+`foreign-job-evidence-*` and `auth-final-state-*` JSON files. The job was deleted
+after its stopped executions; local Colima profile `pft-pilot-review` was stopped.
+The pilot ledger was not reset or modified by these HTTP qualifications.
+
+Final local regression: **220passed** across the affected runtime/ledger suites;
+the deployed Linux image had separately passed49selected ingress/release tests.
+New helper tests cover fail-stop/no-retry behavior, bounded incomplete bodies,
+unclassified identity failure, normalized nonmanifest input, AI-off before login
+and in-memory token clearing after failure. Local tests are not live evidence.
+
+The new `login-analysis-probe` command reuses the existing native app and requires
+a fresh personal login because the prior login persisted no tokens. It first
+requires AI off, then tests analysis identity mapping via400/operation_required,
+a valid operation via503/pilot_unavailable, and direct native-token rejection
+at the gateway with otherwise correct service/HMAC headers. All payloads are
+outside the acceptance manifest. The503 alone cannot distinguish a backend
+token-acquisition failure from gateway admission; correlate with content-free
+gateway evidence before claiming end-to-end success. This login has **not** yet
+been performed. It is authentication, not renewed authorization or consent.
+
+Remaining pre-activation evidence includes that native analysis path and
+wrong-workload rejection, plus the outstanding edge/concurrency/log/privacy
+criteria described above. No incomplete `CHECKS` record is signed. The first
+bounded technical grant, live revocation under a cached valid token, and the
+ten-case model acceptance are therefore **not performed**. The code-level
+circularity is fixed; these are concrete remaining evidence gaps, not a renewed
+requirement to revoke a grant before issuing it. Final model counter **0/10**,
+full-cost reservations **0**, AI **off**. Production, iPhone and participant
+admission remain unchanged.
+
 Synthetic acceptance is a separate policy option. It admits only SHA-256 hashes
 of normalized nonprivate DTOs and only one person. Its CAS-backed lifetime
 attempt/reservation counters do not reset at midnight, calendar month, process
@@ -245,8 +310,15 @@ DataZone input EUR0.7084/million and output EUR4.2504/million. Public prices are
 not a promise of actual contract rates. Billing currency EUR confirmed separately.
 Cost Management initially returned429, then no rows; the new budget reports0.
 These are delayed records, **not proof that no charges have accrued**.
-The final pilot-filtered custom-period query again returned429; no final accrued
-cost total is asserted. Do not repeatedly poll or treat throttling as free usage.
+An earlier pilot-filtered custom-period query returned429. The final auth-first
+continuation query succeeded and reported **EUR0.0000621947449768161 net** since
+the original period start. This is delayed, partial posted cost, not a final
+accrued total or proof that hosting/registry costs are absent. Do not repeatedly
+poll or treat throttling as free usage. The three bounded qualification jobs add
+at most **USD0.00405** of configured replica compute at the reviewed active rates
+(3 x180seconds x[0.25 x0.000024 +0.5 x0.000003]); platform/control/storage costs,
+startup effects and tax remain separately reserved. No model spend is reported
+by the unchanged acceptance ledger.
 
 - ACR thirty days: **EUR4.293 net**, about EUR5.109 including illustrative 19% VAT.
 - Ten full 272k-input/2k-output reservations: **EUR2.011856 net**, about EUR2.395

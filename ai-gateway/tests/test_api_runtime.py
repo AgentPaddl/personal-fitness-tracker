@@ -812,6 +812,97 @@ def test_auth_qualifier_only_sends_nonmanifest_probes_and_stops_on_mismatch():
     assert len(calls) == 1
 
 
+def test_auth_qualifier_limits_are_bounded_and_stop_on_mismatch():
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    calls = []
+
+    class Client:
+        def post(self, url, *, headers, content):
+            body = content if isinstance(content, bytes) else b"".join(content)
+            calls.append((headers, body))
+            return SimpleNamespace(status_code=[415, 413, 400, 400, 413][len(calls) - 1])
+
+    results = helper.probe_limits(Client(), "https://synthetic.invalid", "private-token",
+        (TENANT, PRINCIPAL), "s" * 48, "t" * 48)
+    assert len(results) == len(calls) == 5
+    assert all(record["passed"] for record in results)
+    assert max(len(body) for _, body in calls) == 4 * 1024 * 1024 + 64 * 1024 + 1
+    assert all("Authorization" not in authorization for authorization, _ in calls[:2])
+
+    class WrongClient:
+        def post(self, *args, **kwargs):
+            calls.append(None)
+            return SimpleNamespace(status_code=200)
+
+    calls.clear()
+    with pytest.raises(RuntimeError, match="unsupported_media_before_auth"):
+        helper.probe_limits(WrongClient(), "https://synthetic.invalid", "private-token",
+            (TENANT, PRINCIPAL), "s" * 48, "t" * 48)
+    assert len(calls) == 1
+
+
+def test_auth_qualifier_slow_body_is_incomplete_and_connection_is_closed(monkeypatch):
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    sent = []
+    closed = []
+
+    class Connection:
+        def __init__(self, host, *, timeout):
+            assert host == "synthetic.invalid" and timeout == 20
+
+        def putrequest(self, method, route):
+            assert (method, route) == ("POST", "/v1/food-analysis")
+
+        def putheader(self, name, value):
+            pass
+
+        def endheaders(self):
+            pass
+
+        def send(self, content):
+            sent.append(content)
+
+        def getresponse(self):
+            return SimpleNamespace(status=408)
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(helper, "HTTPSConnection", Connection)
+    result = helper.probe_slow_body("https://synthetic.invalid", "token", (TENANT, PRINCIPAL), "secret", "service")
+    assert result["passed"] is True
+    assert sent == [b"1\r\n{\r\n"] and closed == [True]
+
+
+@pytest.mark.parametrize("failure,accepted", [("AADSTS501051: no assigned role", True), ("timeout", False)])
+def test_auth_qualifier_foreign_workload_requires_specific_role_denial(monkeypatch, capsys, failure, accepted):
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    monkeypatch.setenv("AI_PILOT_GATEWAY_CLIENT_ID", PRINCIPAL)
+    monkeypatch.setenv("GATEWAY_WORKLOAD_AUDIENCE", AUDIENCE)
+
+    class Credential:
+        def __init__(self, **kwargs):
+            assert kwargs["client_id"] == PRINCIPAL and kwargs["retry_total"] == 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get_token(self, *args):
+            raise helper.ClientAuthenticationError(failure)
+
+    monkeypatch.setattr(helper, "ManagedIdentityCredential", Credential)
+    if accepted:
+        result = helper.probe_foreign_workload(None, "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
+        assert result == {"check": "foreign_workload", "boundary": "entra_app_role", "passed": True}
+    else:
+        with pytest.raises(RuntimeError, match="not an app-role denial"):
+            helper.probe_foreign_workload(None, "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
+    assert failure not in capsys.readouterr().out
+
+
 def test_ledger_qualification_isolates_writes_and_uses_ai_off_settings(monkeypatch, capsys):
     import json
     from copy import deepcopy
@@ -964,6 +1055,86 @@ def test_pilot_login_probe_never_persists_tokens_or_posts_model_requests(monkeyp
     assert evidence[0].stat().st_mode & 0o777 == 0o600
     captured = capsys.readouterr().out + "".join(file.read_text() for file in bootstrap.directory.glob("*.json"))
     assert "synthetic-access-token" not in captured and "synthetic-refresh-token" not in captured
+
+
+@pytest.mark.parametrize("enabled", ["false", "true"])
+def test_native_analysis_login_requires_ai_off_and_clears_tokens(monkeypatch, tmp_path, enabled):
+    import msal
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "infra/pilot"))
+    helper = load_local_module("infra/pilot/provision.py")
+    helper.ROOT = tmp_path
+    bootstrap = helper.Bootstrap(SimpleNamespace(name="synthetic", azure_config=tmp_path, subscription=CLIENT, tenant=TENANT))
+    helper.private_json(bootstrap.directory / "period.json", {
+        "subscription": CLIENT, "tenant": TENANT, "owner": PRINCIPAL, "end": "2030-01-01T00:00:00+00:00"})
+    helper.private_json(bootstrap.directory / "runtime-create.json", {"properties": {"outputs": {
+        name: {"value": value} for name, value in {
+            "nativeClientId": CLIENT, "backendAudience": AUDIENCE, "resourceGroup": "pft-pilot-synthetic",
+            "apiBaseURL": "https://pft-pilot-synthetic.azurewebsites.net/api"}.items()}}})
+    result = {"access_token": "private-token", "refresh_token": "private-refresh",
+              "id_token_claims": {"tid": TENANT, "oid": PRINCIPAL}}
+    logins = []
+
+    def application(*args, **kwargs):
+        logins.append(True)
+        return SimpleNamespace(initiate_device_flow=lambda **kwargs: {"user_code": "synthetic", "message": "Synthetic login"},
+                               acquire_token_by_device_flow=lambda flow: result)
+
+    def fail_checks(*args):
+        raise RuntimeError("Synthetic downstream failure")
+
+    monkeypatch.setattr(msal, "PublicClientApplication", application)
+    monkeypatch.setattr(bootstrap, "cli", lambda *args: enabled)
+    monkeypatch.setattr(bootstrap, "native_analysis_checks", fail_checks)
+    with pytest.raises(RuntimeError, match="Synthetic downstream failure" if enabled == "false" else "requires AI off"):
+        bootstrap.login_probe(analysis=True)
+    if enabled == "false":
+        assert result == {} and logins == [True]
+    else:
+        assert not logins
+    assert not list(bootstrap.directory.glob("native-analysis-probe-*.json"))
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_native_analysis_probe_is_nonmanifest_bounded_and_stops_on_mismatch(monkeypatch, tmp_path, capsys, mismatch):
+    from uuid import UUID
+    import requests
+    from app.pilot import canonical
+    from app.schemas.food_analysis import FoodAnalysisRequest
+    import hashlib
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "infra/pilot"))
+    helper = load_local_module("infra/pilot/provision.py")
+    helper.ROOT = tmp_path
+    bootstrap = helper.Bootstrap(SimpleNamespace(name="synthetic", azure_config=tmp_path, tenant=TENANT))
+    helper.private_json(bootstrap.directory / "acceptance-parameters.json", {"parameters": {
+        "signingKey": {"value": "s" * 48}, "serviceToken": {"value": "t" * 48}}})
+    deployment = {"apiBaseURL": {"value": "https://pft-pilot-20260919-api.azurewebsites.net/api"},
+        "gatewayBaseURL": {"value": "https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io"}}
+    calls = []
+
+    def post(self, url, **kwargs):
+        calls.append((url, kwargs))
+        status, code = [(400, "operation_required"), (503, "pilot_unavailable"), (403, "pilot_forbidden")][len(calls) - 1]
+        return SimpleNamespace(status_code=200 if mismatch else status, json=lambda: {"error": {"code": code}})
+
+    monkeypatch.setattr(requests.Session, "post", post)
+    if mismatch:
+        with pytest.raises(RuntimeError, match="native_analysis_identity"):
+            bootstrap.native_analysis_checks(deployment, {"owner": PRINCIPAL}, "private-token")
+        assert len(calls) == 1
+    else:
+        result = bootstrap.native_analysis_checks(deployment, {"owner": PRINCIPAL}, "private-token")
+        assert len(calls) == 3 and all(check["passed"] for check in result["checks"])
+        assert result["model_attempts"] == 0
+        assert "X-Operation-Id" not in calls[0][1]["headers"]
+        assert UUID(calls[1][1]["headers"]["X-Operation-Id"]).version == 7
+    hashes = {case["payload_sha256"] for case in load_local_module("infra/pilot/prepare.py").acceptance_manifest()["cases"]}
+    for _, kwargs in calls:
+        payload = FoodAnalysisRequest.model_validate(kwargs["json"]).model_dump(mode="json")
+        assert hashlib.sha256(canonical(payload)).hexdigest() not in hashes
+        assert kwargs["allow_redirects"] is False and kwargs["timeout"] == (10, 30)
+    assert "private-token" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("mutation", [None, "url", "tenant", "scope", "team", "bundle", "build", "missing", "legacy"])
