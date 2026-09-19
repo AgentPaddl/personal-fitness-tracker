@@ -170,12 +170,24 @@ public struct FoodAnalysisResponseDTO: Decodable, Equatable, Sendable {
 }
 
 /// The backend's normalized `{"error": {"code": ..., "message": ...}}`
-/// envelope. Only `code` is used for classification; `message` is never
+/// envelope. Only `code` and the optional `reason` classify errors; `message` is never
 /// shown to the user verbatim (see `FoodAnalysisError`).
 struct BackendErrorEnvelope: Decodable {
     struct ErrorBody: Decodable {
         let code: String
         let message: String
+        let reason: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case code, message, reason
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            code = try container.decode(String.self, forKey: .code)
+            message = try container.decode(String.self, forKey: .message)
+            reason = try? container.decode(String.self, forKey: .reason)
+        }
     }
     let error: ErrorBody
 }

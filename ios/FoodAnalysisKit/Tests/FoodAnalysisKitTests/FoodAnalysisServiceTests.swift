@@ -221,6 +221,34 @@ final class FoodAnalysisServiceTests: XCTestCase {
         }
     }
 
+    func testOnlyExplicitActivationReasonMeansNotActivated() throws {
+        let cases: [(Int, String, Any?, FoodAnalysisError)] = [
+            (503, "pilot_unavailable", "pilot_not_activated", .pilotNotActivated),
+            (503, "pilot_unavailable", nil, .pilotUnavailable),
+            (503, "pilot_unavailable", "unknown", .pilotUnavailable),
+            (503, "pilot_unavailable", ["unexpected": "value"], .pilotUnavailable),
+            (502, "pilot_unavailable", "pilot_not_activated", .pilotUnavailable),
+            (503, "gateway_service_unavailable", "pilot_not_activated", .backendUnavailable),
+            (503, "unknown", "pilot_not_activated", .backendUnavailable),
+            (504, "gateway_timeout", "pilot_not_activated", .timeout)
+        ]
+        for (status, code, reason, expected) in cases {
+            var error: [String: Any] = ["code": code, "message": "private-marker"]
+            if let reason { error["reason"] = reason }
+            let data = try JSONSerialization.data(withJSONObject: ["error": error])
+            let mapped = FoodAnalysisService.mapErrorResponse(statusCode: status, data: data)
+            XCTAssertEqual(mapped, expected)
+            XCTAssertFalse(mapped.userMessage.contains("private-marker"))
+            XCTAssertEqual(mapped.requiresNewOperationConfirmation, expected != .pilotNotActivated)
+        }
+        XCTAssertEqual(FoodAnalysisError.pilotNotActivated.userMessage, "Die KI ist für diesen Pilot noch nicht aktiviert.")
+        XCTAssertFalse(FoodAnalysisError.pilotNotActivated.canRetryOperation)
+        XCTAssertFalse(FoodAnalysisError.pilotNotActivated.isRetryEligible)
+        XCTAssertEqual(FoodAnalysisError.pilotUnavailable.userMessage,
+                       "Die Anfrage konnte nicht sicher bestätigt werden. Beim KI-Anbieter könnte bereits Verbrauch entstanden sein.")
+        XCTAssertEqual(FoodAnalysisError.timeout.userMessage, "Keine rechtzeitige Antwort. Ob die Analyse ausgeführt wurde, ist unklar.")
+    }
+
     func testOperationUUIDv7ContractAndUniqueRandomness() throws {
         let now = Date(timeIntervalSince1970: 1_789_646_400.125)
         var identifiers = Set<UUID>()

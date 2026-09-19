@@ -166,6 +166,11 @@ class ApiIngress:
             except Exception:
                 return await self.reject(scope, receive, send, 403)
         scope["pilot_boundary"] = "release"
+        if os.environ.get("AI_API_ONLY_ENABLED") == "false":
+            return await JSONResponse({"error": {
+                "code": "pilot_unavailable", "message": "Request not admitted.",
+                "reason": "pilot_not_activated",
+            }}, status_code=503)(scope, receive, send)
         try:
             self.active()
         except Exception:

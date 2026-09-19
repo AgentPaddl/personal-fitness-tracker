@@ -53,7 +53,8 @@ public final class FoodAnalysisViewModel: ObservableObject {
     }
 
     public var canAnalyze: Bool {
-        !isAnalyzing && (!descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImage != nil)
+        !isAnalyzing && lastError != .pilotNotActivated
+            && (!descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImage != nil)
             && (currentOperation == nil || currentOperation?.input != currentInput
                 || canRetryOperation || requiresNewOperationConfirmation)
     }
@@ -91,7 +92,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
     /// If both text and an image are present, both are sent together.
     public func analyze(confirmNewOperation: Bool = false) async {
         let trimmed = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || selectedImage != nil, !isAnalyzing else { return }
+        guard !trimmed.isEmpty || selectedImage != nil, !isAnalyzing, lastError != .pilotNotActivated else { return }
 
         guard let service else {
             errorMessage = configurationErrorMessage
@@ -162,7 +163,8 @@ public final class FoodAnalysisViewModel: ObservableObject {
             guard currentRequestToken == requestToken else { return }
             let failure = Task.isCancelled || task.isCancelled
                 ? FoodAnalysisError.operationInterrupted : (error as? FoodAnalysisError ?? .analysisFailed)
-            errorMessage = failure.userMessage
+            errorMessage = failure == .pilotNotActivated && hasUncertainOutcome
+                ? failure.userMessage + " " + FoodAnalysisError.pilotUnavailable.userMessage : failure.userMessage
             lastError = failure
             hasUncertainOutcome = hasUncertainOutcome || failure.requiresNewOperationConfirmation
             currentRequestToken = nil

@@ -365,6 +365,46 @@ final class FoodAnalysisViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
+    func testNotActivatedNeverOffersOrDispatchesRetryOrReplacement() async {
+        for image in [false, true] {
+            let service = StubService(result: .failure(FoodAnalysisError.pilotNotActivated))
+            let model = FoodAnalysisViewModel(service: service)
+            model.descriptionText = "synthetic"
+            if image { model.setPickedImage(rawData: makeTestJPEGData()) }
+            await model.analyze()
+            let original = model.currentOperation
+            XCTAssertEqual(model.errorMessage, "Die KI ist für diesen Pilot noch nicht aktiviert.")
+            XCTAssertFalse(model.requiresNewOperationConfirmation)
+            XCTAssertFalse(model.canRetryOperation)
+            XCTAssertFalse(model.canAnalyze)
+            XCTAssertNil(model.reviewDraft)
+            XCTAssertNil(model.reviewSession)
+            await model.retryOperation()
+            await model.analyze(confirmNewOperation: true)
+            model.descriptionText = "changed"
+            XCTAssertFalse(model.canAnalyze)
+            await model.analyze(confirmNewOperation: true)
+            XCTAssertEqual(service.callCount, 1)
+            XCTAssertEqual(model.currentOperation, original)
+            XCTAssertEqual(model.selectedImage != nil, image)
+        }
+    }
+
+    func testNotActivatedRetryDoesNotEraseEarlierUncertainty() async {
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let model = FoodAnalysisViewModel(service: service)
+        model.descriptionText = "synthetic"
+        await model.analyze()
+        service.result = .failure(FoodAnalysisError.pilotNotActivated)
+        await model.retryOperation()
+        XCTAssertTrue(model.requiresNewOperationConfirmation)
+        XCTAssertEqual(model.errorMessage, FoodAnalysisError.pilotNotActivated.userMessage
+                   + " " + FoodAnalysisError.pilotUnavailable.userMessage)
+        XCTAssertFalse(model.canAnalyze)
+        XCTAssertFalse(model.canRetryOperation)
+        XCTAssertEqual(service.callCount, 2)
+    }
+
     func testSuccessfulAnalysisPopulatesReviewDraft() async {
         let service = StubService(result: .success(makeEstimate()))
         let viewModel = FoodAnalysisViewModel(service: service)

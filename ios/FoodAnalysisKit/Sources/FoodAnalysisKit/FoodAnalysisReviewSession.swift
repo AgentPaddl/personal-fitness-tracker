@@ -80,6 +80,7 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
     public var canRefine: Bool {
         !isClosed
             && !isRefining
+            && lastError != .pilotNotActivated
             && !isRefinementLimitReached
             && isCorrectionValid
             && currentDraft.refinementCurrentEstimate() != nil
@@ -97,7 +98,7 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
     /// Performs one explicit refinement. Invalid input, an in-flight call,
     /// a closed session, or an exhausted three-round limit is a local no-op.
     public func refine(confirmNewOperation: Bool = false) async {
-        guard !isClosed, !isRefining else { return }
+        guard !isClosed, !isRefining, lastError != .pilotNotActivated else { return }
         guard nextIteration != nil else {
             refinementErrorMessage = "Maximal drei Überarbeitungen pro Analyse sind möglich."
             return
@@ -161,7 +162,8 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
                 ? FoodAnalysisError.operationInterrupted : (error as? FoodAnalysisError ?? .analysisFailed)
             lastError = failure
             hasUncertainOutcome = hasUncertainOutcome || failure.requiresNewOperationConfirmation
-            refinementErrorMessage = failure.userMessage
+            refinementErrorMessage = failure == .pilotNotActivated && hasUncertainOutcome
+                ? failure.userMessage + " " + FoodAnalysisError.pilotUnavailable.userMessage : failure.userMessage
             currentRequestToken = nil
             isRefining = false
             refinementTask = nil

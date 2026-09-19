@@ -436,7 +436,7 @@ def test_api_artifact_cannot_bypass_ingress_via_legacy_entrypoint(monkeypatch, r
 
 
 @pytest.mark.parametrize("ai_enabled", [True, False])
-@pytest.mark.parametrize("mutation", [None, "body", "operation", "hmac", "timestamp", "identity", "workload", "duplicate", "anonymous", "missing_token", "missing_service", "disabled", "expired", "revoked"])
+@pytest.mark.parametrize("mutation", [None, "body", "operation", "hmac", "timestamp", "identity", "workload", "duplicate", "anonymous", "missing_token", "missing_service", "disabled", "missing_flag", "invalid_flag", "expired", "revoked"])
 def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_config, mutation, ai_enabled):
     import base64
     import hashlib
@@ -509,6 +509,10 @@ def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_con
         headers = [(name, value) for name, value in headers if name != "X-Service-Token"]
     if mutation == "disabled" or not ai_enabled:
         monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+    elif mutation == "missing_flag":
+        monkeypatch.delenv("AI_API_ONLY_ENABLED")
+    elif mutation == "invalid_flag":
+        monkeypatch.setenv("AI_API_ONLY_ENABLED", "invalid")
     elif mutation == "revoked":
         monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", "0" * 64)
     elif mutation == "expired":
@@ -521,7 +525,13 @@ def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_con
     inner.dependency_overrides[get_food_analysis_use_case] = UseCase
     with TestClient(ApiIngress(inner, verifier, lambda: validate_release(release_config), None)) as client:
         response = client.post("/v1/food-analysis", json=payload, headers=headers)
-    assert response.status_code == (200 if mutation is None and ai_enabled else 503 if mutation in {None, "disabled", "expired", "revoked"} else 400 if mutation == "duplicate" else 403)
+    assert response.status_code == (200 if mutation is None and ai_enabled else 503 if mutation in {None, "disabled", "missing_flag", "invalid_flag", "expired", "revoked"} else 400 if mutation == "duplicate" else 403)
+    if response.status_code == 503:
+        assert response.json()["error"]["code"] == "pilot_unavailable"
+        assert response.json()["error"].get("reason") == (
+            "pilot_not_activated" if mutation == "disabled" or not ai_enabled else None)
+    elif response.status_code != 200:
+        assert "reason" not in response.json()["error"]
     assert len(calls) == (1 if mutation is None and ai_enabled else 0)
     assert len(provider_calls) == len(calls)
     if not calls:

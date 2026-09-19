@@ -191,8 +191,8 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
         // Prefer the backend's own normalized error code when present; it
         // already encodes the right category (e.g. a 502 that is really a
         // rate-limit or timeout at the gateway boundary).
-        if let code = (try? JSONDecoder().decode(BackendErrorEnvelope.self, from: data))?.error.code {
-            switch code {
+        if let error = (try? JSONDecoder().decode(BackendErrorEnvelope.self, from: data))?.error {
+            switch error.code {
             case "operation_consumed":
                 return .operationConsumed
             case "operation_conflict":
@@ -200,6 +200,9 @@ public final class FoodAnalysisService: FoodAnalysisServicing {
             case "operation_required":
                 return .operationRequired
             case "pilot_unavailable":
+                if statusCode == 503 && error.reason == "pilot_not_activated" {
+                    return .pilotNotActivated
+                }
                 return .pilotUnavailable
             case "pilot_forbidden":
                 return .pilotForbidden

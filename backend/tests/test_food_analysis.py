@@ -1,6 +1,7 @@
 import json
 
 import azure.functions as func
+import httpx
 import pytest
 
 from api.food_analysis import food_analysis
@@ -78,6 +79,42 @@ def test_food_analysis_rejects_missing_description():
 
     assert response.status_code == 400
     assert json.loads(response.get_body())["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("status,code,reason,expected", [
+    (503, "pilot_unavailable", "pilot_not_activated", "pilot_not_activated"),
+    (503, "pilot_unavailable", None, None),
+    (503, "pilot_unavailable", "unknown", None),
+    (503, "pilot_unavailable", {"unexpected": "value"}, None),
+    (502, "pilot_unavailable", "pilot_not_activated", None),
+    (503, "provider_unavailable", "pilot_not_activated", None),
+    (504, "provider_timeout", "pilot_not_activated", None),
+])
+def test_activation_reason_is_allow_listed_through_public_response(monkeypatch, image, status, code, reason, expected):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        error = {"code": code, "message": "private-upstream-detail"}
+        if reason is not None:
+            error["reason"] = reason
+        return httpx.Response(status, json={"error": error})
+
+    monkeypatch.setattr("api.food_analysis._make_gateway_client", lambda *args: GatewayClient(
+        base_url="https://gateway.test", transport=httpx.MockTransport(handler)))
+    response = food_analysis(_multipart_request() if image else _request({"food_description": "synthetic"}))
+    error = json.loads(response.get_body())["error"]
+    assert len(calls) == 1
+    assert response.status_code == (504 if code == "provider_timeout" else 503)
+    assert error["code"] == ("pilot_unavailable" if code == "pilot_unavailable" else
+                             "gateway_timeout" if code == "provider_timeout" else "gateway_service_unavailable")
+    assert error["request_id"] == response.headers["X-Request-Id"]
+    assert "private-upstream-detail" not in response.get_body().decode()
+    if expected:
+        assert error["reason"] == expected
+    else:
+        assert "reason" not in error
 
 
 def test_food_analysis_rejects_invalid_json():

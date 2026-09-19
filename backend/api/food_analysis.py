@@ -114,7 +114,7 @@ def _handle_text_analysis(req: func.HttpRequest, request_id: str, identity=None,
             gateway_response = client.analyze_food_text(public_request.food_description)
     except GatewayClientError as exc:
         logger.warning("gateway request failed request_id=%s code=%s", request_id, exc.code)
-        return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds)
+        return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds, reason=exc.reason)
     finally:
         client.close()
 
@@ -194,7 +194,7 @@ def _handle_image_analysis(req: func.HttpRequest, request_id: str, identity=None
         gateway_response = client.analyze_food_image(image_bytes, mime_type, food_description=food_description)
     except GatewayClientError as exc:
         logger.warning("gateway request failed request_id=%s code=%s", request_id, exc.code)
-        return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds)
+        return _error_response(exc.http_status, exc.code, exc.message, request_id, exc.retry_after_seconds, reason=exc.reason)
     finally:
         client.close()
     # Release the (potentially several-MB) decoded image buffer as soon as
@@ -240,9 +240,12 @@ def _read_bounded(stream, max_bytes: int) -> bytes:
 
 
 def _error_response(
-    status_code: int, code: str, message: str, request_id: str, retry_after_seconds: int | None = None
+    status_code: int, code: str, message: str, request_id: str, retry_after_seconds: int | None = None,
+    *, reason: str | None = None,
 ) -> func.HttpResponse:
     body: dict = {"error": {"code": code, "message": message, "request_id": request_id}}
+    if reason is not None:
+        body["error"]["reason"] = reason
     if retry_after_seconds is not None:
         body["error"]["retry_after_seconds"] = retry_after_seconds
     response = func.HttpResponse(

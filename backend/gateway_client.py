@@ -7,8 +7,8 @@ connectivity failures, timeouts, and gateway-side errors so the backend can
 map each to an appropriate public status code.
 
 Error messages are always backend-owned: the gateway's own error message
-text is never forwarded to the client, only its normalized ``error.code``
-is read (safely) to decide which whitelisted backend status/code applies.
+text is never forwarded to the client. Only normalized codes and the explicit
+pre-dispatch activation reason are allow-listed at this boundary.
 """
 
 from __future__ import annotations
@@ -69,13 +69,15 @@ class GatewayClientError(Exception):
     """Normalized error raised when the gateway cannot fulfil a request."""
 
     def __init__(
-        self, code: str, http_status: int, message: str | None = None, retry_after_seconds: int | None = None
+        self, code: str, http_status: int, message: str | None = None, retry_after_seconds: int | None = None,
+        *, reason: str | None = None,
     ):
         super().__init__(message or _BACKEND_MESSAGES.get(code, "Gateway request failed."))
         self.code = code
         self.http_status = http_status
         self.message = message or _BACKEND_MESSAGES.get(code, "Gateway request failed.")
         self.retry_after_seconds = retry_after_seconds
+        self.reason = reason
 
 
 def _safe_parse_upstream_error_code(response: httpx.Response) -> str | None:
@@ -204,8 +206,12 @@ class GatewayClient:
             backend_code, backend_status = _UPSTREAM_CODE_TO_BACKEND.get(
                 upstream_code, ("gateway_upstream_error", 502)
             )
+            reason = None
+            if (response.status_code == 503 and upstream_code == "pilot_unavailable"
+                    and response.json()["error"].get("reason") == "pilot_not_activated"):
+                reason = "pilot_not_activated"
             raise GatewayClientError(
-                backend_code, backend_status, retry_after_seconds=_safe_parse_retry_after(response)
+                backend_code, backend_status, retry_after_seconds=_safe_parse_retry_after(response), reason=reason
             )
 
         try:

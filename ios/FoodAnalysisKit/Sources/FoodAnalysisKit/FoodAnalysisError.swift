@@ -29,6 +29,7 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
     case operationConflict
     case operationRequired
     case pilotUnavailable
+    case pilotNotActivated
     case pilotForbidden
     case pilotLimit
     case pilotInput
@@ -62,7 +63,7 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
         case .unauthorized, .invalidResponse, .imageProcessingFailed, .imageMissingOrEmpty,
             .unsupportedImageType, .imageTooLarge, .authenticationRequired, .operationInterrupted,
             .operationConsumed, .operationConflict, .operationRequired, .pilotUnavailable,
-            .pilotForbidden, .pilotLimit, .pilotInput:
+            .pilotNotActivated, .pilotForbidden, .pilotLimit, .pilotInput:
             return false
         case .operationAccountChanged:
             return false
@@ -107,6 +108,8 @@ public enum FoodAnalysisError: Error, Equatable, Sendable {
             return "Die Vorgangs-ID ist ungültig oder abgelaufen. Sie wird nicht automatisch ersetzt. Bitte prüfe auch die Gerätezeit."
         case .pilotUnavailable:
             return "Die Anfrage konnte nicht sicher bestätigt werden. Beim KI-Anbieter könnte bereits Verbrauch entstanden sein."
+        case .pilotNotActivated:
+            return "Die KI ist für diesen Pilot noch nicht aktiviert."
         case .pilotForbidden:
             return "Dieses Konto ist nicht für die Analyse freigegeben."
         case .pilotLimit:

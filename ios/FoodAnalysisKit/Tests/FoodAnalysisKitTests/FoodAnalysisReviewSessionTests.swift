@@ -92,6 +92,43 @@ private func sessionEstimate(name: String = "Reis", calories: Double = 620) -> F
 
 @MainActor
 final class FoodAnalysisReviewSessionTests: XCTestCase {
+    func testNotActivatedRefinementCannotRetryOrReplaceAndKeepsDraft() async {
+        let service = RefinementStubService(results: [.failure(FoodAnalysisError.pilotNotActivated)])
+        let session = makeSession(service: service)
+        session.correctionText = "half"
+        let draft = session.currentDraft
+        await session.refine()
+        XCTAssertEqual(session.refinementErrorMessage, "Die KI ist für diesen Pilot noch nicht aktiviert.")
+        XCTAssertFalse(session.requiresNewOperationConfirmation)
+        XCTAssertFalse(session.canRetryOperation)
+        XCTAssertFalse(session.canRefine)
+        await session.retryOperation()
+        await session.refine(confirmNewOperation: true)
+        session.correctionText = "quarter"
+        XCTAssertFalse(session.canRefine)
+        await session.refine(confirmNewOperation: true)
+        XCTAssertEqual(service.operations.count, 1)
+        XCTAssertEqual(session.currentDraft, draft)
+        XCTAssertEqual(session.successfulRefinementCount, 0)
+        XCTAssertTrue(session.canConfirmCurrentDraft)
+        XCTAssertFalse(session.persistenceCoordinator.hasCommitted)
+    }
+
+    func testNotActivatedRetryDoesNotEraseEarlierUncertainty() async {
+        let service = RefinementStubService(results: [.failure(FoodAnalysisError.timeout),
+            .failure(FoodAnalysisError.pilotNotActivated)])
+        let session = makeSession(service: service)
+        session.correctionText = "half"
+        await session.refine()
+        await session.retryOperation()
+        XCTAssertTrue(session.requiresNewOperationConfirmation)
+        XCTAssertEqual(session.refinementErrorMessage, FoodAnalysisError.pilotNotActivated.userMessage
+                   + " " + FoodAnalysisError.pilotUnavailable.userMessage)
+        XCTAssertFalse(session.canRefine)
+        XCTAssertFalse(session.canRetryOperation)
+        XCTAssertEqual(service.operations.count, 2)
+    }
+
     func testAuthFailureOnRetryDoesNotEraseEarlierUncertainty() async throws {
         let service = RefinementStubService(results: [.failure(FoodAnalysisError.timeout),
             .failure(FoodAnalysisError.authenticationRequired), .success(sessionEstimate())])
