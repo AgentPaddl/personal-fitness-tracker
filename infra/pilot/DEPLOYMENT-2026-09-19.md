@@ -94,12 +94,56 @@ Completed live:
 - Actual-output unsigned generic iOS Release build succeeded. Bundle
   `com.benedikt.Trainingsplan`, team `2SF7PV3WCD`, build5 unchanged. No installation.
 
-Still required before any model call: personal native-client sign-in and actual
-Easy Auth claim mapping; end-to-end backend Managed Identity JWT/HMAC; native and
+The personal native-client sign-in completed on 2026-09-19 at 07:17:05Z.
+The existing token-free record reports exact tenant/owner identity matching,
+HTTP503 and the expected backend `not_ready` response, with zero model calls.
+The helper checks the MSAL ID-token tenant/oid against the recorded sole owner
+before sending the request; it does not persist access or refresh tokens. Actual
+Easy Auth ARM readback independently restricts the backend audience, native
+client, tenant issuer and sole owner oid, with token storage disabled. This
+proves native admission to readiness, not the analysis route's injected claim
+mapping or downstream JWT/HMAC discrimination.
+
+Additional live checks in this continuation:
+
+- Eight public boundary checks passed: both health endpoints200; backend
+  anonymous readiness, forged platform headers and malformed token401; disabled
+  gateway analysis503; query-bearing analysis and docs404. No automatic retry.
+- Resource-group/inherited role inspection and Graph app-role readback still
+  match the separated identities and exact required `Gateway.Invoke` role.
+  Functions remains HTTPS-only, max1/512MiB/HTTP2/no always-ready.
+- A bounded console snapshot contained eight technical request events, no
+  generated key values, synthetic request text or Bearer marker. This does not
+  establish log privacy during active provider traffic.
+- Model metrics were available but contained no request/input/output samples;
+  missing telemetry is not proof of zero invoice charges. Cost Management again
+  returned429; the budget's delayed EUR0 display is not an accrued-cost total.
+
+The new model-free `qualify_ledger.py` exercises replay/conflict/foreign identity,
+unknown-hold restart, double settlement and policy mismatch in a unique synthetic
+partition. It never calls a provider. It verifies the real ledger's content and
+ETag are unchanged and deletes only that test partition. Three focused local
+tests passed, including a full partition-isolation test and the API-off gate;
+the final ledger/runtime regression run passed all 191 tests.
+Its live run is **not yet passed**: initial exec transport failures preceded
+execution; the first executed probe stopped at the ordinary settings loader's
+intentional AI-off release check, before any Table access. The administrative
+helper now explicitly supplies `Settings()` without changing the HTTP runtime.
+The corrected run was rejected at the exec handshake at **07:31:18Z** with
+HTTP429/Retry-After600, so it was not executed. Respect that cooldown rather than
+polling or counting the CLI exit status as proof. The Functions Flex SCM
+environment is administratively reachable, but its command endpoint returned404;
+no new diagnostic endpoint or workload permission was added.
+
+Still required before any model call: analysis-route Easy Auth claim mapping;
+end-to-end backend Managed Identity JWT/HMAC; native and
 foreign workload rejection; delegated/direct bypass attempts; actual ingress
 body/slow-client/scale behavior; log inspection; live replay/unknown-hold and
 revocation/renewal qualification. Offline regressions do not attest these checks.
 No `CHECKS` record has been fabricated and no signature has been issued.
+The gateway remains `AI_API_ONLY_ENABLED=false`. The backend's similarly named
+flag is true to select mandatory workload authentication; it is not an enabled
+gateway model release. No model request was made during this continuation.
 
 Synthetic acceptance is a separate policy option. It admits only SHA-256 hashes
 of normalized nonprivate DTOs and only one person. Its CAS-backed lifetime
@@ -229,13 +273,13 @@ Deployments use `main.json`; runtime parameters remain private and AI false.
 The deployment record and private operation files preserve the intervening
 provider validation corrections. `provision.py` intentionally cannot activate AI.
 
-Next identity step: `provision.py login-probe` with the existing private CLI
-directory, actual subscription/tenant and `--name 20260919`, executed with the
-gateway virtualenv. Personal Microsoft sign-in is required for the **new native
-client**, distinct from administrative Azure CLI login. It performs only a
-Readiness GET, disables redirects/retries and persists only status evidence.
-Never paste access/refresh tokens or passwords into chat. A successful expected
-AI-off503 backend response is not full runtime acceptance.
+The initial `provision.py login-probe` has passed; do not repeat it just to
+reconfirm the same readiness result. Further authenticated analysis qualification
+needs a reviewed bounded runner and a fresh personal sign-in because the probe
+intentionally discarded its tokens. Never substitute an administrative CLI token
+for the native client, broaden consent, or paste credentials into chat. Complete
+the outstanding model-free safety probes first; do not sign incomplete evidence
+to get around the current release-first HTTP gate.
 
 On a stop trigger or no later than the period end:
 

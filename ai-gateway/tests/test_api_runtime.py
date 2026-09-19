@@ -687,6 +687,84 @@ def test_acceptance_manifest_binds_exact_gateway_normalization():
     assert manifest["cases"][0]["expected"]["calories"] == 272
 
 
+def test_model_free_ledger_qualification_preserves_unknown_holds():
+    from tests.test_pilot import profile_coordinator
+
+    helper = load_local_module("infra/pilot/qualify_ledger.py")
+    control = profile_coordinator(acceptance={
+        "max_attempts": 10, "max_reserved_usd": "2.343", "payload_sha256": ["a" * 64],
+        "expires_at": int(time.time()) + 3600})
+    result = asyncio.run(helper.exercise(control))
+    assert result["model_attempts"] == 0
+    assert result["unknown_hold_survives_restart"] is True
+    assert all(value is True for name, value in result.items() if name != "model_attempts")
+    assert control.store.rows["ledger"][0]["acceptance"] == {"attempts": 1, "reserved": 234300000}
+
+
+def test_ledger_qualification_isolates_writes_and_uses_ai_off_settings(monkeypatch, capsys):
+    import json
+    from copy import deepcopy
+    from tests.test_pilot import MemoryCAS, profile_coordinator
+
+    helper = load_local_module("infra/pilot/qualify_ledger.py")
+    control = profile_coordinator(acceptance={
+        "max_attempts": 10, "max_reserved_usd": "2.343", "payload_sha256": ["a" * 64],
+        "expires_at": int(time.time()) + 3600})
+    original = deepcopy(control.store.rows)
+
+    class PartitionedStore:
+        partition = "pilot-v1"
+        closed = False
+
+        def __init__(self):
+            self.partitions = {"pilot-v1": control.store}
+            self.client = self
+
+        def current(self):
+            return self.partitions.setdefault(self.partition, MemoryCAS())
+
+        async def read(self, key):
+            return await self.current().read(key)
+
+        async def commit(self, changes):
+            assert self.partition.startswith("qualification-")
+            await self.current().commit(changes)
+
+        async def query_entities(self, query, *, parameters, logging_enable):
+            assert parameters["partition"] == self.partition
+            for key in list(self.current().rows):
+                yield {"RowKey": key}
+
+        async def delete_entity(self, partition, key, *, logging_enable):
+            assert partition == self.partition and partition.startswith("qualification-")
+            del self.current().rows[key]
+
+        async def close(self):
+            self.closed = True
+
+    store = PartitionedStore()
+    control.store = store
+    settings = object()
+    monkeypatch.setattr(helper, "Settings", lambda: settings)
+
+    def configured(*, settings):
+        assert settings is expected_settings
+        return control
+
+    expected_settings = settings
+    monkeypatch.setattr(helper, "build_coordinator", configured)
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+    monkeypatch.setenv("AI_PILOT_RESOURCE_GROUP", "pft-pilot-20260919")
+    monkeypatch.setenv("AI_PILOT_TABLE_NAME", "PilotLedger")
+    asyncio.run(helper.main())
+    result = json.loads(capsys.readouterr().out.removeprefix("QUALIFICATION "))
+    assert result["pilot_attempts"] == result["pilot_reserved_units"] == 0
+    assert result["pilot_ledger_unchanged"] is True
+    assert store.partitions["pilot-v1"].rows == original
+    assert all(not value.rows for key, value in store.partitions.items() if key != "pilot-v1")
+    assert store.closed is True
+
+
 def test_pilot_bootstrap_resumes_without_duplicate_mutations_or_secret_arguments(monkeypatch, tmp_path):
     from datetime import datetime, timedelta
     import json
