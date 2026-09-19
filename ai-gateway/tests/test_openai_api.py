@@ -454,6 +454,116 @@ def test_http_errors_never_retry_redirect_or_leak_content(http_status, error_typ
     assert "not-a-real-key" not in caplog.text
 
 
+def test_response_diagnostics_do_not_invent_missing_headers():
+    from app.providers.openai_api import _response_diagnostics
+
+    assert _response_diagnostics(429, {}) == {"http_status": 429}
+
+
+@pytest.mark.parametrize("http_status", [200, 429])
+def test_bounded_provider_response_diagnostics_without_payload_or_retry(http_status, caplog, monkeypatch):
+    calls = []
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr("app.providers.openai_api.diagnostic_logger", logging.getLogger("synthetic.provider.events"))
+    identifier = "12345678-1234-4321-8321-123456789abc"
+    headers = {"x-request-id": "req_synthetic", "apim-request-id": identifier,
+               "x-ms-request-id": identifier, "retry-after": "65", "retry-after-ms": "65000",
+               "x-ms-retry-after-ms": "65000", "x-ratelimit-limit-requests": "1",
+               "x-ratelimit-limit-tokens": "1000", "x-ratelimit-remaining-requests": "0",
+               "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-requests": "1m5s",
+               "x-ratelimit-reset-tokens": "65", "authorization": "Bearer private-token",
+               "set-cookie": "private-cookie", "x-should-retry": "true"}
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(http_status, headers=headers, json=_profile_completion() if http_status == 200
+                               else {"error": {"message": "private-response-content"}})
+
+    async def run():
+        provider = _profile_provider(handler)
+        try:
+            if http_status == 429:
+                with pytest.raises(ProviderRateLimitedError) as captured:
+                    await provider.generate(_request())
+                metadata = captured.value.metadata
+                assert metadata.usage is None and metadata.estimated_cost_usd is None
+                assert captured.value.retry_after_seconds is None
+            else:
+                metadata = (await provider.generate(_request())).metadata
+            expected = {name: value for name, value in headers.items()
+                        if name not in {"retry-after", "authorization", "set-cookie", "x-should-retry"}}
+            for name in ("retry-after-ms", "x-ms-retry-after-ms", "x-ratelimit-limit-requests",
+                         "x-ratelimit-limit-tokens", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"):
+                expected[name] = int(expected[name])
+            expected.update(http_status=http_status, **{"retry-after-seconds": 65})
+            assert metadata.response_diagnostics == expected
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1
+    assert identifier in caplog.text and '"retry-after-seconds":65' in caplog.text
+    assert all(value not in caplog.text for value in ("private-token", "private-cookie", "private-response-content",
+                                                     "synthetic input", "not-a-real-key"))
+
+
+def test_provider_diagnostics_use_configured_pilot_sink():
+    import io
+    from app.api_runtime import create_api_app
+    from app.providers.openai_api import diagnostic_logger
+
+    create_api_app()
+    parent = logging.getLogger("app.pilot.events")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    parent.addHandler(handler)
+    try:
+        assert diagnostic_logger.isEnabledFor(logging.INFO)
+        diagnostic_logger.info("synthetic diagnostic sink check")
+        assert "synthetic diagnostic sink check" in stream.getvalue()
+        assert parent.propagate is False
+    finally:
+        parent.removeHandler(handler)
+
+
+def test_provider_diagnostics_never_enter_public_error_response():
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from app.providers.base import GenerationMetadata
+
+    application = create_app()
+
+    @application.get("/diagnostic-test")
+    async def failure():
+        error = ProviderRateLimitedError()
+        error.metadata = GenerationMetadata(
+            provider="azure_openai", requested_deployment="internal-deployment", returned_model=None,
+            provider_request_id="req_private", duration_ms=1, status="rate_limited",
+            response_diagnostics={"retry-after-seconds": 65, "x-request-id": "req_private"})
+        raise error
+
+    with TestClient(application) as client:
+        response = client.get("/diagnostic-test", headers={"X-Request-Id": "public-correlation"})
+    assert response.status_code == 429
+    assert response.json() == {"error": {"code": "provider_rate_limited",
+                                        "message": ProviderRateLimitedError().message,
+                                        "request_id": "public-correlation"}}
+    assert "retry-after" not in response.headers and "req_private" not in str(response.headers)
+
+
+def test_response_diagnostics_discard_untrusted_headers_and_parse_http_date(monkeypatch):
+    from app.providers.openai_api import _response_diagnostics
+
+    monkeypatch.setattr("app.providers.openai_api.time.time", lambda: 0)
+    for value in ("Bearer private-token", "eyJhbGciOiJIUzI1NiJ9.payload.signature", "private@example.test",
+                  "-1", "NaN", "1e6", "1" * 1000, "private\nlog", "private-response-content"):
+        names = ("x-request-id", "apim-request-id", "x-ms-request-id", "retry-after", "retry-after-ms",
+                 "x-ratelimit-limit-tokens", "x-ratelimit-reset-tokens")
+        assert _response_diagnostics(429, dict.fromkeys(names, value)) == {"http_status": 429}
+    assert _response_diagnostics(429, {"retry-after": "Thu, 01 Jan 1970 00:01:05 GMT"}) == {
+        "http_status": 429, "retry-after-seconds": 65}
+
+
 @pytest.mark.parametrize("mode", ["transport_timeout", "connection", "deadline"])
 def test_transport_failures_and_deadline_are_single_attempt(mode):
     calls = []
@@ -474,6 +584,7 @@ def test_transport_failures_and_deadline_are_single_attempt(mode):
                 await provider.generate(_request(timeout_seconds=0.02))
             assert caught.value.metadata.usage is None
             assert caught.value.metadata.estimated_cost_usd is None
+            assert caught.value.metadata.response_diagnostics is None
             assert "sensitive detail" not in str(caught.value)
         finally:
             await provider.aclose()

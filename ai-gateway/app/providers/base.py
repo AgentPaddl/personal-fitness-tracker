@@ -86,6 +86,7 @@ class GenerationMetadata:
     price_version: str | None = None
     profile_id: str | None = None
     service_tier: str | None = None
+    response_diagnostics: dict[str, str | int] | None = None
 
     @property
     def usage_known(self) -> bool:

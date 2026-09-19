@@ -10,7 +10,8 @@ import math
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -31,6 +32,7 @@ from app.providers.pricing import PriceTable, resolve_profiles
 from app.providers.strict_schema import to_strict_schema
 
 logger = logging.getLogger("app.generation")
+diagnostic_logger = logging.getLogger("app.pilot.events.provider")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}\Z")
 
 
@@ -52,6 +54,38 @@ def _identifier(value: Any) -> str | None:
 
 def _integer(value: Any) -> int | None:
     return value if type(value) is int and value >= 0 else None
+
+
+def _response_diagnostics(status_code: int, headers: Mapping[str, str]) -> dict[str, str | int]:
+    result: dict[str, str | int] = {"http_status": status_code}
+    for name in ("x-request-id", "apim-request-id", "x-ms-request-id"):
+        value = headers.get(name, "")
+        if re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}"
+                r"|req_[A-Za-z0-9_-]{1,96}", value):
+            result[name] = value
+    for name in ("retry-after-ms", "x-ms-retry-after-ms", "x-ratelimit-limit-requests",
+                 "x-ratelimit-limit-tokens", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"):
+        value = headers.get(name, "")
+        if re.fullmatch(r"[0-9]{1,9}", value):
+            result[name] = int(value)
+    for name in ("x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"):
+        value = headers.get(name, "")
+        if len(value) <= 32 and re.fullmatch(r"(?:[0-9]{1,6}(?:\.[0-9]{1,3})?(?:ms|s|m|h)){1,4}"
+                            r"|[0-9]{1,9}(?:\.[0-9]{1,3})?", value):
+            result[name] = value
+    retry_after = headers.get("retry-after", "")
+    if re.fullmatch(r"[0-9]{1,8}", retry_after):
+        result["retry-after-seconds"] = int(retry_after)
+    elif len(retry_after) <= 64:
+        try:
+            deadline = parsedate_to_datetime(retry_after)
+            if deadline.tzinfo is not None:
+                delay = math.ceil(deadline.timestamp() - time.time())
+                if 0 <= delay <= 86400:
+                    result["retry-after-seconds"] = delay
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return result
 
 
 def _usage(response: Any) -> TokenUsage | None:
@@ -147,6 +181,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
         response = None
         accounting = None
         request_id = None
+        diagnostics = None
         status = "invalid_request"
         try:
             if os.environ.get("APP_ENV", "production") not in {"development", "test"}:
@@ -199,6 +234,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
                     **parameters,
                 )
             request_id = _identifier(raw.request_id)
+            diagnostics = _response_diagnostics(raw.status_code, raw.headers)
             status = "invalid_output"
             accounting = json.loads(raw.content, object_pairs_hook=_json_object, parse_constant=_invalid_constant)
             response = raw.parse()
@@ -231,11 +267,11 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             validator.validate(data)
             status = "success"
         except asyncio.CancelledError:
-            self._metadata(deployment, accounting, request_id, started, "cancelled")
+            self._metadata(deployment, accounting, request_id, started, "cancelled", diagnostics)
             raise
         except (TimeoutError, APITimeoutError):
             error = ProviderTimeoutError()
-            error.metadata = self._metadata(deployment, accounting, request_id, started, "timeout")
+            error.metadata = self._metadata(deployment, accounting, request_id, started, "timeout", diagnostics)
             raise error from None
         except APIStatusError as exc:
             error_type, status = {
@@ -249,7 +285,8 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             if exc.status_code == 400 and exc.code == "content_filter":
                 error_type, status = ProviderOutputInvalidError, "refused"
             error = error_type()
-            error.metadata = self._metadata(deployment, accounting, _identifier(exc.request_id), started, status)
+            diagnostics = _response_diagnostics(exc.status_code, exc.response.headers)
+            error.metadata = self._metadata(deployment, accounting, _identifier(exc.request_id), started, status, diagnostics)
             raise error from None
         except Exception as exc:
             if isinstance(exc, GatewayError):
@@ -258,13 +295,13 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
                 error = ProviderOutputInvalidError()
             else:
                 error = ProviderUnavailableError()
-            error.metadata = self._metadata(deployment, accounting, request_id, started, status)
+            error.metadata = self._metadata(deployment, accounting, request_id, started, status, diagnostics)
             raise error from None
         return StructuredGenerationResult(
-            data=data, metadata=self._metadata(deployment, accounting, request_id, started, status),
+            data=data, metadata=self._metadata(deployment, accounting, request_id, started, status, diagnostics),
         )
 
-    def _metadata(self, deployment, response, request_id, started, status) -> GenerationMetadata:
+    def _metadata(self, deployment, response, request_id, started, status, diagnostics=None) -> GenerationMetadata:
         response = response if isinstance(response, dict) else {}
         usage = _usage(response)
         model = _identifier(response.get("model"))
@@ -279,6 +316,7 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             status=status, usage=usage, estimated_cost_usd=cost,
             price_version=self._prices.version if self._prices else None,
             profile_id=profile.identifier if profile else None, service_tier=tier,
+            response_diagnostics=diagnostics,
         )
         logger.info(
             "generation status=%s duration_ms=%s usage_known=%s input_tokens=%s output_tokens=%s cost_usd=%s price_version=%s",
@@ -287,6 +325,10 @@ class AzureOpenAIProvider(StructuredGenerationProvider):
             str(cost) if cost is not None else "unknown",
             metadata.price_version,
         )
+        if diagnostics is not None:
+            diagnostic_logger.log(logging.INFO if status == "success" else logging.WARNING,
+                                  "provider_response status=%s diagnostics=%s", status,
+                                  json.dumps(diagnostics, sort_keys=True, separators=(",", ":")))
         return metadata
 
     @staticmethod

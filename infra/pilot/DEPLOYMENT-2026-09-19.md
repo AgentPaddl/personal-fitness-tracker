@@ -548,6 +548,161 @@ actual-SDK429 attribution, single dispatch, timeout/unknown conservatism, CAS
 conflicts, unchanged holds/counters, receipt binding, replay and spacing gates.
 Pylance syntax checks, editor diagnostics and diff whitespace checks passed.
 
+## Read-only throttling investigation from b64b6fa
+
+On2026-09-19 at13:46-13:53Z, read-only ARM/Monitor queries confirmed
+`gpt-5.4-mini` version`2026-03-17`, `DataZoneStandard`, capacity/currentCapacity1,
+Succeeded, NoAutoUpgrade, **1 RPM /1,000 TPM**. The SwedenCentral subscription
+usage line is1/200 units; Model Capacities independently reports199 additional
+units available. These are deployment allocations, not requests already used.
+No capacity, quota, release, ledger, role or other cloud configuration changed;
+no inference was made. AI remained false on ready revision`--resume-locked`,
+and the jobs list remained empty. Production/iPhone/participant scope is unchanged.
+
+The cause of the allocation is local: `provision.py` explicitly writes
+`modelCapacity: 1`, introduced in commit`c788aec` (AI-off bootstrap). Both protected
+initial and acceptance parameter artifacts retain1, and `main.json` passes that
+required parameter directly to the deployment SKU. Azure did not cap this account
+at1. The bootstrap chose the smallest allocation without request-size-based
+throughput sizing; no historical rationale beyond that explicit choice is proven.
+The infrastructure template still allows1-20, and was not changed in this task.
+
+### Rate estimation is not billing
+
+Official documentation checked on2026-09-19:
+
+- [Azure quota guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/quota):
+  admission uses an approximate maximum processed-token estimate, including prompt
+  size and the output cap; partly character-based, distinct from post-response
+  billed usage. RPM can be enforced in1-10-second windows. Shared-capacity pressure
+  and temporary effective-limit reductions can also yield429.
+- [Azure model quotas](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits):
+  ratios vary by model. Its GPT-5.4-mini GlobalStandard table has1 RPM/1,000 TPM;
+  the actual DataZoneStandard ratio here is established by live ARM readback,
+  not borrowed from another model or a generic tier table.
+- [Azure reasoning parameters](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/reasoning):
+  GPT-5.4-mini supports Chat Completions `max_completion_tokens`; it bounds
+  visible output, reasoning and formatting. Our cap is2,000, reasoning is`none`,
+  one result (`n=1`), no best-of multiplier. The quota guide calls the output
+  parameter `max_tokens`; it does not publish the exact GPT-5.4-mini v1 estimator.
+- [Azure vision guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/gpt-with-vision):
+  image size/detail affect processing; its GPT-4-era tile examples are not a
+  GPT-5.4-mini rate-limit formula. Our profile explicitly uses`detail=high`.
+- [OpenAI vision calculation](https://developers.openai.com/api/docs/guides/images-vision#calculating-costs),
+  supplementary, **not an Azure throttling specification**: current GPT-5.4-mini
+  image billing uses32px patches, multiplier1.2, high-detail budget2,500 patches
+  and maximum side2,048. Within our1,280px side bound this suggests at most
+  1,600 patches /1,920 image input tokens, before prompt and output. Do not use
+  GPT-4o tiles or GPT-4.1-mini's1.62 multiplier for this model, and do not turn
+  this sizing estimate into a known charge or replace the full financial reserve.
+
+The pilot permits one PNG/JPEG, at most3MiB decoded /1,280px per side, and
+65,536 canonical bytes for messages plus schema. Compression bytes/base64 length
+are not billed image-token counts. The exact Azure estimator's treatment of the
+encoded image and strict schema is not specified in the reviewed sources.
+Offline inspection of the existing image cases, with no payload logging:
+
+| Case | Pixels | Image bytes | Base64 characters | Strict messages/schema bytes |
+| --- | --- | ---: | ---: | ---: |
+| L1 | 800x500 | 19,960 | 26,616 | 1,721 |
+| L2 | 800x500 | 21,297 | 28,396 | 1,735 |
+| P1 | 1000x883 | 126,348 | 168,464 | 1,735 |
+| P5 | 1000x458 | 111,390 | 148,520 | 1,693 |
+
+Therefore1,000 TPM is undersized for output-cap-aware text/image planning; merely
+waiting65 seconds cannot fix an oversized individual estimate. Nevertheless,
+six text/refinement requests succeeded with the same2,000 cap. That observation
+prevents claiming that `2,000 >1,000` alone proves the exact rejection mechanism.
+All four image requests received429, including L2 after hours without a request.
+Input-related estimated-token pressure is the leading hypothesis; exact RPM/TPM
+versus temporary shared-capacity attribution remains unknown because those
+responses' provider IDs, Retry-After and rate headers were not retained.
+
+### Proposed capacity and cost effect
+
+Recommend **capacity20, expected20 RPM /20,000 TPM**, as the smallest rounded
+planning allocation for the existing *short* requests at the gateway's ceiling
+of four total requests/minute (two/person), not a proven service guarantee.
+Budget roughly1,000 prompt/schema tokens +1,920 image tokens +2,000 output tokens
+=4,920/request; four are19,680/minute, rounded up to20 units. The tested images
+are smaller, and ordinary two-user use at one request/person/minute leaves about
+half of this allowance spare. Text/refinement known input counts were437-924.
+This is a transparent planning envelope, **not the Azure character estimator**.
+At four worst-envelope requests/minute headroom is thin; spread arrivals and
+inspect effective headers. Do not promise simultaneous acceptance in every
+short RPM window, sustained maximum traffic, or all possible65,536-byte inputs.
+Large/adversarial inputs or effective limits below ARM require separate sizing
+review, not silent input-limit changes, capacity escalation, retries or fallback.
+Neither capacity2 (little room beyond output) nor capacity4 (RPM alone) addresses
+the input budget. A future approved capacity20 change needs19 of the199 free units;
+verify actual resulting rate limits after propagation before enabling any call.
+
+[Azure deployment-type billing](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/deployment-types)
+classifies DataZoneStandard as **pay-per-token**, unlike reserved PTU SKUs.
+Raising this base-model Standard allocation does not purchase dedicated capacity
+or add a fixed model hosting/PTU fee; it raises potential throughput. More actual
+accepted consumption can cost more. Existing ACR/Functions/ACA/storage costs,
+tax, FX, delayed billing and cleanup reserves remain. No SKU, price profile,
+output cap, participant admission or budget limit was changed. No PTU is proposed.
+
+### Four holds and minimum retest
+
+Fresh Azure Monitor again reports six200/four429. ProcessedPromptTokens total4,457
+and GeneratedTokens total897, with nonzero minute buckets only alongside the six
+successful responses. These are aggregate metrics without a request-ID dimension,
+not per-operation settlement or proof that rejected requests cost zero. One
+Cost Management ActualCost query by resource returned429 (client-type wait19s).
+It used a single HTTP POST with transport retries disabled and was **not retried**.
+The last successful posted cost remains the earlier EUR0.0522464784475356 net,
+not a current all-in total. No request-correlated financial evidence was obtained.
+L1/L2/P1/P5 therefore each retain USD0.2343, total **USD0.9372**; no live ledger
+was read through Exec, mutated or reconciled. Known charges remain USD0.008117175,
+charged/held USD0.945317175, and the original lifetime counter stays10/USD2.343.
+Protected receipts and new read-only evidence remain under the ignored private
+pilot directory; provider/account identifiers and billing raw responses are not
+committed. AI-off does not stop existing infrastructure charges.
+
+The local diagnostic patch captures only bounded provider IDs, HTTP status,
+Retry-After and six rate-limit headers on success/HTTP errors, in internal
+metadata and the existing timestamped pilot log sink. Missing/invalid headers
+are omitted; transport failures invent none. Public DTOs/errors/Retry-After and
+the single-dispatch policy are unchanged. No credentials, image/text content or
+raw error body is logged. No automatic retry, paid log destination or live rollout
+was introduced. It cannot retrospectively recover missing IDs. For future runs,
+capture diagnostic events against each case's private operation receipt under
+the existing seven-day diagnostic retention and unknown-accounting exceptions.
+
+The smallest **proposed new acceptance set is four attempts**, once each:
+L1 per100g-label arithmetic; L2 per-serving distinction; P1 food recognition plus
+portion/recipe uncertainty; P5 semantic non-food abstention. A transport failure
+does not pass P5. Keep existing tolerances; do not repeat the six successful
+text/refinement cases or add a diagnostic warmup. This is screening, not a
+two-person load/latency guarantee or a weighed-photo accuracy claim.
+
+Additional maximum model reserve: **4 x USD0.2343 = USD0.9372**. With explicit
+conservative planning factors EUR1.20/USD and1.50 for tax, reserve EUR1.69 for
+those new calls, plus a separate proposed EUR0.50 ancillary/cleanup envelope:
+**EUR2.19 additional all-in retest reserve**, not an increase of the EUR20+5 cap.
+Existing holds are not spent twice or released: retaining them and reserving
+four new attempts would bring known/held/new model exposure to USD1.882517175.
+Fresh billing or a separately accepted bounded delayed-billing assessment must
+establish available room before approval; this query failure does not do so.
+
+**Zero attempts remain authorized now.** The exhausted ten-attempt grant, policy
+and counters were not extended/reset. Four future attempts require a separate
+explicit, time-limited authorization and funded reserve, reviewed diagnostic
+artifact build/scan and AI-off deployment/capacity change, fresh readbacks and
+release evidence. Keep cases sequential at least65 seconds apart and respect
+longer provider wait hints; stop for operator review on any429/unknown outcome,
+never retry it automatically. Finish locked and clean. No wife's admission or
+iPhone/production action is part of that proposal.
+
+Local verification: **373 affected tests passed, one skipped**; actual SDK mock
+transport, bounded/malformed headers, one attempt despite retry hints, unknown
+usage preservation, configured INFO sink and unchanged public429 response.
+Pylance syntax checks and editor diagnostics were clean. These tests do not
+qualify live header availability or the proposed deployment capacity.
+
 ## Costs and stop conditions
 
 Continuation cost readback returned **EUR0.0522464784475356 net posted** since

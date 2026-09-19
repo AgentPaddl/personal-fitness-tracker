@@ -419,6 +419,30 @@ fits the deployment's TPM limit. Safe gateway request IDs, normalized error code
 and numeric gateway Retry-After hints are captured in the protected receipt;
 they are not Azure provider request IDs or provider rate-limit headers.
 
+The local Azure adapter now captures bounded internal `response_diagnostics`
+from successful raw SDK responses and HTTP exceptions, before parsing content.
+Only HTTP status, UUID/`req_` provider request IDs (`x-request-id`,
+`apim-request-id`, `x-ms-request-id`), numeric Retry-After seconds/milliseconds,
+and numeric limit/remaining or bounded reset-duration headers are accepted.
+HTTP-date Retry-After is converted to nonnegative seconds within one day;
+unrecognized, oversized or missing values are omitted, not invented. These
+headers are diagnostic hints, not proof of billing or an authorization to retry.
+No request headers, credentials, prompts, images or response/error bodies are
+logged. Numeric token-limit counters are not content or authentication tokens.
+
+`app.pilot.events.provider` uses the API-only entry point's existing timestamped
+pilot log sink, including successful INFO events; HTTP failures use WARNING.
+No SDK/body tracing or global DEBUG configuration is enabled. The public error
+envelope, gateway request ID and controlled gateway Retry-After remain unchanged.
+For a separately approved run, capture these events privately and associate the
+provider ID with its single case/operation receipt; gateway IDs are not provider
+IDs. Apply the approved seven-day diagnostic retention and accounting/unknown-hold
+exceptions. No new cloud log destination or indefinite retention is introduced.
+This code is **local-only until a separately authorized build/deployment**; it
+cannot recover the four historical responses' missing headers. See the
+[read-only throttling investigation](DEPLOYMENT-2026-09-19.md#read-only-throttling-investigation-from-b64b6fa)
+for sizing assumptions and the proposed, not authorized, four-case retest.
+
 `complete_terminal_429` is an operator-only, hold-preserving correction, not a
 runtime endpoint or automatic recovery rule. First disable gateway admission and
 independently review the completed provider429 and exact operation receipt. Old
