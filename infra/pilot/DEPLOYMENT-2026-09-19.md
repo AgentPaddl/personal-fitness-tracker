@@ -9,11 +9,13 @@ billing residual risk, not guaranteed invoice ceilings. The prior benchmark is
 separate. No production deployment, installed app or private record was changed.
 
 Deployment is **AI off, not accepted for ordinary use**. No real nutrition/image
-data were sent. Acceptance counter: **5/10**, without retries: four successful
-synthetic text responses and one image attempt returning429 with unknown usage.
+data were sent. Acceptance counter: **10/10**, without retries: six successful
+synthetic text/refinement responses and four image attempts returning429 with unknown usage.
 The first signed technical grant was exercised, revoked under the same valid
-token, and finally invalidated by rotating only its release key. One full-cost
-hold remains; no counter or accounting state was reset. Only the owner's identity is configured;
+token, and invalidated by rotating only its release key. The bounded continuation
+grants are also revoked. Four full-cost holds remain, totaling USD0.9372; their
+completed response executions no longer occupy slots. No financial hold or
+counter was reset. Only the owner's identity is configured;
 the wife is not admitted and no placeholder identity was substituted.
 
 The conservative period anchor was recorded immediately before the first pilot
@@ -362,7 +364,7 @@ P5 is not evidence of safety-filter refusal; a generic error is not successful
 abstention. No private user input or repeated setup model call is permitted.
 Expected T2: 272 kcal, 13.2 g protein, 34 g carbohydrate, 6.8 g fat.
 
-### Model acceptance stopped at an unknown hold
+### Initial model acceptance stopped at an unknown hold
 
 After the same-token safety qualification, the same still-valid one-hour grant
 was enabled for the existing manifest, without renewal or policy change.
@@ -392,8 +394,8 @@ keeps the dispatched operation `unknown` and active. This is not proof of zero
 provider charge or a precise RPM/TPM/capacity diagnosis. No provider error body
 was retained by the runner, and a later generation-log snapshot was empty.
 Do not invent a more specific cause from429 alone. No second L1 call or next-case
-start occurred. The active hold is a concrete fail-closed admission/accounting
-blocker, not a model-quality result. Reconcile against actual provider/usage
+start occurred. The active entry was a fail-closed execution-slot blocker,
+not exhausted financial headroom or a model-quality result. Reconcile against actual provider/usage
 evidence and a reviewed hold-preserving procedure before any further admission;
 do not clear `active`, reset the ledger, raise capacity or replay L1 to proceed.
 
@@ -429,7 +431,135 @@ tests exercise no-network single dispatch, create-only intent, hash/order checks
 duplicate/active refusal, HTTP/transport/unknown-usage stops, same-token release
 and receipt isolation. This does not turn the five untested live cases into passes.
 
+### Investigation and bounded continuation from064628f
+
+Azure Monitor's existing `AzureOpenAIRequests` metric for `pilot-mini` shows four
+HTTP200 responses and one HTTP429 in the original acceptance window, including
+the429 in the09:26Z bucket. Together with the admitted, dispatched and settled
+L1 operation this establishes an **Azure model-provider429**, not the gateway's
+connection cap or the pre-admission pilot limiter. An offline actual-SDK test
+reproduces one dispatch, `rate_limited` metadata, unknown usage/full reserve and
+the occupied personal slot. `max_retries=0` remains unchanged.
+
+The original receipt did not retain provider Retry-After, the provider request ID
+or the provider error body; the gateway did not persist/forward these headers.
+They cannot honestly be reconstructed. ARM deployment readback confirms
+DataZoneStandard capacity1, **1 request/60s and1,000 tokens/60s**. Regional quota
+is200 capacity units (200,000 TPM), of which1 is assigned; it is not this
+deployment's request allowance. Neither quota nor capacity was raised. Original
+start gaps were94,71,51,42 seconds. L1 followed T1 after42 seconds, a rate-limit
+risk rather than proof of the precise cause. The2,000-token completion cap plus
+prompt/image estimates also matters to throttling, independently of billed usage.
+
+The exact previous blocker was `person.concurrent=1`: L1's `state=unknown`,
+`settled=true` record occupied the owner's sole slot. The operator runner also
+deliberately stopped on an active entry/unknown usage. The ledger was not blocked;
+known charges plus the L1 hold were USD0.240686325. Five further full reserves
+would total USD1.412186325 conservatively charged/held, within USD2.343, while
+the non-replenishing lifetime allowance would reach exactly10/USD2.343.
+Financial uncertainty is therefore not evidence of active provider execution or
+an exhausted budget.
+
+The tested operator-only `complete_terminal_429` correction was applied with AI
+disabled, exact receipt/ledger hashes and both ETags. L1's full USD0.2343 charge,
+unknown usage/state, fingerprint, counts, bucket costs and lifetime reservations
+were unchanged. Only its execution slot was removed and completion evidence was
+recorded. A first unconfirmed administrative transport delivery was read back as
+unchanged before resubmission; it was not presumed successful. Later Exec-channel
+management429 throttling was kept separate from model outcomes. No timeout or
+cancelled operation was converted into terminal-response evidence.
+
+The same configuration/image received a new one-hour technical grant under the
+existing owner authorization, using the current release key and still-fresh
+evidence. The configuration digest did not change: release-key material is not
+part of that digest, although approval signatures depend on it. The operator
+runner now requires65 seconds since the last admitted attempt, preserves safe
+gateway error metadata and still sends each selected case only once. This spacing
+does not establish that every image fits the1,000 TPM deployment. L2 also returned
+`provider_rate_limited` after a multi-hour interval, so the original42-second gap
+cannot explain all observed throttling. Its unknown full-cost hold was likewise
+preserved while separately closing only its confirmed response execution.
+
+P1 also returned a confirmed provider429 and retained its full USD0.2343 hold.
+Its bounded console slice omitted the full status record; the durable Table
+receipt proved attempt7 and the terminal429. It was not retried. The same
+hold-preserving procedure closed only its execution slot with AI off. Existing
+Azure model metrics independently showed exactly two429s for L2/P1, no extra
+inference calls. R1 and R4 both returned200 with validated known accounting:
+
+| Case | Outcome | Quality / accounting |
+| --- | --- | --- |
+| L2 | Provider429 | No quality result; full USD0.2343 unknown hold |
+| P1 | Provider429 | No photo acceptance; full USD0.2343 unknown hold |
+| R1 | 200 | Exact halving to130kcal/2.7g protein/28g carbohydrate/0.3g fat; confidence0.98; known USD0.000855525 |
+| R4 | 200 | Baseline260/5.4/56/0.6 retained, no compounded correction or photo-access claim; confidence0.94; known USD0.000875325 |
+| P5 | Provider429 | Full USD0.2343 unknown hold; transport rejection is not semantic abstention or non-food acceptance |
+
+Before the final two cases the gateway was disabled and the unchanged technical
+configuration was signed for another bounded hour using the existing authority,
+not an extension of the fixed pilot period, funding or ten-attempt allowance.
+Readiness guards prevented starts against incomplete revision transitions;
+those guards made no model requests. Six successful text/refinement calls now
+have known configured-price cost **USD0.008117175**, not a final invoice.
+
+P5 was the tenth and final model attempt. All five previously unstarted cases
+were sent once; no L1 or other failed case was repeated. Continuation dispatch
+starts were separated by292,2993,246,112 seconds, each above the new65-second
+gate. Existing Azure model metrics show exactly **six200 and four429** across
+both runs, matching ten ledger admissions. All image cases L1/L2/P1/P5 were
+throttled; text/refinement success does not establish label/photo/non-food
+behavior. Precise RPM versus estimated-token versus shared-capacity attribution
+remains unavailable without provider headers/body. No quota increase, lower
+output cap, changed prompt, fallback or diagnostic inference was used.
+
+Final main-ledger counters are **10 attempts / USD2.343 lifetime full reserves**.
+Known cost USD0.008117175 plus four unchanged USD0.2343 holds equals
+**USD0.945317175 conservatively charged/held**. Unknown usage was never replaced
+with zero. There are no active execution slots and `blocked=false`; another model
+attempt is nevertheless prohibited by the exhausted non-replenishing attempt
+allowance, separately from AI-off/revoked release. Real operation records,
+fingerprints and replay protection remain intact. P5's terminal-response slot
+was closed under the same reviewed procedure, without deleting its financial hold.
+
+The sole active ready revision is
+**`pft-pilot-20260919-gateway--resume-locked`**, with the unchanged reviewed image.
+At12:30:52Z the actual process confirmed AI off, the newly rotated release key
+loaded, and both continuation signatures invalid under that key. Only release-key
+material changed; service/HMAC/fingerprint keys, policy, quota, identity scope and
+fixed pilot end stayed unchanged. Five isolated diagnostic rows were compared
+with privately captured receipts and ETag-deleted. Main-ledger content and ETag
+were unchanged by diagnostic cleanup. Minimal accounting/uncertainty evidence
+is retained privately; synthetic response evidence has the approved bounded
+diagnostic retention, not indefinite payload retention.
+
+The final model-free authentication job passed all nine checks against the locked
+revision: valid workload/HMAC503, eight invalid authentication cases403, zero
+model requests. Its actual execution succeeded. The temporary job was deleted
+after all executions ended; the12:34:50Z readback confirms **zero pilot jobs**.
+The continuation used ten bounded jobs: five model cases and five model-free
+administrative/authentication executions. Production, installed iPhone data,
+participant admission and the separate benchmark remained unchanged. AI-off is
+not full pilot teardown; registry/hosting resources remain until their scheduled
+period-end cleanup and continue to incur charges.
+
+The reviewed correction is confined to the operator helper; the deployed runtime
+was not rebuilt or patched. **367 affected tests passed, one skipped**, covering
+actual-SDK429 attribution, single dispatch, timeout/unknown conservatism, CAS
+conflicts, unchanged holds/counters, receipt binding, replay and spacing gates.
+Pylance syntax checks, editor diagnostics and diff whitespace checks passed.
+
 ## Costs and stop conditions
+
+Continuation cost readback returned **EUR0.0522464784475356 net posted** since
+the unchanged period start. The final refresh returned management429; neither that
+earlier amount nor the model usage ledger is an all-in accrued EUR invoice.
+The ten additional180-second jobs add at most **USD0.01350** configured replica
+compute at the previously reviewed rates, or **USD0.03510** for all26 bounded
+jobs across both phases. Control/storage/startup, administrative Exec/gateway,
+tax/FX and delayed billing remain separately reserved. The original EUR20 period
+and EUR5 setup ceilings, hosting/cleanup reserves and EUR12 net operational stop
+are unchanged. The ten-attempt model allowance is exhausted regardless of
+remaining monetary headroom; unknown model usage still has its full financial hold.
 
 Verified EUR public Consumption prices on 2026-09-19: ACR Basic EUR0.1431/day;
 DataZone input EUR0.7084/million and output EUR4.2504/million. Public prices are
@@ -645,7 +775,9 @@ the native client, broaden consent, or paste credentials into chat. Complete
 fresh configuration-bound evidence before any later release, and resolve the
 recorded unknown hold without discarding its cost or reusing an attempt. The
 original release key is revoked; historical private parameter files are evidence,
-not a ready-to-apply activation configuration. Five manifest cases remain untested.
+not a ready-to-apply activation configuration. All ten authorized attempts have
+now been spent. Label/photo/non-food acceptance remains unresolved after the
+provider429s; no further model attempt is allowed under this ten-attempt grant.
 The old release-first HTTP circularity has already been corrected.
 
 On a stop trigger or no later than the period end:

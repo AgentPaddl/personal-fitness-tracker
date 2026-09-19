@@ -108,6 +108,52 @@ def test_acceptance_lifetime_limit_survives_calendar_rollover_and_restart():
     asyncio.run(run())
 
 
+def test_provider_429_is_one_terminal_response_but_unknown_cost_keeps_person_slot(monkeypatch):
+    import httpx2
+    from app.errors import ProviderRateLimitedError
+    from tests.test_openai_api import _profile_provider, _request
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(429, headers={"retry-after": "60", "x-request-id": "synthetic-request"},
+                               json={"error": {"code": "429", "message": "synthetic throttling"}})
+
+    async def run():
+        acceptance = {"max_attempts": 10, "max_reserved_usd": "2.343",
+                      "payload_sha256": ["a" * 64], "expires_at": int(time.time()) + 3600}
+        control = profile_coordinator(acceptance=acceptance)
+        control.policy = control.policy.model_copy(update={
+            "person": control.policy.person.model_copy(update={"concurrent": 1})})
+        provider = _profile_provider(handler)
+        try:
+            with pytest.raises(ProviderRateLimitedError) as captured:
+                await control.generate(provider, _request(max_output_tokens=2000), IDENTITY, operation(), "synthetic")
+            assert captured.value.metadata.status == "rate_limited"
+            assert captured.value.metadata.provider_request_id == "synthetic-request"
+            assert not captured.value.metadata.usage_known
+            assert captured.value.retry_after_seconds is None
+            ledger = control.store.rows["ledger"][0]
+            key = next(iter(ledger["active"]))
+            record = control.store.rows[key][0]
+            assert record["settled"] and record["state"] == "unknown"
+            assert record["charged"] == record["reserved"] == 234300000
+            assert ledger["acceptance"] == {"attempts": 1, "reserved": 234300000}
+            assert not ledger["blocked"]
+            with pytest.raises(PilotError, match="usage limit"):
+                await control.generate(provider, _request(max_output_tokens=2000), IDENTITY,
+                                       operation(sequence=2), "different")
+            assert control.store.rows["ledger"][0] == ledger
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
 def test_acceptance_is_opt_in_and_cannot_expand_setup_authorization():
     assert "acceptance" not in coordinator().policy.model_dump(mode="json")
     acceptance = {"max_attempts": 10, "max_reserved_usd": "2.343",

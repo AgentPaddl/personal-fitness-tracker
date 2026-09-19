@@ -773,7 +773,7 @@ def test_acceptance_manifest_binds_exact_gateway_normalization():
     assert manifest["cases"][0]["expected"]["calories"] == 272
 
 
-@pytest.mark.parametrize("mutation", [None, "hash", "order", "active", "duplicate", "http", "transport", "unknown"])
+@pytest.mark.parametrize("mutation", [None, "hash", "order", "active", "duplicate", "http", "transport", "unknown", "too_soon"])
 def test_model_qualifier_one_intent_one_attempt_no_retry(monkeypatch, capsys, mutation):
     import httpx2
     import sys
@@ -791,7 +791,8 @@ def test_model_qualifier_one_intent_one_attempt_no_retry(monkeypatch, capsys, mu
     if mutation == "order":
         case["id"] = "T5"
     before = {"blocked": False, "active": {"unexpected": "person"} if mutation == "active" else {},
-              "acceptance": {"attempts": 0, "reserved": 0}}
+              "acceptance": {"attempts": 0, "reserved": 0},
+              "last_time": time.time() if mutation == "too_soon" else 0}
     store, receipts, calls = MemoryCAS(), MemoryCAS(), []
     store.rows["ledger"] = (deepcopy(before), "1")
     if mutation == "duplicate":
@@ -819,10 +820,62 @@ def test_model_qualifier_one_intent_one_attempt_no_retry(monkeypatch, capsys, mu
         assert result["state"] == "response_received"
         with pytest.raises(RuntimeError):
             asyncio.run(helper.run_case(*arguments))
-    assert len(calls) == (0 if mutation in {"hash", "order", "active", "duplicate"} else 1)
+    assert len(calls) == (0 if mutation in {"hash", "order", "active", "duplicate", "too_soon"} else 1)
     assert "private-token" not in capsys.readouterr().out
     if calls:
         assert receipts.rows["T2"][0]["state"] != "intent"
+
+
+@pytest.mark.parametrize("mutation", [None, "enabled", "receipt", "ledger", "timeout", "unsettled", "changed_hold", "conflict", "local_limit", "provider"])
+def test_terminal_429_completion_preserves_money_counters_and_replay(monkeypatch, mutation):
+    import hashlib
+    import sys
+    from copy import deepcopy
+    from app.pilot import Conflict, canonical, digest
+    from tests.test_pilot import MemoryCAS, IDENTITY, SECRET, operation
+
+    monkeypatch.setitem(sys.modules, "qualify_auth", load_local_module("infra/pilot/qualify_auth.py"))
+    helper = load_local_module("infra/pilot/qualify_models.py")
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "true" if mutation == "enabled" else "false")
+    store = MemoryCAS()
+    identifier = operation(time.time() - 300)
+    key = "op-" + digest(SECRET, "operation", [IDENTITY, identifier])
+    ledger = {"blocked": False, "acceptance": {"attempts": 5, "reserved": 1171500000},
+              "buckets": {"total:day": {"cost": 240686325, "count": 5}},
+              "active": {key: digest(SECRET, "person", IDENTITY)}}
+    record = {"state": "unknown", "settled": True, "usage_known": False,
+              "reserved": 234300000, "charged": 234300000, "fingerprint": "unchanged"}
+    if mutation == "unsettled": record["settled"] = False
+    if mutation == "changed_hold": record["charged"] = 0
+    receipt = {"case": "L1", "http_status": 504 if mutation == "timeout" else 429,
+               "state": "http_failure", "created_at": int(time.time()) - 300,
+               "completed_at": int(time.time()) - 290, "operation": identifier,
+               "operation_record": deepcopy(record), "ledger_acceptance": deepcopy(ledger["acceptance"])}
+    if mutation in {"local_limit", "provider"}:
+        receipt["error_code"] = "pilot_limit" if mutation == "local_limit" else "provider_rate_limited"
+    store.rows = {"ledger": (deepcopy(ledger), "1"), key: (deepcopy(record), "1")}
+    original = deepcopy(store.rows)
+    ledger_hash = hashlib.sha256(canonical(ledger)).hexdigest()
+    receipt_hash = hashlib.sha256(canonical(receipt)).hexdigest()
+    if mutation == "receipt": receipt_hash = "0" * 64
+    if mutation == "ledger": ledger_hash = "0" * 64
+    if mutation == "conflict":
+        async def conflict(changes): raise Conflict()
+        store.commit = conflict
+    async def run():
+        arguments = (store, receipt, IDENTITY, SECRET.decode(), ledger_hash, receipt_hash)
+        if mutation not in {None, "provider"}:
+            with pytest.raises(Conflict if mutation == "conflict" else RuntimeError):
+                await helper.complete_terminal_429(*arguments)
+            assert store.rows == original
+        else:
+            result = await helper.complete_terminal_429(*arguments)
+            assert result["slot_released"] and result["charged"] == 234300000
+            updated = store.rows["ledger"][0]
+            assert updated == {**ledger, "active": {}}
+            assert all(store.rows[key][0][field] == value for field, value in record.items())
+            with pytest.raises(RuntimeError): await helper.complete_terminal_429(*arguments)
+    asyncio.run(run())
 
 
 def test_model_free_ledger_qualification_preserves_unknown_holds():

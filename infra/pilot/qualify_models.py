@@ -23,6 +23,37 @@ PARTITION = "qualification-model-v1"
 GATEWAY = "https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io"
 
 
+async def complete_terminal_429(store, receipt, identity, fingerprint_key, ledger_sha256, receipt_sha256):
+    if (os.environ.get("AI_API_ONLY_ENABLED") != "false"
+            or hashlib.sha256(canonical(receipt)).hexdigest() != receipt_sha256
+            or receipt.get("case") not in CASES or receipt.get("http_status") != 429
+            or receipt.get("state") != "http_failure"
+            or "error_code" in receipt and receipt["error_code"] != "provider_rate_limited"
+            or type(receipt.get("created_at")) is not int
+            or type(receipt.get("completed_at")) is not int
+            or not receipt["created_at"] <= receipt["completed_at"] <= time.time() - 120):
+        raise RuntimeError("A reviewed terminal 429 receipt and disabled admission are required")
+    ledger, ledger_etag = await store.read("ledger")
+    key = "op-" + digest(fingerprint_key.encode(), "operation", [identity, receipt["operation"]])
+    record, record_etag = await store.read(key)
+    if (ledger is None or hashlib.sha256(canonical(ledger)).hexdigest() != ledger_sha256
+            or ledger["blocked"] or ledger["acceptance"] != receipt["ledger_acceptance"]
+            or ledger["active"].get(key) != digest(fingerprint_key.encode(), "person", identity)
+            or record != receipt["operation_record"] or not record
+            or record.get("state") != "unknown" or record.get("settled") is not True
+            or record.get("usage_known") is not False
+            or record.get("charged") != record.get("reserved") or record.get("reserved") != 234300000
+            or record.get("execution_state") is not None):
+        raise RuntimeError("Live ledger/operation differs from the reviewed completion evidence")
+    del ledger["active"][key]
+    record.update(execution_state="completed", completion_evidence_sha256=receipt_sha256,
+                  execution_completed_at=receipt["completed_at"], slot_released_at=int(time.time()))
+    await store.commit([("ledger", ledger, ledger_etag), (key, record, record_etag)])
+    return {"slot_released": True, "state": record["state"], "usage_known": False,
+            "charged": record["charged"], "acceptance": ledger["acceptance"],
+            "completion_evidence_sha256": receipt_sha256}
+
+
 async def run_case(client, store, receipts, case, expected_attempts, allowed_hashes, token, identity, secret, service, fingerprint_key):
     normalized = FoodAnalysisRequest.model_validate(case["payload"]).model_dump(mode="json")
     payload_hash = hashlib.sha256(canonical(normalized)).hexdigest()
@@ -34,6 +65,8 @@ async def run_case(client, store, receipts, case, expected_attempts, allowed_has
     if (before is None or before["blocked"] or before["active"]
             or before["acceptance"] != {"attempts": expected_attempts, "reserved": expected_attempts * 234300000}):
         raise RuntimeError("Ledger is not ready for the next bounded attempt")
+    if time.time() < before.get("last_time", 0) + 65:
+        raise RuntimeError("Next distinct case requires at least 65 seconds since the last admission")
     operation = str(UUID(int=(int(time.time() * 1000) << 80) | (7 << 76) | (2 << 62) | secrets.randbits(62)))
     intent = {"case": case["id"], "payload_sha256": payload_hash, "operation": operation,
               "expected_attempts": expected_attempts, "created_at": int(time.time()), "state": "intent"}
@@ -46,11 +79,25 @@ async def run_case(client, store, receipts, case, expected_attempts, allowed_has
         response = await client.post(GATEWAY + "/v1/food-analysis",
             headers=headers(token, identity, operation, secret, service, case["payload"]), json=case["payload"])
         result["http_status"] = response.status_code
+        request_id = response.headers.get("x-request-id")
+        try:
+            result["gateway_request_id"] = str(UUID(request_id)) if request_id else None
+        except ValueError:
+            result["gateway_request_id"] = None
+        retry_after = response.headers.get("retry-after", "")
+        result["gateway_retry_after_seconds"] = (
+            int(retry_after) if retry_after.isascii() and retry_after.isdecimal() and len(retry_after) <= 5 else None)
         if response.status_code == 200:
             result["response"] = FoodAnalysisResponse.model_validate(response.json()).model_dump(mode="json")
             result["state"] = "response_received"
         else:
             result["state"] = "http_failure"
+            try:
+                code = response.json().get("error", {}).get("code")
+                result["error_code"] = code if code in {"provider_rate_limited", "pilot_limit", "pilot_unavailable",
+                    "provider_output_invalid", "provider_timeout", "provider_unavailable"} else None
+            except (ValueError, AttributeError):
+                result["error_code"] = None
     except Exception as error:
         result["error_type"] = type(error).__name__
     after, _ = await store.read("ledger")

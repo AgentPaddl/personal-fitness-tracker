@@ -413,6 +413,27 @@ Respect person/minute limits between separately authorized cases, the remaining
 signed-grant lifetime and the original fixed pilot period. P5 is a non-food
 abstention case, not a safety-filter test. Finish with AI disabled and no job.
 
+The runner additionally requires at least65 seconds since the last committed
+admission. This is a pre-dispatch gate, not a retry loop or proof that an image
+fits the deployment's TPM limit. Safe gateway request IDs, normalized error codes
+and numeric gateway Retry-After hints are captured in the protected receipt;
+they are not Azure provider request IDs or provider rate-limit headers.
+
+`complete_terminal_429` is an operator-only, hold-preserving correction, not a
+runtime endpoint or automatic recovery rule. First disable gateway admission and
+independently review the completed provider429 and exact operation receipt. Old
+receipts without an error code need independent provider evidence; L1 was checked
+against Azure model status metrics. Bind the reviewed receipt and full live ledger
+by SHA256, then atomically compare-and-swap the ledger and exact operation ETags.
+The helper requires a settled unknown operation, its full USD0.2343 charge, the
+matching personal slot and at least120 seconds since completion. It removes only
+that execution slot and records completion evidence on the retained operation.
+Usage stays unknown; costs, bucket counts, lifetime reservations, fingerprint and
+replay protection do not change. Timeouts, cancellations, mismatches and CAS
+conflicts must not be treated as completed provider429 responses. A missing
+administrative receipt requires readback before another mutation. This does not
+resolve unknown billing or authorize a failed case to run again.
+
 ## Renewal, shutdown and rollback
 
 - **Initial authorization** approves the exact artifact, configuration, two
