@@ -80,16 +80,17 @@ def profile_coordinator(store=None, *, max_output_tokens=2000, **policy_changes)
     return control
 
 
-def test_acceptance_lifetime_limit_survives_calendar_rollover_and_restart():
+@pytest.mark.parametrize("attempts, reserve", [(10, "2.343"), (14, "3.2802")])
+def test_acceptance_lifetime_limit_survives_calendar_rollover_and_restart(attempts, reserve):
     from tests.test_openai_api import _request
 
     async def run():
         start = 1790812790
-        acceptance = {"max_attempts": 10, "max_reserved_usd": "2.343",
+        acceptance = {"max_attempts": attempts, "max_reserved_usd": reserve,
                       "payload_sha256": ["a" * 64], "expires_at": start + 30 * 86400}
         control = profile_coordinator(acceptance=acceptance)
         generation = _request(max_output_tokens=2000)
-        for sequence in range(10):
+        for sequence in range(attempts):
             instant = start + sequence * 86400
             control.clock = lambda: instant
             reservation = await control.reserve(IDENTITY, operation(instant, sequence), "synthetic",
@@ -97,12 +98,12 @@ def test_acceptance_lifetime_limit_survives_calendar_rollover_and_restart():
             await control.mark_dispatched(reservation)
             await control.settle(reservation, "failed", None)
         restarted = profile_coordinator(store=control.store, acceptance=acceptance)
-        restarted.clock = lambda: start + 11 * 86400
+        restarted.clock = lambda: start + (attempts + 1) * 86400
         with pytest.raises(PilotError, match="usage limit"):
             await restarted.reserve(IDENTITY, operation(restarted.clock()), "synthetic",
                                     restarted.bound(generation), restarted.admission(generation))
         ledger = control.store.rows["ledger"][0]
-        assert ledger["acceptance"] == {"attempts": 10, "reserved": 2343000000}
+        assert ledger["acceptance"] == {"attempts": attempts, "reserved": attempts * 234300000}
         assert ledger["benchmark"] is None
 
     asyncio.run(run())
@@ -158,7 +159,7 @@ def test_acceptance_is_opt_in_and_cannot_expand_setup_authorization():
     assert "acceptance" not in coordinator().policy.model_dump(mode="json")
     acceptance = {"max_attempts": 10, "max_reserved_usd": "2.343",
                   "payload_sha256": ["a" * 64], "expires_at": 1900000000}
-    for changes in ({"max_attempts": 11}, {"max_reserved_usd": "2.3431"}, {"payload_sha256": []},
+    for changes in ({"max_attempts": 15}, {"max_reserved_usd": "3.280200001"}, {"payload_sha256": []},
                     {"expires_at": 2000000001}):
         with pytest.raises(ValueError):
             profile_coordinator(acceptance={**acceptance, **changes})

@@ -878,6 +878,112 @@ def test_terminal_429_completion_preserves_money_counters_and_replay(monkeypatch
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("attempts", [10, 11, 12, 13, 14])
+def test_correction_cases_continue_counters_with_separate_receipts(monkeypatch, attempts):
+    import httpx2
+    import sys
+    from copy import deepcopy
+    from tests.test_pilot import MemoryCAS
+    from tests.test_openai_api import _food_data
+
+    monkeypatch.setitem(sys.modules, "qualify_auth", load_local_module("infra/pilot/qualify_auth.py"))
+    helper = load_local_module("infra/pilot/qualify_models.py")
+    identifier = ("L1", "L2", "P1", "P5", "P5")[attempts - 10]
+    case = next(case for case in load_local_module("infra/pilot/prepare.py").acceptance_manifest()["cases"]
+                if case["id"] == identifier)
+    store, receipts, calls = MemoryCAS(), MemoryCAS(), []
+    original = {"blocked": False, "active": {}, "last_time": 0,
+                "acceptance": {"attempts": attempts, "reserved": attempts * 234300000}}
+    store.rows["ledger"] = (deepcopy(original), "1")
+    receipts.rows[identifier] = ({"old_receipt": True}, "old-etag")
+
+    class Client:
+        async def post(self, url, **kwargs):
+            calls.append(True)
+            store.rows["ledger"] = ({**original, "acceptance": {
+                "attempts": attempts + 1, "reserved": (attempts + 1) * 234300000}}, "2")
+            operation = kwargs["headers"]["X-Operation-Id"]
+            key = "op-" + helper.digest(b"f" * 48, "operation", [(TENANT, PRINCIPAL), operation])
+            store.rows[key] = ({"settled": True, "usage_known": True}, "1")
+            return httpx2.Response(200, json={"estimate": _food_data()})
+
+    arguments = (Client(), store, receipts, case, attempts, [case["payload_sha256"]], "private-token",
+                 (TENANT, PRINCIPAL), "s" * 48, "t" * 48, "f" * 48)
+    if attempts == 14:
+        with pytest.raises(RuntimeError):
+            asyncio.run(helper.run_case(*arguments))
+        assert store.rows["ledger"][0] == original
+    else:
+        asyncio.run(helper.run_case(*arguments))
+        assert receipts.rows["correction-" + identifier][0]["state"] == "response_received"
+        with pytest.raises(RuntimeError):
+            asyncio.run(helper.run_case(*arguments))
+    assert len(calls) == (0 if attempts == 14 else 1)
+    assert receipts.rows[identifier] == ({"old_receipt": True}, "old-etag")
+
+
+@pytest.mark.parametrize("mutation", [None, "enabled", "ledger", "etag", "policy", "money", "reset", "active", "conflict"])
+def test_acceptance_amendment_preserves_all_existing_state(monkeypatch, mutation):
+    import hashlib
+    import sys
+    from copy import deepcopy
+    from app.pilot import Conflict, PilotError, PilotPolicy, canonical
+    from tests.test_pilot import profile_coordinator
+
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "true" if mutation == "enabled" else "false")
+    monkeypatch.setitem(sys.modules, "qualify_auth", load_local_module("infra/pilot/qualify_auth.py"))
+    helper = load_local_module("infra/pilot/qualify_models.py")
+    limits = {"minute": 2, "day": 10, "month": 10, "concurrent": 1,
+              "daily_usd": "2.343", "monthly_usd": "2.343"}
+    control = profile_coordinator(person=limits, total=limits, acceptance={
+        "max_attempts": 10, "max_reserved_usd": "2.343", "payload_sha256": ["a" * 64],
+        "expires_at": int(time.time()) + 3600})
+    ledger = control.initial_ledger()
+    ledger.update(acceptance={"attempts": 10, "reserved": 2343000000},
+                  buckets={"total:day": {"cost": 945317175, "count": 10}}, last_time=123)
+    if mutation == "active": ledger["active"] = {"op-held": "person"}
+    if mutation == "reset": ledger["acceptance"] = {"attempts": 0, "reserved": 0}
+    control.store.rows["ledger"] = (ledger, "7")
+    for index in range(4):
+        control.store.rows[f"op-held-{index}"] = ({"state": "unknown", "charged": 234300000,
+                                                  "fingerprint": f"retained-{index}"}, "2")
+    previous = deepcopy(control.store.rows)
+    policy = control.policy.model_dump(mode="json")
+    policy["acceptance"].update(max_attempts=14, max_reserved_usd="3.2802")
+    for scope in ("person", "total"): policy[scope].update(day=14, month=14)
+    if mutation == "money": policy["person"]["daily_usd"] = "3.2802"
+    policy_hash = hashlib.sha256(canonical(policy)).hexdigest()
+    ledger_hash = hashlib.sha256(canonical(ledger)).hexdigest()
+    if mutation == "conflict":
+        async def conflict(changes): raise Conflict()
+        control.store.commit = conflict
+    arguments = (control, PilotPolicy.model_validate(policy), "0" * 64 if mutation == "ledger" else ledger_hash,
+                 "wrong" if mutation == "etag" else "7", "0" * 64 if mutation == "policy" else policy_hash)
+    if mutation:
+        with pytest.raises(Conflict if mutation == "conflict" else RuntimeError):
+            asyncio.run(helper.extend_acceptance(*arguments))
+        assert control.store.rows == previous
+    else:
+        amendment = asyncio.run(helper.extend_acceptance(*arguments))
+        assert control.store.rows["ledger"][0] == {**ledger, "policy": amendment["revised_policy"]}
+        assert all(control.store.rows[key] == value for key, value in previous.items() if key != "ledger")
+        assert control.store.rows["acceptance-extension-14-v1"][0] == amendment
+        with pytest.raises(PilotError):
+            asyncio.run(helper.extend_acceptance(*arguments))
+
+
+def test_acceptance_schema_has_four_additional_attempts_only():
+    from app.pilot import AcceptanceRun
+    from pydantic import ValidationError
+
+    values = {"max_attempts": 14, "max_reserved_usd": "3.2802", "payload_sha256": ["a" * 64],
+              "expires_at": int(time.time()) + 3600}
+    assert AcceptanceRun.model_validate(values).max_attempts == 14
+    for change in ({"max_attempts": 15}, {"max_reserved_usd": "3.280200001"}):
+        with pytest.raises(ValidationError):
+            AcceptanceRun.model_validate({**values, **change})
+
+
 def test_model_free_ledger_qualification_preserves_unknown_holds():
     from tests.test_pilot import profile_coordinator
 

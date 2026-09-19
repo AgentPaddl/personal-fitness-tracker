@@ -3,17 +3,20 @@
 ## Authorization and current state
 
 User authorization: EUR 20 total for the first 30 days, plus EUR 5 once for setup
-and acceptance, at most ten targeted nonprivate model attempts, no automatic
-retry or extension. These are operational stop thresholds with acknowledged
+and acceptance. The original ten targeted nonprivate model attempts were extended
+by exactly four separately authorized cases, for a non-replenishing total14;
+no automatic retry or extension. These are operational stop thresholds with acknowledged
 billing residual risk, not guaranteed invoice ceilings. The prior benchmark is
 separate. No production deployment, installed app or private record was changed.
 
 Deployment is **AI off, not accepted for ordinary use**. No real nutrition/image
-data were sent. Acceptance counter: **10/10**, without retries: six successful
-synthetic text/refinement responses and four image attempts returning429 with unknown usage.
+data were sent. Acceptance counter: **14/14**, without model retries: six original
+successful synthetic text/refinement responses, four original image429s with
+unknown usage, and four newly completed image cases. L1/L2/P1 returned valid
+estimates; P5 returned semantic non-food with no saveable estimate. No new429.
 The first signed technical grant was exercised, revoked under the same valid
 token, and invalidated by rotating only its release key. The bounded continuation
-grants are also revoked. Four full-cost holds remain, totaling USD0.9372; their
+grants and the capacity-correction grant are also revoked. Four full-cost holds remain, totaling USD0.9372; their
 completed response executions no longer occupy slots. No financial hold or
 counter was reset. Only the owner's identity is configured;
 the wife is not admitted and no placeholder identity was substituted.
@@ -47,7 +50,7 @@ only the separate benchmark storage account, which remains untouched.
 | Functions `pft-pilot-20260919-api` | FC1, Python 3.13, 512 MiB, max1, HTTP concurrency2, no always-ready |
 | Storage `pftposyuw3m453fx4` | LRS, Shared Key and anonymous blobs disabled; private `deployments` container, new `PilotLedger` table |
 | Key Vault `pftp-osyuw3m453fx4` | RBAC, secret-scoped readers, seven-day soft delete and purge protection |
-| OpenAI `pft-pilot-20260919-model` | Local key authentication disabled; `pilot-mini`, GPT-5.4-mini `2026-03-17`, DataZoneStandard capacity1, NoAutoUpgrade |
+| OpenAI `pft-pilot-20260919-model` | Local key authentication disabled; `pilot-mini`, GPT-5.4-mini `2026-03-17`, DataZoneStandard capacity20, verified20 RPM/20,000 TPM, NoAutoUpgrade |
 | Managed identities | Separate `pft-pilot-20260919-backend-id` and `pft-pilot-20260919-gateway-id` |
 | Entra registrations | Three new single-tenant applications/service principals: native client, backend API, gateway API |
 | Budget | Resource-group cost budget EUR12; Actual80 and Forecast100 notifications to the owner's existing Entra contact |
@@ -703,10 +706,185 @@ usage preservation, configured INFO sink and unchanged public429 response.
 Pylance syntax checks and editor diagnostics were clean. These tests do not
 qualify live header availability or the proposed deployment capacity.
 
+## Authorized capacity correction and four-case continuation
+
+The owner explicitly authorized this continuation from `9988064`: change only the
+existing private DataZoneStandard deployment to capacity20, deploy diagnostics,
+and attempt L1, L2, P1 and P5 once each. Total acceptance ceiling14, not a fresh
+14-attempt run. The original EUR20 period plus EUR5 setup budget and original
+period end remain unchanged. No production, iPhone or participant change.
+
+Fresh account/tenant/owner checks matched the private pilot. One bounded Cost
+Management query succeeded with EUR0.0583771002919457728 net posted, no pagination.
+That is delayed, incomplete billing, not all accrued cost. The existing EUR12
+net operational stop is retained. A conservative EUR18 envelope for that stop
+with a50% tax/FX/delay margin, the authorized additional EUR2.19, and EUR4.81
+unallocated reserve sum to the existing EUR25, not new funding. Existing hosting,
+unknown holds and cleanup obligations remain; no free-tier discount is assumed.
+
+ARM readback after the update: DataZoneStandard capacity20/currentCapacity20,
+Succeeded, request limit20 per60seconds and token limit20,000 per60seconds.
+Model/version/NoAutoUpgrade and financial profile were not changed. This is
+verified allocation, not a shared-capacity or latency guarantee.
+
+New API-only image, pinned and initially deployed disabled:
+`sha256:e0c48f7132f0864f543cb788d1c34d8d4c8917f08915b19053331c4505578098`.
+Trivy reported zero vulnerability/secret findings, retaining the known Alpine
+3.24 EOL-list warning. Offline digest-bound inventory verified the API-only
+marker, no Copilot package/provider/CLI, Azure CLI, Git, Node or curl. Alpine's
+existing BusyBox wget remains; this is not a claim of a shell-free image.
+The active ready revision was `--correction-off`; all environment settings other
+than image digest and policy were equal, and AI remained disabled. Fresh Easy
+Auth, exact table-scoped gateway role, disabled Storage Shared Key, and scale
+0..1 were verified unchanged.
+
+The AI-off amendment requires the reviewed old policy, ledger hash and ETag,
+exact10-attempt/USD2.343 lifetime counters, no active work, and the exact revised
+policy hash. Its single CAS transaction changes only the ledger policy binding
+and creates an immutable amendment receipt. Day/month count ceilings become14;
+acceptance lifetime ceiling becomes14/USD3.2802. Daily/monthly USD2.343 cost caps,
+time window, identities, payload hashes, all buckets and all10 operation records
+stay unchanged. The four old unknown USD0.2343 holds were compared unchanged.
+No new production ledger was initialized. New case receipts use `correction-`
+keys, preserving the ten historical receipts and preventing repeat intents.
+
+The image-only internal contract in the API-only artifact now requires strict
+`is_food` plus a nullable estimate. Non-food must return false/null; inconsistent,
+missing or malformed classification is rejected. False/null is mapped to the
+existing public invalid-output error, with no saveable estimate and only a
+payload-free semantic diagnostic. Ordinary production and public DTOs are
+unchanged. Classification remains model-based; a single P5 case is not a
+universal non-food detector. No second model call, retry or fallback is added.
+
+Local verification before activation:774 passed,14 skipped across the complete
+gateway suite. The skips include explicitly opt-in real integrations. Editor
+diagnostics and whitespace checks were clean. Live completion evidence follows
+after the remaining gates and four bounded cases; at this checkpoint no new
+model request had been sent.
+
+Fresh live qualification subsequently passed9 JWT/HMAC checks,6 body-boundary
+checks, an actually issued foreign-workload token rejection, and isolated ledger
+replay/unknown-hold/policy-drift checks. The real ledger and ETag were unchanged;
+the isolated qualification partition was deleted. An initial Table probe expected
+401/403 but observed anonymous404 (resource hiding); that failed qualification is
+retained, not relabeled. A targeted follow-up established unauthorized backend403,
+and the corrected complete qualification passed. The exact backend role remained
+the sole assignment; Easy Auth remained equal to its previously qualified config.
+Original native, privacy and price evidence was explicitly revalidated for the
+unchanged boundaries without falsely claiming a new native login or consent.
+
+Temporary job replicas can disappear before their console is retrieved. Subsequent
+job receipts are AES-GCM encrypted with a purpose-derived key and create-only in a
+separate diagnostic Table partition before being emitted in bounded log chunks.
+Private local receipts are0600 under0700 directories. The ledger never contains
+food input/output; synthetic result receipts are separate and removed after
+verified local capture. No new data-plane role or paid log destination was added.
+
+The one-hour synthetic grant was issued at15:25:17Z, expiring16:25:17Z, bound to
+configuration SHA-256 `1fc49d54b62c2f19422bc075ff78f367a7cffa4df1966565e070f815ef12ea63`.
+It uses the original fixed pilot-period expiry and does not authorize participants.
+All four additional cases completed without provider429:
+
+| Case | Gateway HTTP | End-to-end seconds | Known model USD | Evaluation |
+| --- | ---: | ---: | ---: | --- |
+| L1 | 200 | 13.431 | 0.0013794 | Exact300 kcal /15g protein /30g carbohydrate /12g fat |
+| L2 | 200 | 2.067 | 0.001655775 | Exact180 kcal /6g protein /27g carbohydrate /4.5g fat; correct50g portion basis |
+| P1 | 200 | 3.056 | 0.001749 | Cooked rice, assumed240g; unknown weight and invisible added oil/butter/ingredients with nutrition effects disclosed |
+| P5 | 502 | 1.862 | 0.0008877 | Provider200 with valid non-food classification; semantic event confirmed, no public/saveable estimate |
+
+The L1/L2 provider responses reported20 RPM/20,000 TPM,19 requests remaining and
+18,807/18,802 token units remaining respectively, with3-second reset hints.
+These are actual provider diagnostics, not the full financial reservation or
+billed input-token count. Safe request IDs are retained privately. The measured
+time includes gateway HTTP and ledger receipt handling, not an isolated provider
+latency percentile. All ten old operation records still matched exactly.
+
+P1's first job delivery failed before Python started: a184,848-character single
+command argument exceeded Linux's per-argument limit. This is a container startup
+failure, not a provider429 or a model response. The corrected private operator
+transport splits the same bundle into at most12,000-character argv pieces and
+joins them in memory; an offline roundtrip verified identical case content.
+No automatic job or model retry is enabled. Before corrected delivery, require
+an independent exact ledger/ETag comparison with the12-attempt L2 receipt and
+absence of the create-only `correction-P1` intent; missing logs alone are not
+evidence of zero model dispatch. Keep the failed execution evidence separately.
+That independent read confirmed exactly12 attempts, identical ledger/ETag and no
+P1 intent. The corrected delivery then produced exactly one provider request and
+advanced the counter to13. P1's first keyword check looked only for recipe-related
+words and was too narrow; the concrete warning describes invisible added
+ingredients and their effect. Its semantic screening passes, without numeric
+ground truth or a claim that confidence0.86 is calibrated. P1 also returned the
+actual20/20,000 provider limits,19 remaining requests and18,807 remaining token
+units. P5 was admitted only after another independently checked65-second gap.
+
+P5's existing generic invalid-output error is intentional fail-closed behavior,
+not a provider outage or an inferred success from a transport failure. The
+provider returned200 with known usage; the use case emitted exactly one
+`image_food_status=non_food` event and no estimate. The operation records a
+successful, billable provider completion while the public meal response is
+rejected. P5 also reports20/20,000 limits,19 remaining requests and18,815 token
+units. All four provider IDs/header receipts are retained privately; no Retry-After
+was returned and no429 occurred. Actual admission gaps were107,336 and110 seconds.
+
+Final accounting:14 attempts, USD3.2802 lifetime full reserves (not actual spend),
+USD0.005671875 known cost for the four new calls, USD0.01378905 known cost over
+all ten provider successes, plus the same four USD0.2343 unknown holds totaling
+USD0.9372. Conservative charged/held: **USD0.95098905**. Active0, blockedfalse,
+remaining attempts0. Every one of the original ten operation records matched
+exactly; no financial hold, replay fingerprint or counter was reset. One final
+Cost Management query succeeded with the same EUR0.0583771002919457728 posted net,
+no pagination: still delayed/incomplete, not a final all-in invoice. EUR20+5,
+the original period, EUR12 net stop and hosting/tax/FX/cleanup reserves remain.
+Final ARM again confirms capacity20,20 RPM/20,000 TPM. Azure Monitor counts14
+requests (ten200/four429), agreeing with the authoritative ledger; aggregate metrics do not settle
+the historical holds. The gateway was disabled first, then its release key rotated
+and loaded through a versioned reference into the ready `--correction-locked`
+revision. There is no remaining model authorization.
+
+The final model-free job verified the new key in process, rejection of the same
+still-unexpired configuration-bound grant, and all9 JWT/HMAC boundary checks
+with valid analysis admission returning503. It confirmed14 operations, active0,
+all10 historical operations unchanged, known cost13,789,050 units and unknown
+holds937,200,000 units. Cleanup deleted exactly11 locally secured temporary rows
+(four correction model receipts and seven encrypted diagnostic receipts), using
+content hashes and ETags. The real ledger, operation records and ETag remained
+unchanged; the immutable amendment audit was preserved. The diagnostic partition
+was empty afterwards. All13 correction job executions were terminal before the
+temporary job resource was deleted; a fresh list showed zero jobs. The sole
+active gateway revision is `--correction-locked`, Healthy, with AI off. The local
+ACR credential was removed and the dedicated Colima build VM stopped. Protected
+local evidence remains subject to the already approved retention; cleanup does
+not claim immediate erasure of platform logs or accounting exceptions.
+
+Remaining ordinary-pilot blockers are concrete: the four historical holds lack
+request-correlated financial resolution; participant/health-data purposes, legal
+basis and abuse-monitoring exceptions still need clearance; the wife's own
+identity/privacy/device acceptance is absent; and physical iPhone backup,
+data-preserving update, review/save/cancel/manual-entry and failure-path acceptance
+has not been performed. Four screening cases do not establish representative
+photo accuracy, calibrated confidence, concurrent-load behavior or p95 latency.
+Daily all-service cost review and retention/teardown duties remain operational,
+not an installed unattended cap or cleanup scheduler. No separate missing DPA
+signature was identified in the account-linked review. Production, installed
+iPhone app and participant admission remain unchanged; no further model call is
+authorized by unused budget headroom.
+
 ## Costs and stop conditions
 
-Continuation cost readback returned **EUR0.0522464784475356 net posted** since
-the unchanged period start. The final refresh returned management429; neither that
+The latest correction readback is **EUR0.0583771002919457728 net posted**, with
+the model accounting and unchanged reserve assessment above. The13 correction
+jobs add at most **USD0.01755** configured replica compute at the previously
+reviewed180-second limits/rates; together with the earlier26 jobs,39 bounded
+executions give **USD0.05265**. These are configured compute bounds, not all-in
+invoices: control/storage/startup, gateway use, tax/FX and late billing remain
+separately reserved. All14 model attempts are exhausted; four full-cost holds
+remain. EUR20+5, the original period and EUR12 net stop are unchanged.
+
+The following earlier cost snapshots are chronological evidence, superseded by
+the correction readback above, not additional or renewed funding.
+
+The prior continuation returned **EUR0.0522464784475356 net posted** since
+the unchanged period start. Its final refresh returned management429; neither that
 earlier amount nor the model usage ledger is an all-in accrued EUR invoice.
 The ten additional180-second jobs add at most **USD0.01350** configured replica
 compute at the previously reviewed rates, or **USD0.03510** for all26 bounded
@@ -930,9 +1108,11 @@ the native client, broaden consent, or paste credentials into chat. Complete
 fresh configuration-bound evidence before any later release, and resolve the
 recorded unknown hold without discarding its cost or reusing an attempt. The
 original release key is revoked; historical private parameter files are evidence,
-not a ready-to-apply activation configuration. All ten authorized attempts have
-now been spent. Label/photo/non-food acceptance remains unresolved after the
-provider429s; no further model attempt is allowed under this ten-attempt grant.
+not a ready-to-apply activation configuration. All14 authorized attempts have
+now been spent. The four-case capacity correction passed its bounded label/photo/
+non-food screening; four historical provider429 costs remain unknown. No further
+model attempt is allowed under this exhausted grant. This screening is not a
+general quality/latency guarantee, participant release or device acceptance.
 The old release-first HTTP circularity has already been corrected.
 
 On a stop trigger or no later than the period end:

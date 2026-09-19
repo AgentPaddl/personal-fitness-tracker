@@ -7,20 +7,52 @@ import logging
 import os
 import secrets
 import time
+from copy import deepcopy
 from uuid import UUID
 
 import httpx2
 from azure.identity import ManagedIdentityCredential
 
-from app.pilot import canonical, digest
+from app.pilot import Coordinator, canonical, digest
 from app.pilot_table import AzureTableStore
 from app.schemas.food_analysis import FoodAnalysisRequest, FoodAnalysisResponse
 from qualify_auth import headers
 
 
-CASES = ("T2", "T5", "T4", "T1", "L1", "L2", "P1", "R1", "R4", "P5")
+CASES = ("T2", "T5", "T4", "T1", "L1", "L2", "P1", "R1", "R4", "P5", "L1", "L2", "P1", "P5")
 PARTITION = "qualification-model-v1"
 GATEWAY = "https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io"
+
+
+async def extend_acceptance(control, revised_policy, ledger_sha256, expected_etag, revised_policy_sha256):
+    if os.environ.get("AI_API_ONLY_ENABLED") != "false":
+        raise RuntimeError("Policy amendment requires disabled admission")
+    previous = control.policy.model_dump(mode="json")
+    expected = deepcopy(previous)
+    if (not control.policy.acceptance or previous["acceptance"]["max_attempts"] != 10
+            or previous["acceptance"]["max_reserved_usd"] != "2.343"
+            or any(previous[scope][field] != 10 for scope in ("person", "total") for field in ("day", "month"))):
+        raise RuntimeError("Only the original ten-attempt policy may be amended")
+    expected["acceptance"].update(max_attempts=14, max_reserved_usd="3.2802")
+    for scope in ("person", "total"):
+        expected[scope].update(day=14, month=14)
+    if (revised_policy.model_dump(mode="json") != expected
+            or hashlib.sha256(canonical(expected)).hexdigest() != revised_policy_sha256):
+        raise RuntimeError("Amendment differs from the reviewed four-attempt extension")
+    ledger, etag = await control._read_ledger()
+    if (etag != expected_etag or hashlib.sha256(canonical(ledger)).hexdigest() != ledger_sha256
+            or ledger["active"] or ledger["acceptance"] != {"attempts": 10, "reserved": 2343000000}):
+        raise RuntimeError("Ledger differs from the reviewed inactive ten-attempt state")
+    revised = Coordinator(control.store, revised_policy, control.secret, control.allowlist, control.prices,
+                          control.routes, profile_bindings=control.profile_bindings,
+                          max_output_tokens=control.max_output_tokens)
+    amendment = {"previous_policy": control.policy_id, "revised_policy": revised.policy_id,
+                 "previous_ledger_sha256": ledger_sha256, "revised_policy_sha256": revised_policy_sha256,
+                 "acceptance": deepcopy(ledger["acceptance"]), "additional_attempts": 4,
+                 "additional_reserved_usd": "0.9372", "created_at": int(time.time())}
+    ledger["policy"] = revised.policy_id
+    await control.store.commit([("ledger", ledger, etag), ("acceptance-extension-14-v1", amendment, None)])
+    return amendment
 
 
 async def complete_terminal_429(store, receipt, identity, fingerprint_key, ledger_sha256, receipt_sha256):
@@ -67,11 +99,12 @@ async def run_case(client, store, receipts, case, expected_attempts, allowed_has
         raise RuntimeError("Ledger is not ready for the next bounded attempt")
     if time.time() < before.get("last_time", 0) + 65:
         raise RuntimeError("Next distinct case requires at least 65 seconds since the last admission")
+    receipt_key = case["id"] if expected_attempts < 10 else "correction-" + case["id"]
     operation = str(UUID(int=(int(time.time() * 1000) << 80) | (7 << 76) | (2 << 62) | secrets.randbits(62)))
     intent = {"case": case["id"], "payload_sha256": payload_hash, "operation": operation,
               "expected_attempts": expected_attempts, "created_at": int(time.time()), "state": "intent"}
-    await receipts.commit([(case["id"], intent, None)])
-    current, etag = await receipts.read(case["id"])
+    await receipts.commit([(receipt_key, intent, None)])
+    current, etag = await receipts.read(receipt_key)
     if current != intent or not etag:
         raise RuntimeError("Durable dispatch intent not confirmed")
     result = {**intent, "state": "unknown", "http_status": None}
@@ -105,7 +138,7 @@ async def run_case(client, store, receipts, case, expected_attempts, allowed_has
     operation_record, _ = await store.read(key)
     result.update(completed_at=int(time.time()), ledger_acceptance=after["acceptance"],
                   ledger_blocked=after["blocked"], active_count=len(after["active"]), operation_record=operation_record)
-    await receipts.commit([(case["id"], result, etag)])
+    await receipts.commit([(receipt_key, result, etag)])
     print("MODEL_CHECK " + json.dumps({name: result[name] for name in
         ("case", "state", "http_status", "ledger_acceptance", "ledger_blocked", "active_count")}), flush=True)
     if (after["blocked"] or after["active"] or after["acceptance"]["attempts"] != expected_attempts + 1

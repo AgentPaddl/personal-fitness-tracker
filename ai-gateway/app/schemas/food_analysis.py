@@ -106,6 +106,19 @@ class FoodAnalysisEstimate(BaseModel):
     assumptions: list[EstimateNote] = Field(default_factory=list, max_length=MAX_ESTIMATE_NOTES)
 
 
+class ImageNutritionExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_food: bool = Field(strict=True)
+    estimate: FoodAnalysisEstimate | None
+
+    @model_validator(mode="after")
+    def require_consistent_estimate(self):
+        if self.is_food != (self.estimate is not None):
+            raise ValueError("Only identified food may carry an estimate.")
+        return self
+
+
 class DeclaredNutritionComponent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

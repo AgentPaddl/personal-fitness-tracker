@@ -46,6 +46,45 @@ def _refinement_payload(
     return payload
 
 
+@pytest.mark.parametrize("data", [
+    {"is_food": True, "estimate": _CURRENT_ESTIMATE},
+    {"is_food": False, "estimate": None},
+    {"is_food": False, "estimate": _CURRENT_ESTIMATE},
+    {"is_food": True, "estimate": None},
+    {"is_food": "false", "estimate": None},
+    _CURRENT_ESTIMATE,
+])
+def test_api_only_image_contract_never_exposes_non_food_estimate(monkeypatch, data):
+    import asyncio
+    from app.providers.base import StructuredGenerationResult
+    from app.providers.strict_schema import to_strict_schema
+    from app.schemas.food_analysis import FoodAnalysisRequest
+    from app.use_cases.food_analysis import FoodAnalysisUseCase
+
+    monkeypatch.setattr("app.pilot_release.is_api_artifact", lambda: True)
+
+    class Provider:
+        calls = []
+
+        async def generate(self, request):
+            self.calls.append(request)
+            return StructuredGenerationResult(data=data)
+
+    provider = Provider()
+    use_case = FoodAnalysisUseCase(provider, 1, "text")
+    request = FoodAnalysisRequest.model_validate({"image": {
+        "media_type": "image/jpeg", "data_base64": _TINY_IMAGE_BASE64}})
+    if data.get("is_food") is True and data.get("estimate") is not None:
+        response = asyncio.run(use_case.execute(request))
+        assert response.model_dump() == {"estimate": _CURRENT_ESTIMATE}
+    else:
+        with pytest.raises(ProviderOutputInvalidError):
+            asyncio.run(use_case.execute(request))
+    assert len(provider.calls) == 1
+    strict = to_strict_schema(provider.calls[0].output_json_schema)
+    assert set(strict["required"]) == {"is_food", "estimate"}
+
+
 def test_food_analysis_success_returns_bounded_estimate(client):
     response = client.post("/v1/food-analysis", json={"food_description": "grilled chicken breast"})
 

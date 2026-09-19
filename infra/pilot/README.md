@@ -376,7 +376,9 @@ environment variable is not an installed-app configuration.
   intentionally requires the original zero-attempt ledger.
   Never rewrite prior failed/absent checks as passed. Renew only inside the same
   authorized scope, without changing lifetime counters, budgets or unknown holds.
-  Run at most ten existing-manifest model attempts only after safety acceptance,
+  The original run allowed at most ten existing-manifest attempts. The separately
+  authorized correction below adds exactly four, for a non-replenishing total14.
+  Run only the explicitly authorized cases after safety acceptance,
   without retries, then disable AI/revoke the technical grant. Participant and
   health-data release, the second identity and device acceptance remain separate.
   Finish the live matrix below before the two-person pilot is generally usable.
@@ -419,6 +421,28 @@ fits the deployment's TPM limit. Safe gateway request IDs, normalized error code
 and numeric gateway Retry-After hints are captured in the protected receipt;
 they are not Azure provider request IDs or provider rate-limit headers.
 
+The authorized2026-09-19 correction appends only L1, L2, P1, P5 at lifetime
+indices10..13. Their create-only `correction-` receipt keys preserve the original
+case receipts. `extend_acceptance` is operator-only: AI off, reviewed ledger hash
+and ETag, exact old10/USD2.343 counters, no active work, and reviewed new policy
+hash. One CAS transaction changes only the policy binding and creates an amendment
+receipt. It permits only day/month count10->14 and lifetime ceiling14/USD3.2802;
+cost caps, expiration, identities, allowed payloads, buckets, counters, operations
+and financial holds are not reset or increased. The new four-call reserve is
+USD0.9372, not USD3.2802 of new spend, within the unchanged EUR20+5 approval.
+This continuation is completed:14/14 attempts consumed, all four new screening
+cases passed, all four old holds unchanged. AI is off, the grant revoked and
+temporary test resources removed. No further model call is authorized; see the
+deployment record for final costs, evidence and remaining ordinary-pilot blockers.
+
+Only the API-only artifact uses the internal image classification envelope:
+strict `is_food` and nullable `estimate`. Non-food false/null produces the existing
+public invalid-output error with no saveable meal. Inconsistent or missing
+classification is also rejected. Public DTOs and ordinary production are unchanged.
+The content-free `image_food_status=non_food` event distinguishes semantic
+abstention from transport or malformed-output failures. No additional model call
+is used; the classification itself remains probabilistic and needs quality review.
+
 The local Azure adapter now captures bounded internal `response_diagnostics`
 from successful raw SDK responses and HTTP exceptions, before parsing content.
 Only HTTP status, UUID/`req_` provider request IDs (`x-request-id`,
@@ -438,10 +462,12 @@ For a separately approved run, capture these events privately and associate the
 provider ID with its single case/operation receipt; gateway IDs are not provider
 IDs. Apply the approved seven-day diagnostic retention and accounting/unknown-hold
 exceptions. No new cloud log destination or indefinite retention is introduced.
-This code is **local-only until a separately authorized build/deployment**; it
-cannot recover the four historical responses' missing headers. See the
+The separately authorized capacity correction deployed this diagnostic code;
+it cannot recover the four historical responses' missing headers. See the
 [read-only throttling investigation](DEPLOYMENT-2026-09-19.md#read-only-throttling-investigation-from-b64b6fa)
-for sizing assumptions and the proposed, not authorized, four-case retest.
+for sizing assumptions and the
+[authorized correction](DEPLOYMENT-2026-09-19.md#authorized-capacity-correction-and-four-case-continuation)
+for the actual20 RPM/20,000 TPM readback and bounded continuation.
 
 `complete_terminal_429` is an operator-only, hold-preserving correction, not a
 runtime endpoint or automatic recovery rule. First disable gateway admission and
