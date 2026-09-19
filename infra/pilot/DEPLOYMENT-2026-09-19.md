@@ -856,13 +856,28 @@ ACR credential was removed and the dedicated Colima build VM stopped. Protected
 local evidence remains subject to the already approved retention; cleanup does
 not claim immediate erasure of platform logs or accounting exceptions.
 
-Remaining ordinary-pilot blockers are concrete: the four historical holds lack
-request-correlated financial resolution; participant/health-data purposes, legal
-basis and abuse-monitoring exceptions still need clearance; the wife's own
-identity/privacy/device acceptance is absent; and physical iPhone backup,
+The four historical holds lack request-correlated financial resolution and must
+remain fully reserved (USD0.9372); this is not itself an open execution lock.
+The final model-free evidence records active0 and blockedfalse, with all14
+operation records retained. Separate intentional admission gates remain: AI off,
+revoked release grant and the exhausted14/14 lifetime allowance. These are the
+last verified facts at `cba6ee4`, not a new live inspection or a new authorization.
+Do not invent a zero-cost settlement or reset counters to permit device testing.
+
+At that closure, remaining ordinary-pilot blockers were participant/health-data purposes, legal
+basis and abuse-monitoring retention/deletion still need clearance; physical iPhone backup,
 data-preserving update, review/save/cancel/manual-entry and failure-path acceptance
-has not been performed. Four screening cases do not establish representative
+had not been performed. Later installation and AI-off observations are recorded
+in the iPhone section below; they are not full device/data acceptance.
+The wife's own identity/privacy/device acceptance is
+absent and blocks her admission, not automatically a separately authorized
+synthetic owner-only smoke. Four screening cases do not establish representative
 photo accuracy, calibrated confidence, concurrent-load behavior or p95 latency.
+Representative load testing is a later qualification for wider use, not a blanket
+prerequisite for a separately approved, sequential owner-only device smoke. No
+specific safety defect requiring load testing is established by these receipts;
+authentication, no automatic retry/save, unknown-hold preservation and bounded
+admission remain immediate safety gates regardless of load-test scheduling.
 Daily all-service cost review and retention/teardown duties remain operational,
 not an installed unattended cap or cleanup scheduler. No separate missing DPA
 signature was identified in the account-linked review. Production, installed
@@ -871,7 +886,46 @@ authorized by unused budget headroom.
 
 ## Costs and stop conditions
 
-The latest correction readback is **EUR0.0583771002919457728 net posted**, with
+### Update-preparation posted-cost read, 2026-09-19
+
+Exactly **one** read-only Cost Management `ActualCost` query, `PreTaxCost` sum,
+daily granularity grouped by resource group and service. Requested interval:
+**2026-09-01 00:00:00 UTC through 2026-09-19 16:09:11 UTC**. HTTP200, server
+response date **16:09:14 UTC**, no remaining page. Currency **EUR, before tax**.
+Only the verified private benchmark and pilot groups were included; no work or
+production subscription data. This calendar window covers their creation dates,
+not a new authorization period. No retry or query loop was used.
+
+| Resource group / separate purpose | Service | Posted net EUR (rounded) |
+| --- | --- | ---: |
+| `rg-pft-mini-bench-screen20260918` / private benchmark | Storage | 0.00316628 |
+| same benchmark group | Bandwidth | 0.00000000 (explicit returned row) |
+| **Benchmark subtotal** | | **0.00316628026790314** |
+| `pft-pilot-20260919` / private pilot | Container Registry | 0.06937933 |
+| same pilot group | Key Vault | 0.00241886 |
+| same pilot group | Storage | 0.00012204 |
+| same pilot group | Azure App Service | 0.00000000 (explicit returned row) |
+| same pilot group | Functions | 0.00000000 (explicit returned row) |
+| same pilot group | Bandwidth | 0.00000000 (explicit returned row) |
+| **Pilot subtotal** | | **0.0719202261720762805** |
+
+Data returned: benchmark usage date **September18** only; pilot usage dates
+**September18 and19**. Azure did not supply a completeness/last-ingestion
+timestamp: a September19 row does not mean all September19 usage is billed.
+**No model-service or Container Apps line was returned for either group.**
+Missing services are unposted/unknown, **not zero**. Explicit zero rows are only
+zero in this posted snapshot, not promises of no accrued charges. These are not
+final invoices or gross all-in totals. Model-token estimates and unknown holds
+must not be added to posted costs as if they were non-overlapping invoice lines.
+The four pilot holds remain fully reserved at **USD0.9372**; no settlement is
+inferred. Benchmark funding and pilot EUR20+5 remain separate; attempt cap14,
+AI-off state and operational EUR12 net stop are unchanged.
+
+Protected query/response: `local/20260919/update-preparation-cost-20260919.json`,
+with a create-only intent recording the single permitted request. The device
+build/AI-off preparation is in the [iPhone plan](IPHONE-ABNAHME-ENTWURF.md).
+
+The earlier correction readback was **EUR0.0583771002919457728 net posted**, with
 the model accounting and unchanged reserve assessment above. The13 correction
 jobs add at most **USD0.01755** configured replica compute at the previously
 reviewed180-second limits/rates; together with the earlier26 jobs,39 bounded
@@ -965,7 +1019,7 @@ be mistaken for blanket approval of every processing purpose or retention policy
 | Service / data | Scope, retention and remaining decision |
 | --- | --- |
 | iOS / SwiftData | Existing local records remain on device. Only an explicit analysis sends selected text or preprocessed image. No device export or actual health data sent during deployment. |
-| Entra / Easy Auth | Processes account IDs, authentication events and network metadata. Token store disabled at Functions. New native probe uses in-memory MSAL cache only. Tenant sign-in/audit retention and account deletion obligations remain to be recorded. |
+| Entra / Easy Auth | Processes account IDs, authentication events and network metadata. Token store disabled at Functions. The Python native-client probe used an in-memory MSAL cache; the actual iPhone app uses MSAL's persistent Keychain cache and a selected account ID in UserDefaults. Tenant sign-in/audit retention and account/cache deletion procedures remain to be recorded. |
 | Functions / ACA | Request payloads transient in memory; no intended payload logging. No paid Log Analytics/Application Insights configured. Platform/administrative logs still exist; absence of app ingestion is not absence of Microsoft telemetry. Live payload-log verification remains open. |
 | Azure OpenAI / Foundry Models | Azure-hosted, not an OpenAI-operated API. EU DataZone processing can span the zone, not Sweden only. `store=false`, no Responses/Assistants/Files/Batch or stored completions requested. No use for foundation-model training without permission according to official docs. |
 | Abuse monitoring | The actual account has no `ContentLogging=false` capability. Do not assume modified monitoring approval. Automated review and possible authorized Microsoft human review remain; EEA deployments' human reviewers are stated to be in EEA. Exact applicable flagged-content retention/deletion and exceptions require confirmation; the current reviewed pages did not establish a numeric retention ceiling. |
@@ -1105,8 +1159,10 @@ Both `provision.py login-probe` and the subsequent `login-analysis-probe` have
 passed; do not repeat them merely to reconfirm completed evidence. Their tokens
 were intentionally discarded. Never substitute an administrative CLI token for
 the native client, broaden consent, or paste credentials into chat. Complete
-fresh configuration-bound evidence before any later release, and resolve the
-recorded unknown hold without discarding its cost or reusing an attempt. The
+fresh configuration-bound evidence before any later release, and continue to
+reserve every recorded unknown hold without discarding its cost or reusing an
+attempt. Financial resolution is separate from confirming no active execution
+or ledger block; the last closure evidence shows neither. The
 original release key is revoked; historical private parameter files are evidence,
 not a ready-to-apply activation configuration. All14 authorized attempts have
 now been spent. The four-case capacity correction passed its bounded label/photo/
@@ -1139,7 +1195,31 @@ On a stop trigger or no later than the period end:
 6. Recheck delayed costs after teardown. No automatic extension or renewal of
    funding, privacy basis or participant scope is permitted.
 
-## iPhone acceptance, not yet performed
+## iPhone preparation and partial device evidence
+
+Initial preparation from `cba6ee4`, without activation, upload, installation or new model
+calls: [participant information and DPIA screening](TEILNEHMERINFORMATION-ENTWURF.md)
+and [staged owner-device acceptance plan](IPHONE-ABNAHME-ENTWURF.md). These are
+unapproved drafts, not participant consent or an extension of the exhausted grant.
+They distinguish retained financial holds from execution locks, record the
+current generic P5 user message, and propose separate zero-model AI-off and
+two-model live-smoke approvals. No device action occurred during that initial
+preparation; the following device evidence was obtained later.
+
+The existing signed bundle was subsequently installed as an in-place update;
+direct device queries confirmed **1.0 (5) before** and **1.0 (6) after**. The
+app identity, signing team and Keychain group were retained. No uninstall,
+data deletion or TestFlight distribution was performed. A full content-level
+data comparison, backup/restore proof and interactive MSAL return remain open.
+Installation receipts and device identifiers stay in ignored local evidence.
+
+The time-correlated Pilot request at **18:51:15 Berlin on 2026-09-19** returned
+HTTP503 at `boundary=release` while AI was disabled, before admission/provider
+dispatch. The subsequent read-only ledger and operation hashes matched the
+closure:14 attempts, no additional reserve, four unchanged holds totalling
+USD0.9372, active0. No client request ID was read from the phone, so this is
+temporal correlation, not proof from logged input. The new optional activation
+reason and iOS text are source changes only, not deployed or installed in build6.
 
 No TestFlight and no automatic installation. `ios/Config/Pilot.local.xcconfig`
 was generated from the real deployment outputs and is ignored by Git. Existing
