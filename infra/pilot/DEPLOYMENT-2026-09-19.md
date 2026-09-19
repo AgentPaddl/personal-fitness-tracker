@@ -9,8 +9,11 @@ billing residual risk, not guaranteed invoice ceilings. The prior benchmark is
 separate. No production deployment, installed app or private record was changed.
 
 Deployment is **AI off, not accepted for ordinary use**. No real nutrition/image
-data and no model request were sent. Acceptance counter: **0/10**. No signed
-release was created. Only the authenticated owner's identity is configured;
+data were sent. Acceptance counter: **5/10**, without retries: four successful
+synthetic text responses and one image attempt returning429 with unknown usage.
+The first signed technical grant was exercised, revoked under the same valid
+token, and finally invalidated by rotating only its release key. One full-cost
+hold remains; no counter or accounting state was reset. Only the owner's identity is configured;
 the wife is not admitted and no placeholder identity was substituted.
 
 The conservative period anchor was recorded immediately before the first pilot
@@ -153,7 +156,7 @@ The Functions Flex SCM
 environment is administratively reachable, but its command endpoint returned404;
 no new diagnostic endpoint or workload permission was added.
 
-Still required before any model call: analysis-route Easy Auth claim mapping;
+At that earlier checkpoint, still required before any model call: analysis-route Easy Auth claim mapping;
 end-to-end backend Managed Identity JWT/HMAC; native and
 foreign workload rejection; delegated/direct bypass attempts; actual ingress
 body/slow-client/scale behavior; active-path log inspection and live
@@ -161,7 +164,7 @@ revocation/renewal qualification. Offline regressions do not attest these checks
 No `CHECKS` record has been fabricated and no signature has been issued.
 The gateway remains `AI_API_ONLY_ENABLED=false`. The backend's similarly named
 flag is true to select mandatory workload authentication; it is not an enabled
-gateway model release. No model request was made during this continuation.
+gateway model release. No model request was made during that earlier continuation.
 
 ### Earlier existing-path qualification blocker
 
@@ -261,7 +264,7 @@ are private `auth-job-evidence-*`, `boundary-job-evidence-*`,
 after its stopped executions; local Colima profile `pft-pilot-review` was stopped.
 The pilot ledger was not reset or modified by these HTTP qualifications.
 
-Final local regression: **220passed** across the affected runtime/ledger suites;
+Earlier local regression: **220passed** across the affected runtime/ledger suites;
 the deployed Linux image had separately passed49selected ingress/release tests.
 New helper tests cover fail-stop/no-retry behavior, bounded incomplete bodies,
 unclassified identity failure, normalized nonmanifest input, AI-off before login
@@ -274,18 +277,74 @@ a valid operation via503/pilot_unavailable, and direct native-token rejection
 at the gateway with otherwise correct service/HMAC headers. All payloads are
 outside the acceptance manifest. The503 alone cannot distinguish a backend
 token-acquisition failure from gateway admission; correlate with content-free
-gateway evidence before claiming end-to-end success. This login has **not** yet
-been performed. It is authentication, not renewed authorization or consent.
+gateway evidence before claiming end-to-end success. The subsequent personal
+login completed at **08:28:46Z**: exact native identity matched; missing operation
+returned400/operation_required, valid operation503/pilot_unavailable, and the
+direct native token403/pilot_forbidden. Gateway metadata independently records
+`release status=503` at08:28:46.1529779Z and `workload status=403` at
+08:28:46.3225275Z. This establishes actual backend JWT/HMAC admission through
+the analysis path to the closed release gate. It is authentication, not renewed
+authorization or consent. Tokens stayed in memory; no model attempt occurred.
 
-Remaining pre-activation evidence includes that native analysis path and
-wrong-workload rejection, plus the outstanding edge/concurrency/log/privacy
-criteria described above. No incomplete `CHECKS` record is signed. The first
-bounded technical grant, live revocation under a cached valid token, and the
-ten-case model acceptance are therefore **not performed**. The code-level
-circularity is fixed; these are concrete remaining evidence gaps, not a renewed
-requirement to revoke a grant before issuing it. Final model counter **0/10**,
-full-cost reservations **0**, AI **off**. Production, iPhone and participant
-admission remain unchanged.
+A targeted fourth job execution, `owqtk7q`, completed successfully at08:33:32Z.
+It obtained an actual Azure Storage audience token using the existing gateway
+UAMI and sent it once to the gateway with otherwise correct service/HMAC headers:
+**403 at the gateway**. No role or permission was added. This is a combined
+wrong-principal/wrong-audience negative case, **not an isolated correct-audience
+wrong-principal or role test** (`isolates_wrong_principal_only=false`). Token
+acquisition failures, including AADSTS501051, are never authorization evidence.
+The actual ledger content and ETag were unchanged, attempts0/reserved0/no active
+operations, with the same SHA-256 recorded above. Private receipts are
+`native-analysis-probe-*`, `native-analysis-log-evidence-*` and
+`issued-foreign-evidence-*`; bounded gateway logs exposed neither the configured
+secrets nor Bearer values nor the synthetic probe text. This log snapshot does
+not attest all platform logs or an as-yet-unexecuted active model path.
+
+The later account-linked contract investigation and explicit bounded retention
+approval below completed the synthetic-only privacy evidence. The foreign-token
+criterion is supported by the actual combined negative case above and separate
+exact-role readback/local claim tests, not an invented isolated-principal live
+test. This limited scope is explicit in the private evidence provenance.
+
+### First grant and same-token revocation
+
+A first synthetic technical grant was signed at **08:53:06Z**, expiring at
+**09:53:06Z**, for configuration SHA-256
+`59c42e5854ce3685b2468399f8da25013a511fd4eeefcd6403a189651318255c`.
+All six evidence groups bind this digest. The underlying live receipts, resource
+readbacks, prior CAS/RBAC evidence, contract findings and owner's retention
+approval are recorded separately; evidence booleans are not independent proof.
+No ordinary-use grant, new participant or longer pilot period was authorized.
+
+The operator's direct Key Vault data-plane secret write returned403 because the
+operator has no secret-set data role. Publication used the already authorized
+ARM `Microsoft.KeyVault/vaults/secrets` resource path instead, with no added role.
+The gateway references the resulting explicit approval/signature secret versions.
+
+Earlier attempts remain partial: `egxg8xa` failed without a captured terminal
+cause; `p1coaqq` ran after premature revocation and correctly returned503 instead
+of the expected active200; `zcbeiuv` established active readiness200/nonmanifest403
+and unchanged ledger. The first same-process witness `dviaydm` established its
+active phase, but stopping the job removed its transient log access, so its
+completion was **not** counted as a passed revocation test.
+
+The final witness `srt0gcy` kept one actual backend-UAMI JWT only in RAM. At
+**09:14:47Z**, readiness returned200 and signed nonmanifest analysis403. The
+operator set AI off and confirmed `cycleoff2` was the actual **latest ready**
+revision before signalling that exact job. At **09:16:03Z**, the same token
+received readiness503 and nonmanifest503. Token expiry was09:14:37Z the next day;
+all four checks have the identical SHA-256 fingerprint, not merely the same
+client ID. Separate gateway events confirm two release503 responses.
+
+The completed witness stored a minimal token-/payload-free receipt in the
+isolated `qualification-release-v1/result` row. Reader `r4wk5yh` retrieved it;
+private receipt `technical-durable-result-1789809402.json` contains the complete
+200/403/503/503 sequence. Actual pilot-ledger content **and ETag** stayed unchanged:
+attempts0, reserved0, no active operation, same ledger SHA-256 as above. Neither
+readiness nor the nonmanifest probe invoked a model. Receipt read and ETag cleanup
+are separate operations, so losing a reader log does not destroy the evidence.
+This proves runtime flag revocation under a still-valid token, not Entra token
+invalidation or retroactive cancellation of an already dispatched model call.
 
 Synthetic acceptance is a separate policy option. It admits only SHA-256 hashes
 of normalized nonprivate DTOs and only one person. Its CAS-backed lifetime
@@ -303,6 +362,73 @@ P5 is not evidence of safety-filter refusal; a generic error is not successful
 abstention. No private user input or repeated setup model call is permitted.
 Expected T2: 272 kcal, 13.2 g protein, 34 g carbohydrate, 6.8 g fat.
 
+### Model acceptance stopped at an unknown hold
+
+After the same-token safety qualification, the same still-valid one-hour grant
+was enabled for the existing manifest, without renewal or policy change.
+`qualify_models.py` sent one explicitly selected case per manual retry0 job.
+It verified the normalized hash and exact prior lifetime counters, created a
+non-overwritable dispatch intent, and inspected real operation settlement before
+allowing progression. No provider SDK/image/runtime change or extra role was made.
+
+| Case | Actual outcome | Quality / accounting |
+| --- | --- | --- |
+| T2 | 200 | Exact272kcal/13.2g protein/34g carbohydrate/6.8g fat; known USD0.0019701 |
+| T5 | 200 | Decimal comma/kg conversion exact195/4.05/42/0.45; known USD0.00154275 |
+| T4 | 200 | Explicit100g/300g and cooked/dry ambiguity; confidence0.34; disclosed generic100g assumption; known USD0.001343925 |
+| T1 | 200 | Cooked weight/arithmetic exact195/4.05/42/0.45; known USD0.00152955 |
+| L1 | 429 | No usable response; operation state `unknown`, usage unknown, full USD0.2343 hold retained |
+| L2, P1, R1, R4, P5 | Not sent | No image/refinement/non-food acceptance claimed |
+
+Known four-call model cost is **USD0.006386325**, according to the configured
+versioned price table and validated usage, not a final EUR invoice. Including the
+unresolved hold gives **USD0.240686325** conservatively charged/held. The separate
+non-replenishing acceptance counter is **5 attempts / USD1.1715 full reserves**;
+successful settlement does not return that lifetime allowance.
+
+L1 execution `be14iiy` returned429 after admission. The API adapter maps upstream
+429 to the rate-limit error; absent usable accounting, the Coordinator deliberately
+keeps the dispatched operation `unknown` and active. This is not proof of zero
+provider charge or a precise RPM/TPM/capacity diagnosis. No provider error body
+was retained by the runner, and a later generation-log snapshot was empty.
+Do not invent a more specific cause from429 alone. No second L1 call or next-case
+start occurred. The active hold is a concrete fail-closed admission/accounting
+blocker, not a model-quality result. Reconcile against actual provider/usage
+evidence and a reviewed hold-preserving procedure before any further admission;
+do not clear `active`, reset the ledger, raise capacity or replay L1 to proceed.
+
+A bounded active gateway console snapshot contained four domain200 events and
+no configured key values, Bearer token, manifest text or image prefix. Synthetic
+results were fetched through the existing administrative Exec channel directly
+into protected local diagnostics, not application logs. This is bounded evidence,
+not a claim about all Microsoft platform logs. Final private result receipt:
+`model-final-private-receipt-1789810032.json`.
+
+Final gateway revision **`pft-pilot-20260919-gateway--locked`** is AI off, healthy
+and the sole active revision. Only the release key was rotated through the
+existing ARM path and pinned secret reference; the new process verified that
+key was actually loaded. Service, request-HMAC, fingerprint keys, policy and pilot
+period stayed unchanged. The old signed grant cannot be reused with the new key.
+The release-cycle receipt was deleted before the first model case. At09:29:25Z,
+the five isolated model diagnostic rows were ETag-deleted only after comparison
+against their privately received hashes. Actual ledger content **and ETag** were
+unchanged by cleanup: attempts5, lifetime reserves1171500000 nanodollars, one
+unknown active hold. Real operation/accounting records were not deleted.
+
+Final model-free job `l8vr5qg` passed all nine authentication checks against this
+locked revision: correct workload/HMAC503, eight malformed/foreign/expired
+authentication cases403. No model call or reservation was attempted. Its receipt
+was secured, no job execution was running, and the temporary job was deleted and
+its absence read back at09:31:30Z. Registry/hosting resources remain within the
+original pilot period and still incur charges; AI-off is not full teardown.
+Production, iPhone, wife admission and the unrelated benchmark remain unchanged.
+
+Final affected regression: **245 passed, 1 skipped**. New code also passed Pylance
+syntax checks and editor diagnostics; `git diff --check` passed. The new helper
+tests exercise no-network single dispatch, create-only intent, hash/order checks,
+duplicate/active refusal, HTTP/transport/unknown-usage stops, same-token release
+and receipt isolation. This does not turn the five untested live cases into passes.
+
 ## Costs and stop conditions
 
 Verified EUR public Consumption prices on 2026-09-19: ACR Basic EUR0.1431/day;
@@ -319,6 +445,23 @@ at most **USD0.00405** of configured replica compute at the reviewed active rate
 (3 x180seconds x[0.25 x0.000024 +0.5 x0.000003]); platform/control/storage costs,
 startup effects and tax remain separately reserved. No model spend is reported
 by the unchanged acceptance ledger.
+
+The subsequent issued-foreign-token job adds at most **USD0.00135** of configured
+replica compute using the same180-second limit and rates. The four executions'
+combined configured compute bound is **USD0.00540**, not an invoice or an all-in
+setup cost. The existing tax, delayed billing, hosting and cleanup reserves remain.
+
+Before model acceptance, the last successful custom-period query reported
+**EUR0.00322847501287996 net**. Both the immediate pre-model and final post-model
+queries returned429, without polling/retry loops. The recent posted amount plus
+the unchanged conservative full-model, hosting, tax/FX, late-billing and cleanup
+reserves supported the bounded run; posted records are not accrued totals.
+There were **16 bounded job executions** in total: the earlier three and13 retained
+in the final job execution list. At180seconds maximum each, their configured
+replica-compute bound is **USD0.02160**. This excludes control/storage/startup/tax
+effects and administrative Exec/gateway usage, which remain separately reserved.
+The four-call known cost and L1 unknown hold above are authoritative ledger facts,
+not replaced by the older zero-attempt snapshots in this chronological record.
 
 - ACR thirty days: **EUR4.293 net**, about EUR5.109 including illustrative 19% VAT.
 - Ten full 272k-input/2k-output reservations: **EUR2.011856 net**, about EUR2.395
@@ -352,8 +495,9 @@ No routine runtime flags may enable Copilot or reuse benchmark headroom.
 
 ## Concrete privacy review
 
-This is technical/privacy preparation, not a legal opinion, executed DPA,
-attestation of agreement acceptance or participant consent.
+This is technical/privacy preparation, not a legal opinion or participant
+consent. The account-linked agreement acceptance below is verified; it must not
+be mistaken for blanket approval of every processing purpose or retention policy.
 
 | Service / data | Scope, retention and remaining decision |
 | --- | --- |
@@ -362,17 +506,86 @@ attestation of agreement acceptance or participant consent.
 | Functions / ACA | Request payloads transient in memory; no intended payload logging. No paid Log Analytics/Application Insights configured. Platform/administrative logs still exist; absence of app ingestion is not absence of Microsoft telemetry. Live payload-log verification remains open. |
 | Azure OpenAI / Foundry Models | Azure-hosted, not an OpenAI-operated API. EU DataZone processing can span the zone, not Sweden only. `store=false`, no Responses/Assistants/Files/Batch or stored completions requested. No use for foundation-model training without permission according to official docs. |
 | Abuse monitoring | The actual account has no `ContentLogging=false` capability. Do not assume modified monitoring approval. Automated review and possible authorized Microsoft human review remain; EEA deployments' human reviewers are stated to be in EEA. Exact applicable flagged-content retention/deletion and exceptions require confirmation; the current reviewed pages did not establish a numeric retention ceiling. |
-| Table | Pseudonymous HMAC identifiers, operation state, count/cost/uncertainty, no raw input/result. Configured operation retention31days is implemented cleanup logic, not an installed recurring cleanup scheduler. Preserve accounting/holds during any transition. |
+| Table | Real pilot ledger: pseudonymous HMAC identifiers, operation state, count/cost/uncertainty, no raw input/result. The isolated temporary qualification partition held synthetic results only, deleted after verified private receipt. Configured operation retention31days is implemented cleanup logic, not an installed recurring cleanup scheduler. Preserve accounting/holds during any transition. |
 | Blob / ACR / Key Vault | Backend package, container code and secrets, no nutrition archive. Key Vault soft-deleted material is purge-protected7days. Deleting the live group does not instantly erase provider-retained or soft-deleted data. |
 
-Contract path: subscription billing metadata identifies Microsoft Customer
-Agreement. The published Microsoft Products and Services DPA applies through
-applicable Product Terms; the publicly available DPA is not evidence that the
-specific customer executed/accepted every applicable document. Owner must retain
-the actual agreement/version, confirm Azure/Entra/Foundry coverage, processor
-terms and subprocessor notification arrangements. No contractual click-through
-or signature was performed by this agent. DPA page's current English document:
-May22,2026; verify against the customer's actual contract, not only publication.
+### Account-linked contract evidence, 2026-09-19
+
+Read-only ARM Billing API2024-04-01 linked this exact private subscription's
+`billingProperty/default` to its billing account. The account's `agreements`
+collection, expanded with `Participants`, contains one Microsoft Customer
+Agreement: **Active**, **ClickToAccept**, effective
+**2026-09-18T13:33:53.9101293Z**. Its participant is **Accepted** at that same
+instant and matches the verified owner's contact. Only the boolean match is
+reported; names, contacts, billing identifiers and signed document links remain
+private. No contractual acceptance or signature was performed by this agent.
+
+The `agreementLink` returned an Office viewer; its authorized WOPI content was
+downloaded privately as the actual German **Microsoft-Kundenvertrag**, not a
+generic replacement downloaded from a public template page. Original DOCX SHA-256:
+`72431ff06d62e32ba19f49aed82e256caecc6a895334d87725c50b13c4e8c3ac`.
+Its footer identifies `Microsoft Customer Agreement: 102C9D654B3C`. This is the
+document's observed identifier, **not a proven publication/revision date**. The
+acceptance timestamp likewise does not establish the template's revision date.
+
+The actual document contains these relevant provisions:
+
+- Opening agreement paragraph: DPA, applicable Product Terms and SLAs are
+  constituents of the agreement.
+- **Datenschutz und -verarbeitung**: processing follows the agreement and DPA,
+  expressly incorporated by reference. Required third-party permissions remain
+  the customer's responsibility.
+- **Definitionen**, **DPA**: refers to the Microsoft Products and Services Data
+  Protection Addendum at `https://aka.ms/DPA`, as updated.
+- **Vertragsaenderungen**, DPA/SLA: their own update provisions govern changes.
+  **Rangfolge** places DPA ahead of these general terms and Product Terms.
+- **Ergaenzende-Einkaufsbedingungen fuer Einzelne Nutzer**, definition and item5:
+  a specifically defined Individual User is a person **other than an
+  administrator**, subscribing for members of the subscriber's organization;
+  item5 replaces the privacy section with the Microsoft Privacy Statement for
+  that category. Private payment alone does not establish that category. The
+  verified owner is also this tenant's administrator; no employer/school
+  self-service purchase was established. Do not erase this exception or assume
+  it applies merely because the subscription is privately paid.
+
+The public DPA page currently identifies **English, May2026**, listed
+May22,2026. The retrieved document SHA-256 is
+`d79e06734ddff63593375c5134f3e362da7ddf6d265308776a2c7db4b7233f41`.
+Its **Applicable DPA Terms and Updates / Limits on Updates** applies the then-current
+DPA at purchase/renewal for the subscription term, with separately stated
+new-feature and government-requirement exceptions. This supports May2026 for the
+new September subscription on the available publication record; ARM does not
+return a separately signed DPA or a customer-specific DPA version field. Do not
+claim a separately executed DPA or immutable future terms.
+
+The MCA **Privacy & Security Terms / General** describes DPA obligations and its
+priority. **Core Online Services** includes Functions/App Service, Container
+Apps, ACR, Microsoft Entra ID and Foundry Models sold by Azure. Product-specific
+exceptions still apply, notably Bing grounding/Web IQ, which this pilot does not
+use. This is not a claim that every Microsoft account/billing activity is solely
+processor activity or that EU DataZone eliminates transfer exceptions.
+
+On the available contract text, a **separate DPA signature is not an identified
+missing step**: the accepted MCA incorporates it directly. The evidence does
+not require the owner to make a blanket assertion of legal clearance. Verified
+portal navigation for account inspection is **Azure portal > Cost Management +
+Billing > Billing scopes > the private MCA billing account > Settings >
+Properties** (skip scope selection if only one exists). The contract itself was
+retrieved via that account's Billing REST `agreements` collection and its
+`agreementLink`; no unverified portal signing workflow is asserted.
+
+The owner's current instruction permits only synthetic inputs and necessary own
+account metadata; wife and real health/private inputs remain excluded. Following
+the concrete contract findings, the owner expressly approved local technical
+diagnostic retention of at most7days and pseudonymous operation retention
+of31days. Spend and uncertain holds remain until resolved, without resetting
+attempt limits. Cleanup is operator-managed, not scheduled. Necessary contract/
+billing evidence stays access-controlled and outside Git. This approval does not
+override Microsoft platform, abuse, legal or soft-delete retention and does not
+promise complete erasure within7/31days. It is an explicit bounded operational
+decision, not a blanket legal attestation. The operator must review diagnostic
+expiry by2026-09-26 and operation cleanup after the applicable31days; unresolved
+accounting must not be deleted to make a cleanup appear complete.
 
 Transfers: EU DataZone and EU Data Boundary are not unconditional promises of
 no third-country access. Boundary commitments have documented limited transfer,
@@ -408,6 +621,9 @@ Official sources reviewed:
 - [Azure model data/privacy](https://learn.microsoft.com/en-us/azure/ai-foundry/responsible-ai/openai/data-privacy)
 - [Abuse monitoring](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/abuse-monitoring)
 - [Microsoft DPA](https://www.microsoft.com/licensing/docs/view/Microsoft-Products-and-Services-Data-Protection-Addendum-DPA)
+- [MCA Privacy and Security Terms](https://www.microsoft.com/licensing/terms/product/PrivacyandSecurityTerms/MCA)
+- [Account agreements and participants API](https://learn.microsoft.com/en-us/rest/api/billing/agreements/list-by-billing-account?view=rest-billing-2024-04-01)
+- [MCA billing account and portal properties](https://learn.microsoft.com/en-us/azure/cost-management-billing/understand/mca-overview)
 - [EU Data Boundary and exceptions](https://learn.microsoft.com/en-us/privacy/eudb/eu-data-boundary-learn)
 
 ## Resume, stop and cleanup
@@ -422,13 +638,15 @@ Deployments use `main.json`; runtime parameters remain private and AI false.
 The deployment record and private operation files preserve the intervening
 provider validation corrections. `provision.py` intentionally cannot activate AI.
 
-The initial `provision.py login-probe` has passed; do not repeat it just to
-reconfirm the same readiness result. Further authenticated analysis qualification
-needs a reviewed bounded runner and a fresh personal sign-in because the probe
-intentionally discarded its tokens. Never substitute an administrative CLI token
-for the native client, broaden consent, or paste credentials into chat. Complete
-the outstanding model-free safety probes first; do not sign incomplete evidence
-to get around the current release-first HTTP gate.
+Both `provision.py login-probe` and the subsequent `login-analysis-probe` have
+passed; do not repeat them merely to reconfirm completed evidence. Their tokens
+were intentionally discarded. Never substitute an administrative CLI token for
+the native client, broaden consent, or paste credentials into chat. Complete
+fresh configuration-bound evidence before any later release, and resolve the
+recorded unknown hold without discarding its cost or reusing an attempt. The
+original release key is revoked; historical private parameter files are evidence,
+not a ready-to-apply activation configuration. Five manifest cases remain untested.
+The old release-first HTTP circularity has already been corrected.
 
 On a stop trigger or no later than the period end:
 

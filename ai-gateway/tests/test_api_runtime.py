@@ -773,6 +773,58 @@ def test_acceptance_manifest_binds_exact_gateway_normalization():
     assert manifest["cases"][0]["expected"]["calories"] == 272
 
 
+@pytest.mark.parametrize("mutation", [None, "hash", "order", "active", "duplicate", "http", "transport", "unknown"])
+def test_model_qualifier_one_intent_one_attempt_no_retry(monkeypatch, capsys, mutation):
+    import httpx2
+    import sys
+    from copy import deepcopy
+    from app.pilot import Conflict
+    from tests.test_pilot import MemoryCAS
+    from tests.test_openai_api import _food_data
+
+    monkeypatch.setitem(sys.modules, "qualify_auth", load_local_module("infra/pilot/qualify_auth.py"))
+    helper = load_local_module("infra/pilot/qualify_models.py")
+    case = load_local_module("infra/pilot/prepare.py").acceptance_manifest()["cases"][0]
+    allowed = [case["payload_sha256"]]
+    if mutation == "hash":
+        case["payload"]["food_description"] += " changed"
+    if mutation == "order":
+        case["id"] = "T5"
+    before = {"blocked": False, "active": {"unexpected": "person"} if mutation == "active" else {},
+              "acceptance": {"attempts": 0, "reserved": 0}}
+    store, receipts, calls = MemoryCAS(), MemoryCAS(), []
+    store.rows["ledger"] = (deepcopy(before), "1")
+    if mutation == "duplicate":
+        receipts.rows["T2"] = ({"state": "intent"}, "1")
+
+    class Client:
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            store.rows["ledger"] = ({**before, "acceptance": {"attempts": 1, "reserved": 234300000}}, "2")
+            operation = kwargs["headers"]["X-Operation-Id"]
+            key = "op-" + helper.digest(b"f" * 48, "operation", [(TENANT, PRINCIPAL), operation])
+            store.rows[key] = ({"settled": True, "usage_known": mutation != "unknown"}, "1")
+            if mutation == "transport":
+                raise TimeoutError("private diagnostic must not be logged")
+            payload = {"estimate": _food_data()}
+            return httpx2.Response(503 if mutation == "http" else 200, json=payload)
+
+    arguments = (Client(), store, receipts, case, 0, allowed, "private-token", (TENANT, PRINCIPAL),
+                 "s" * 48, "t" * 48, "f" * 48)
+    if mutation:
+        with pytest.raises(Conflict if mutation == "duplicate" else RuntimeError):
+            asyncio.run(helper.run_case(*arguments))
+    else:
+        result = asyncio.run(helper.run_case(*arguments))
+        assert result["state"] == "response_received"
+        with pytest.raises(RuntimeError):
+            asyncio.run(helper.run_case(*arguments))
+    assert len(calls) == (0 if mutation in {"hash", "order", "active", "duplicate"} else 1)
+    assert "private-token" not in capsys.readouterr().out
+    if calls:
+        assert receipts.rows["T2"][0]["state"] != "intent"
+
+
 def test_model_free_ledger_qualification_preserves_unknown_holds():
     from tests.test_pilot import profile_coordinator
 
@@ -810,6 +862,129 @@ def test_auth_qualifier_only_sends_nonmanifest_probes_and_stops_on_mismatch():
     with pytest.raises(RuntimeError, match="valid_authentication"):
         helper.probe(Client(), "https://synthetic.invalid", token, (TENANT, PRINCIPAL), "s" * 48, "t" * 48, 403)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("expected,mutation", [(403, None), (503, None), (503, "different_token"),
+    (503, "no_prior_token"), (403, "expired"), (503, "expired"), (403, "readiness"), (503, "analysis")])
+def test_release_qualifier_same_live_token_and_nonmanifest_only(capsys, expected, mutation):
+    import hashlib
+
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    token = helper.jwt.encode({"exp": int(time.time()) + (-60 if mutation == "expired" else 300)},
+        "synthetic-signing-key-long-enough-for-tests", algorithm="HS256")
+    fingerprint = hashlib.sha256(token.encode()).hexdigest()
+    previous = None if expected == 403 or mutation == "no_prior_token" else (
+        "0" * 64 if mutation == "different_token" else fingerprint)
+    calls = []
+
+    class Client:
+        def request(self, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            correct = (200 if expected == 403 else 503) if method == "GET" else expected
+            wrong = mutation == "readiness" and method == "GET" or mutation == "analysis" and method == "POST"
+            return SimpleNamespace(status_code=500 if wrong else correct)
+
+    if mutation:
+        with pytest.raises(RuntimeError):
+            helper.probe_release(Client(), "https://synthetic.invalid", token,
+                (TENANT, PRINCIPAL), "s" * 48, "t" * 48, expected, previous)
+    else:
+        results = helper.probe_release(Client(), "https://synthetic.invalid", token,
+            (TENANT, PRINCIPAL), "s" * 48, "t" * 48, expected, previous)
+        assert all(record["passed"] and record["token_sha256"] == fingerprint for record in results)
+    assert len(calls) == (0 if mutation in {"different_token", "no_prior_token", "expired"}
+                         else 1 if mutation == "readiness" else 2)
+    if len(calls) == 2:
+        assert calls[0][0] == "GET" and "json" not in calls[0][2]
+        assert calls[1][0] == "POST" and calls[1][2]["json"] == helper.PAYLOAD
+        assert all(call[2]["headers"]["Authorization"] == "Bearer " + token for call in calls)
+    assert token not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("signalled", [True, False])
+def test_release_cycle_keeps_token_in_memory_and_bounds_operator_signal(monkeypatch, signalled):
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    calls, handlers, waits = [], [], []
+    sentinel = object()
+
+    class Event:
+        def set(self):
+            pass
+
+        def wait(self, *, timeout):
+            waits.append(timeout)
+            return signalled
+
+    def register(signal_number, handler):
+        handlers.append((signal_number, handler))
+        return sentinel
+
+    def probe(*args):
+        calls.append(args)
+        return [{"token_sha256": "a" * 64, "passed": True}]
+
+    monkeypatch.setattr(helper.threading, "Event", Event)
+    monkeypatch.setattr(helper.signal, "signal", register)
+    monkeypatch.setattr(helper, "probe_release", probe)
+    if signalled:
+        assert len(helper.probe_release_cycle(None, "base", "same-token", (TENANT, PRINCIPAL), "secret", "service")) == 2
+        assert calls[0][2] == calls[1][2] == "same-token"
+        assert calls[0][-1] == 403 and calls[1][-2:] == (503, "a" * 64)
+    else:
+        with pytest.raises(RuntimeError, match="No bounded operator"):
+            helper.probe_release_cycle(None, "base", "same-token", (TENANT, PRINCIPAL), "secret", "service")
+        assert len(calls) == 1
+    assert waits == [120]
+    assert handlers[-1] == (helper.signal.SIGTERM, sentinel)
+
+
+@pytest.mark.parametrize("write,cleanup", [(True, False), (False, False), (False, True)])
+def test_release_cycle_receipt_is_isolated_create_only_and_explicitly_cleaned(monkeypatch, write, cleanup):
+    from app.pilot_table import AzureTableStore
+
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    changes, removed, closed, verified = [], [], [], []
+    results = [{"check": "pilot_ledger_unchanged", "passed": True}]
+
+    class Store:
+        partition = "pilot-v1"
+
+        async def commit(self, records):
+            changes.append((self.partition, records))
+
+        async def read(self, key):
+            assert self.partition == "qualification-release-v1" and key == "result"
+            return {"checks": results}, "etag"
+
+        async def delete_entity(self, partition, key, **kwargs):
+            removed.append((partition, key, kwargs))
+
+        async def close(self):
+            closed.append(True)
+
+    async def ledger():
+        verified.append(True)
+
+    store = Store()
+    store.client = store
+    monkeypatch.setattr(helper, "read_ledger", ledger)
+    monkeypatch.setattr(AzureTableStore, "connect", lambda *args: store)
+    monkeypatch.setenv("AI_PILOT_TABLE_ENDPOINT", "https://synthetic.table.core.windows.net")
+    monkeypatch.setenv("AI_PILOT_TABLE_NAME", "PilotSynthetic")
+    result = asyncio.run(helper.cycle_receipt(results if write else None, cleanup=cleanup))
+    assert verified == closed == [True]
+    if write:
+        assert result is None and removed == []
+        assert changes[0][0] == "qualification-release-v1"
+        assert changes[0][1][0][0] == "result" and changes[0][1][0][2] is None
+        assert changes[0][1][0][1]["checks"] == results
+    else:
+        assert result == {"checks": results} and not changes
+        if cleanup:
+            assert removed[0][:2] == ("qualification-release-v1", "result")
+            assert removed[0][2]["etag"] == "etag"
+        else:
+            assert not removed
 
 
 def test_auth_qualifier_limits_are_bounded_and_stop_on_mismatch():
@@ -874,8 +1049,8 @@ def test_auth_qualifier_slow_body_is_incomplete_and_connection_is_closed(monkeyp
     assert sent == [b"1\r\n{\r\n"] and closed == [True]
 
 
-@pytest.mark.parametrize("failure,accepted", [("AADSTS501051: no assigned role", True), ("timeout", False)])
-def test_auth_qualifier_foreign_workload_requires_specific_role_denial(monkeypatch, capsys, failure, accepted):
+@pytest.mark.parametrize("failure", ["AADSTS501051: no assigned role", "timeout"])
+def test_auth_qualifier_foreign_workload_never_counts_token_failure(monkeypatch, capsys, failure):
     helper = load_local_module("infra/pilot/qualify_auth.py")
     monkeypatch.setenv("AI_PILOT_GATEWAY_CLIENT_ID", PRINCIPAL)
     monkeypatch.setenv("GATEWAY_WORKLOAD_AUDIENCE", AUDIENCE)
@@ -894,13 +1069,56 @@ def test_auth_qualifier_foreign_workload_requires_specific_role_denial(monkeypat
             raise helper.ClientAuthenticationError(failure)
 
     monkeypatch.setattr(helper, "ManagedIdentityCredential", Credential)
-    if accepted:
-        result = helper.probe_foreign_workload(None, "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
-        assert result == {"check": "foreign_workload", "boundary": "entra_app_role", "passed": True}
-    else:
-        with pytest.raises(RuntimeError, match="not an app-role denial"):
-            helper.probe_foreign_workload(None, "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
+    with pytest.raises(RuntimeError, match="not an authorization test"):
+        helper.probe_foreign_workload(None, "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
     assert failure not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mutation", [None, "accepted", "wrong_identity", "expired"])
+def test_foreign_qualifier_requires_issued_token_and_real_gateway_denial(monkeypatch, capsys, mutation):
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    foreign = "00000000-0000-4000-8000-000000000002"
+    for name, value in {"AI_PILOT_GATEWAY_CLIENT_ID": CLIENT, "QUALIFICATION_FOREIGN_PRINCIPAL_ID": foreign,
+                        "GATEWAY_BACKEND_PRINCIPAL_ID": PRINCIPAL}.items():
+        monkeypatch.setenv(name, value)
+    claims = {"tid": TENANT, "oid": PRINCIPAL if mutation == "wrong_identity" else foreign, "appid": CLIENT,
+              "aud": "https://storage.azure.com", "exp": int(time.time()) + (-60 if mutation == "expired" else 300)}
+    token = helper.jwt.encode(claims, "synthetic-signing-key-long-enough-for-tests", algorithm="HS256")
+    scopes, calls = [], []
+
+    class Credential:
+        def __init__(self, **kwargs):
+            assert kwargs["client_id"] == CLIENT and kwargs["retry_total"] == 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get_token(self, scope):
+            scopes.append(scope)
+            return SimpleNamespace(token=token)
+
+    class Client:
+        def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return SimpleNamespace(status_code=200 if mutation == "accepted" else 403)
+
+    monkeypatch.setattr(helper, "ManagedIdentityCredential", Credential)
+    if mutation:
+        with pytest.raises(RuntimeError):
+            helper.probe_foreign_workload(Client(), "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
+    else:
+        result = helper.probe_foreign_workload(Client(), "https://synthetic.invalid", (TENANT, PRINCIPAL), "secret", "service", None)
+        assert result["passed"] and result["boundary"] == "gateway"
+        assert result["isolates_wrong_principal_only"] is False
+    assert scopes == ["https://storage.azure.com/.default"]
+    assert len(calls) == (0 if mutation in {"wrong_identity", "expired"} else 1)
+    if calls:
+        assert calls[0][1]["headers"]["Authorization"] == "Bearer " + token
+        assert calls[0][1]["json"] == helper.PAYLOAD
+    assert token not in capsys.readouterr().out
 
 
 def test_ledger_qualification_isolates_writes_and_uses_ai_off_settings(monkeypatch, capsys):

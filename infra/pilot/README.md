@@ -300,9 +300,14 @@ environment variable is not an installed-app configuration.
   provider construction. No qualification endpoint or bypass is added.
   `qualify_auth.py` has separate `auth`, `boundaries` and `foreign` operator modes
   so already-passed live checks need not be repeated. It targets only the recorded
-  private pilot and never sends an acceptance-manifest payload. Generic token
-  acquisition failure is not proof of a specific role denial. Preserve failed
-  evidence, and do not sign a missing check. Jobs have no ingress/new roles and
+  private pilot and never sends an acceptance-manifest payload. Any token
+  acquisition failure is not an authorization test, including AADSTS501051.
+  The `foreign` mode obtains an actual Azure Storage audience token from the
+  existing gateway UAMI, validates its diagnostic identity/expiry metadata, and
+  requires a real gateway403 with otherwise correct service/HMAC headers. This
+  combined wrong-principal/wrong-audience case does not isolate the principal or
+  role check; unverified claim decoding is not signature verification. Preserve
+  failed evidence, and do not sign a missing check. Jobs have no ingress/new roles and
   must be bounded, non-retrying and deleted after use.
   The actual native analysis mapping requires a personal login, not a reused CLI
   token. From the repository root, use the existing private CLI context:
@@ -352,7 +357,24 @@ environment variable is not an installed-app configuration.
   readiness and signed nonmanifest analysis probes, without a model call. The
   signed nonmanifest payload must fail before reservation while active and at
   the release gate after revocation. Record this second-stage evidence separately;
-  never rewrite prior failed/absent checks as passed. Renew only inside the same
+  `qualify_auth.py` mode `release` compares a prior token fingerprint when testing
+  an off state. Distinct job executions can receive different MI tokens; never
+  infer token identity from the client ID. Mode `cycle` keeps one token in RAM,
+  proves readiness200/nonmanifest403, and accepts the operator job-stop SIGTERM
+  for at most120seconds. The operator must first verify the new AI-off revision
+  is **latestReadyRevision**, not merely the latest configured revision. The
+  same process then requires readiness503/nonmanifest503 and unchanged ledger
+  content/ETag. The job still has its180-second execution deadline and retry0.
+  No model input, token persistence, application debug endpoint or runtime
+  administrative permission is added. A completed cycle writes only its bounded
+  checks to `qualification-release-v1/result` in the existing Table, create-only;
+  `cycle_result` reads it; only after verified local receipt does `cycle_cleanup`
+  ETag-delete that isolated record. It does not delete
+  operations or reset the pilot ledger. Preserve a private receipt before claiming
+  success; transient job console logs can disappear at stop/scale-down.
+  Read and clean this model-free receipt before the first model case; its guard
+  intentionally requires the original zero-attempt ledger.
+  Never rewrite prior failed/absent checks as passed. Renew only inside the same
   authorized scope, without changing lifetime counters, budgets or unknown holds.
   Run at most ten existing-manifest model attempts only after safety acceptance,
   without retries, then disable AI/revoke the technical grant. Participant and
@@ -368,6 +390,28 @@ Gateway admission has an 8-connection runtime cap, 10-second body deadline and
 multipart/JSON parsing and configures the Functions host body limit. Host-worker
 buffering, edge header/connection bounds and real enforcement still require live
 verification. An app-level check is not a complete internet DDoS cost cap.
+
+## Bounded synthetic model execution
+
+`qualify_models.py` is separate from the model-free authentication helper. One
+explicitly selected case executes per bounded, manual, retry0 job using the
+existing backend MI and gateway route. It validates the normalized manifest hash,
+expected lifetime attempt count and full-reserve sum, with no blocked/active
+ledger operation. A create-only intent in `qualification-model-v1` precedes HTTP
+dispatch. Never delete that intent to repeat a failed or ambiguous case. The
+gateway remains the authoritative CAS admission and provider-dispatch boundary.
+
+The runner sends once with a110-second client timeout; it stores the synthetic
+response and accounting receipt separately from the real operation ledger.
+Console output contains only case/status/count metadata. A missing response,
+unknown usage, active hold, blocked ledger or unexpected count stops progression
+for operator review, without retry or counter reset. Retrieve synthetic results
+through the existing administrative channel into protected local diagnostics;
+do not emit raw results into application logs. Delete only isolated diagnostic
+rows after confirmed private receipt, retaining intents until execution is closed.
+Respect person/minute limits between separately authorized cases, the remaining
+signed-grant lifetime and the original fixed pilot period. P5 is a non-food
+abstention case, not a safety-filter test. Finish with AI disabled and no job.
 
 ## Renewal, shutdown and rollback
 

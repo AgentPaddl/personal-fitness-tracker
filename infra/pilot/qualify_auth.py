@@ -9,11 +9,14 @@ import json
 import logging
 import os
 import re
+import signal
+import threading
 import time
 from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx2
+import jwt
 from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import ManagedIdentityCredential
 
@@ -57,6 +60,48 @@ def probe(client, base, token, identity, secret, service, expected_valid):
         if not record["passed"]:
             raise RuntimeError("Authentication qualification failed: " + name)
     return results
+
+
+def probe_release(client, base, token, identity, secret, service, expected, previous_token_sha256=None):
+    claims = jwt.decode(token, options={"verify_signature": False})
+    fingerprint = hashlib.sha256(token.encode()).hexdigest()
+    if (expected not in {403, 503} or type(claims.get("exp")) is not int
+            or claims["exp"] <= time.time() + 60
+            or expected == 503 and (not previous_token_sha256
+                or not hmac.compare_digest(fingerprint, previous_token_sha256))):
+        raise RuntimeError("Release probe requires the same still-valid workload token")
+    operation = str(UUID(int=(int(time.time() * 1000) << 80) | (7 << 76) | (2 << 62) | 1))
+    valid = headers(token, identity, operation, secret, service, PAYLOAD)
+    results = []
+    for name, method, route, status in (
+            ("release_readiness", "GET", "/readyz", 200 if expected == 403 else 503),
+            ("release_nonmanifest", "POST", "/v1/food-analysis", expected)):
+        response = client.request(method, base + route, headers=valid,
+                                  **({"json": PAYLOAD} if method == "POST" else {}))
+        record = {"check": name, "status": response.status_code, "expected": status,
+                  "passed": response.status_code == status, "token_sha256": fingerprint,
+                  "token_expires_at": claims["exp"], "checked_at": int(time.time())}
+        results.append(record)
+        print("AUTH_CHECK " + json.dumps(record), flush=True)
+        if not record["passed"]:
+            raise RuntimeError("Release qualification failed: " + name)
+    return results
+
+
+def probe_release_cycle(client, base, token, identity, secret, service):
+    revoked = threading.Event()
+    previous_handler = signal.signal(signal.SIGTERM, lambda signum, frame: revoked.set())
+    try:
+        results = probe_release(client, base, token, identity, secret, service, 403)
+        print("AUTH_CHECK " + json.dumps({"check": "awaiting_revocation", "passed": True,
+            "deadline_seconds": 120, "trigger": "operator_job_stop"}), flush=True)
+        if not revoked.wait(timeout=120):
+            raise RuntimeError("No bounded operator revocation signal")
+        results.extend(probe_release(client, base, token, identity, secret, service, 503,
+                                     results[0]["token_sha256"]))
+        return results
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 def probe_limits(client, base, token, identity, secret, service):
@@ -108,20 +153,27 @@ def probe_foreign_workload(client, base, identity, secret, service, logger):
     with ManagedIdentityCredential(client_id=os.environ["AI_PILOT_GATEWAY_CLIENT_ID"],
             logger=logger, logging_enable=False, retry_total=0, connection_timeout=3, read_timeout=5) as credential:
         try:
-            token = credential.get_token("api://" + os.environ["GATEWAY_WORKLOAD_AUDIENCE"] + "/.default").token
+            token = credential.get_token("https://storage.azure.com/.default").token
         except ClientAuthenticationError as error:
-            if "AADSTS501051" not in str(error):
-                print("AUTH_CHECK " + json.dumps({"check": "foreign_workload_token", "passed": False,
-                    "error_codes": sorted(set(re.findall(r"AADSTS[0-9]+", str(error)))),
-                    "http_status": getattr(error, "status_code", None)}), flush=True)
-                raise RuntimeError("Foreign token denial was not an app-role denial") from None
-            record = {"check": "foreign_workload", "boundary": "entra_app_role", "passed": True}
-        else:
-            operation = str(UUID(int=(int(time.time() * 1000) << 80) | (7 << 76) | (2 << 62) | 1))
-            response = client.post(base + "/v1/food-analysis",
-                headers=headers(token, identity, operation, secret, service, PAYLOAD), json=PAYLOAD)
-            record = {"check": "foreign_workload", "boundary": "gateway", "status": response.status_code,
-                      "expected": 403, "passed": response.status_code == 403}
+            print("AUTH_CHECK " + json.dumps({"check": "foreign_workload_token", "passed": False,
+                "error_codes": sorted(set(re.findall(r"AADSTS[0-9]+", str(error)))),
+                "http_status": getattr(error, "status_code", None)}), flush=True)
+            raise RuntimeError("Token acquisition is not an authorization test") from None
+        claims = jwt.decode(token, options={"verify_signature": False})
+        if (claims.get("tid") != identity[0]
+                or claims.get("oid") != os.environ["QUALIFICATION_FOREIGN_PRINCIPAL_ID"]
+                or claims.get("oid") == os.environ["GATEWAY_BACKEND_PRINCIPAL_ID"]
+                or claims.get("appid", claims.get("azp")) != os.environ["AI_PILOT_GATEWAY_CLIENT_ID"]
+                or claims.get("aud") not in {"https://storage.azure.com", "https://storage.azure.com/"}
+                or claims.get("scp") or type(claims.get("exp")) is not int or claims["exp"] <= time.time() + 60):
+            raise RuntimeError("Unexpected foreign credential token metadata")
+        operation = str(UUID(int=(int(time.time() * 1000) << 80) | (7 << 76) | (2 << 62) | 1))
+        response = client.post(base + "/v1/food-analysis",
+            headers=headers(token, identity, operation, secret, service, PAYLOAD), json=PAYLOAD)
+        record = {"check": "foreign_workload", "boundary": "gateway", "status": response.status_code,
+                  "expected": 403, "passed": response.status_code == 403,
+                  "token_source": "explicit_gateway_uami", "token_audience": "azure_storage",
+                  "isolates_wrong_principal_only": False}
         print("AUTH_CHECK " + json.dumps(record), flush=True)
         if not record["passed"]:
             raise RuntimeError("Foreign workload was not denied")
@@ -145,6 +197,31 @@ async def read_ledger():
         await store.close()
 
 
+async def cycle_receipt(results=None, *, cleanup=False):
+    from app.pilot_table import AzureTableStore
+
+    await read_ledger()
+    store = AzureTableStore.connect(os.environ["AI_PILOT_TABLE_ENDPOINT"], os.environ["AI_PILOT_TABLE_NAME"])
+    store.partition = "qualification-release-v1"
+    try:
+        if results is not None:
+            await store.commit([("result", {"checked_at": int(time.time()), "checks": results,
+                "model_requests": 0, "path": "existing_gateway_analysis",
+                "token_source": "same_in_memory_backend_uami"}, None)])
+            return None
+        record, etag = await store.read("result")
+        if record is None:
+            raise RuntimeError("No completed release-cycle receipt")
+        if cleanup:
+            from azure.core import MatchConditions
+
+            await store.client.delete_entity(store.partition, "result", etag=etag,
+                                            match_condition=MatchConditions.IfNotModified, logging_enable=False)
+        return record
+    finally:
+        await store.close()
+
+
 def main():
     base = os.environ["QUALIFICATION_GATEWAY"]
     if base != "https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io":
@@ -153,8 +230,13 @@ def main():
     if expected not in {403, 503}:
         raise RuntimeError("Qualification never expects generation success")
     mode = os.environ.get("QUALIFICATION_MODE", "auth")
-    if mode not in {"auth", "boundaries", "foreign"} or mode != "auth" and expected != 503:
+    if (mode not in {"auth", "boundaries", "foreign", "release", "cycle", "cycle_result", "cycle_cleanup"}
+            or mode in {"boundaries", "foreign"} and expected != 503
+            or mode == "cycle" and expected != 403):
         raise RuntimeError("Unapproved qualification mode")
+    if mode in {"cycle_result", "cycle_cleanup"}:
+        print("AUTH_QUALIFICATION " + json.dumps(asyncio.run(cycle_receipt(cleanup=mode == "cycle_cleanup"))), flush=True)
+        return
     before = asyncio.run(read_ledger()) if mode != "auth" else None
     if before is not None:
         from app.pilot import canonical
@@ -171,6 +253,11 @@ def main():
             secret, service = os.environ["AI_PILOT_SIGNING_KEY"], os.environ["GATEWAY_SERVICE_TOKEN"]
             if mode == "auth":
                 results = probe(client, base, token, identity, secret, service, expected)
+            elif mode == "release":
+                results = probe_release(client, base, token, identity, secret, service, expected,
+                                        os.environ.get("QUALIFICATION_TOKEN_SHA256"))
+            elif mode == "cycle":
+                results = probe_release_cycle(client, base, token, identity, secret, service)
             elif mode == "boundaries":
                 results = probe_limits(client, base, token, identity, secret, service)
                 results.append(probe_slow_body(base, token, identity, secret, service))
@@ -187,8 +274,11 @@ def main():
                   "sha256": hashlib.sha256(canonical(after[0])).hexdigest()}
         results.append(record)
         print("AUTH_CHECK " + json.dumps(record), flush=True)
+    if mode == "cycle":
+        asyncio.run(cycle_receipt(results))
     print("AUTH_QUALIFICATION " + json.dumps({"checked_at": int(time.time()), "checks": results,
-        "model_requests": 0, "path": "existing_gateway_analysis", "token_source": "explicit_backend_uami"}), flush=True)
+        "model_requests": 0, "path": "existing_gateway_analysis",
+        "token_source": "explicit_gateway_uami" if mode == "foreign" else "explicit_backend_uami"}), flush=True)
 
 
 if __name__ == "__main__":
