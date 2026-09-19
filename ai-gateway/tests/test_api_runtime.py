@@ -483,6 +483,29 @@ def test_renewal_preserves_owner_scope_and_ledger(monkeypatch, release_config, m
         pilot_release.validate_release(release_config)
 
 
+@pytest.mark.parametrize("fault", [None, "malformed", "missing_signature", "revoked", "disabled"])
+def test_atomic_release_bundle_never_falls_back_to_old_grant(monkeypatch, release_config, fault):
+    import json
+    import os
+    from app.pilot import PilotError
+    from app.pilot_release import validate_release
+
+    signed = {"approval": json.loads(os.environ["AI_PILOT_RELEASE_JSON"]),
+              "signature": os.environ["AI_PILOT_RELEASE_SIGNATURE"]}
+    if fault == "missing_signature":
+        signed.pop("signature")
+    monkeypatch.setenv("AI_PILOT_RELEASE_BUNDLE_JSON", "{" if fault == "malformed" else json.dumps(signed))
+    if fault == "revoked":
+        monkeypatch.setenv("AI_PILOT_RELEASE_KEY", "synthetic-revoked-release-key" * 2)
+    if fault == "disabled":
+        monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+    if fault:
+        with pytest.raises(PilotError):
+            validate_release(release_config)
+    else:
+        assert validate_release(release_config) == signed["approval"]
+
+
 def test_expired_owner_grant_renews_only_inside_original_period(monkeypatch, release_config):
     import json
     import os

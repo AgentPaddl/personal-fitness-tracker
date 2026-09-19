@@ -49,6 +49,13 @@ def configuration_digest(settings):
     return hashlib.sha256(canonical(values)).hexdigest()
 
 
+def configured_approval():
+    if "AI_PILOT_RELEASE_BUNDLE_JSON" in os.environ:
+        return json.loads(os.environ["AI_PILOT_RELEASE_BUNDLE_JSON"])
+    return {"approval": json.loads(os.environ["AI_PILOT_RELEASE_JSON"]),
+            "signature": os.environ["AI_PILOT_RELEASE_SIGNATURE"]}
+
+
 def validate_release(settings):
     try:
         if (not is_api_artifact() or os.environ.get("AI_API_ONLY_ENABLED") != "true"
@@ -92,8 +99,7 @@ def validate_release(settings):
         keys = [os.environ[name] for name in ("GATEWAY_SERVICE_TOKEN", "AI_PILOT_SIGNING_KEY", "AI_PILOT_FINGERPRINT_KEY", "AI_PILOT_RELEASE_KEY")]
         if len(set(keys)) != 4 or any(len(key) < 32 for key in keys):
             raise ValueError()
-        approval = verify_approval(settings, {"approval": json.loads(os.environ["AI_PILOT_RELEASE_JSON"]),
-                                             "signature": os.environ["AI_PILOT_RELEASE_SIGNATURE"]})
+        approval = verify_approval(settings, configured_approval())
         if now >= approval["expires_at"]:
             raise ValueError()
         return approval

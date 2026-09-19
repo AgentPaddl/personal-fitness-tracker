@@ -3,10 +3,11 @@
 ## Aktivierte Ein-Nutzer-Nutzung
 
 Stand19.09.2026: **Eigentuemer-KI aktiviert**, nach ausdruecklichem Ausfuehrungsauftrag.
-Gatewaycode aus `a150af6` API-only bereitgestellt; bestehender Ledger atomar
-migriert, Ownerpolicy gebunden und echter Backend-Readiness-GET mit200 bestaetigt.
+Ownercode aus `a150af6` mit atomarer Grantquelle und begrenztem Erneuerungsworker
+API-only bereitgestellt; bestehender Ledger atomar migriert, Ownerpolicy gebunden
+und echter Backend-Readiness-GET mit200 bestaetigt.
 Keine Modellaufrufe zur Vorbereitung, Migration oder Verifikation. Der technische
-Grant wurde regulaer erneuert, ohne Budget-, Policy- oder Periodenreset.
+Grant wird automatisch erneuert, ohne Budget-, Policy- oder Periodenreset.
 `policy.proposed.json` weiter unten bleibt der historische Zwei-Personen-Entwurf,
 nicht die aktuelle Ein-Nutzer-Konfiguration.
 
@@ -55,7 +56,7 @@ historisches Hilfsmittel und ist kein auszufuellendes Freigabeformular.
 | Vollreserve je Operation | **USD0.2343**, nicht der niedrige Durchschnitt der Abnahme. Vor Dispatch muss der volle Betrag in allen Kontrollen frei sein. |
 | Neue Phasenobergrenzen | Tages-Vollreserven hoechstens **USD0.7029**; kumulierte regulaere Vollreserven hoechstens **USD2.8116** und12 Admissions. Bekannte Kosten koennen unter der Reserve liegen; das fuellt weder die12 Plaetze noch die kumulierte Vollreserve wieder auf. |
 | Gemeinsame Geldgrenzen | Historisch bekannte Kosten/Holds plus neue Kosten/Reserven werden gemeinsam geprueft. Bestehende personenbezogene und globale Tages-/Monats-Geldgrenze **USD2.343** bleibt zusaetzlich bestehen und kann frueher sperren. Neue nicht monatlich ruecksetzende Periodengrenze **USD3.76500465** fuer bekannte Modellkosten plus ungeklaerte/aktive Reserven aller Phasen, auf heutiger Baseline berechnet. |
-| Ablauf des technischen Grants | Maximal24 Stunden, niemals ueber das Periodenende oder die Evidenzgueltigkeit hinaus. Regulaere Erneuerung nach frischem Identitaets-/Deployment-/Ledger-/Kostenabgleich ist implementiert und live ausgefuehrt. Kein automatischer Scheduler; nach Grantablauf keine Admission bis zur Erneuerung. Kein Zaehlerreset. |
+| Ablauf des technischen Grants | Maximal24 Stunden, niemals ueber das Periodenende oder die Evidenzgueltigkeit hinaus. Automatische Erneuerung um07:15 und19:15UTC nach frischem Konfigurations-/Rollen-/Ledger-/Kostenabgleich. Bei fehlenden Voraussetzungen kein Folgegrant; der bestehende Grant laeuft spaetestens nach24 Stunden ab. Sperre und Widerruf bleiben wirksam. Kein Zaehlerreset. |
 | Sofortstopp | Unklare Kosten/neuer Hold,429/Timeout/unklarer Ausgang, Sicherheits-/Datenschutzproblem, nicht eingehaltene Kosten-/Retentionspruefung, Widerruf oder irgendeine erreichte Grenze: keine weitere Analyse, KI sperren, Grant widerrufen und klaeren. Keine automatische Wiederaufnahme. |
 
 Zwoelf Versuche sind eine kleine erste Nutzungsphase, kein versprochener
@@ -66,7 +67,7 @@ stillen Umverteilung oder Auffuellung am Kalenderwechsel.
 
 ### Budget innerhalb bestehender Freigabe
 
-Live-Abgleich19.09.,19:55:58UTC: **EUR0.104338845268762 netto gebucht**,
+Live-Abgleich19.09. zur Einrichtung der Erneuerung: **EUR0.104338845268762 netto gebucht**,
 mit unbekanntem Nachlauf. Bekannte Modellkosten **USD0.01620465**, vier alte
 Holds **USD0.9372**, zusammen **USD0.95340465**. Keine Holds als bezahlt,
 kostenlos oder erledigt umdeuten. Gebuchte Azurekosten und Tokenkosten koennen
@@ -83,7 +84,7 @@ aktuelle Vertragskosten/Steuer und Nachlauf hineinpassen, sonst frueher stoppen.
 | Registry fuer den gesamten urspruenglichen Zeitraum | 6.45 | Vorhandener Listenwert EUR4.293 netto fuer30 Tage x1.50 =6.4395, aufgerundet; bereits gebuchte ACR-Tage hierin enthalten, keine Free-Tier-Annahme. |
 | Bisheriges Modell inklusive aller vier Holds | 1.50 | USD0.95340465 x1.50 = EUR1.430106975, aufgerundet; einschliesslich beider iPhone-Aufrufe, keine erneute Addition ihrer Kosten. |
 | Zwoelf neue Vollreserven | 4.25 | 12 x USD0.2343 = USD2.8116; x1.50 = EUR4.2174, aufgerundet. |
-| Sonstiger Betrieb bisher und verbleibend | 4.30 | ACA, Functions, Storage, KV, Netzwerk, administrativer/unauthentifizierter Verkehr und nicht zugeordneter Nachlauf; Stopphuelle, keine belastbare Dauerlast-Kostenobergrenze. |
+| Sonstiger Betrieb bisher und verbleibend | 4.30 | ACA, Functions, Storage, KV, Netzwerk, administrativer/unauthentifizierter Verkehr und nicht zugeordneter Nachlauf; darin EUR0.50 fuer die automatische Grant-Erneuerung reserviert. Stopphuelle, keine belastbare Dauerlast-Kostenobergrenze. |
 | Cleanup und begrenzte Nachlaufbearbeitung | 1.50 | Sperren/Widerruf, minimale Abschlussbelege, Ressourcenabbau, unvermeidliche Loesch-/Abrechnungsreste; nicht fuer neue Modellaufrufe ausgeben. |
 | **Summe** | **18.00** | Die restlichen EUR2 der20 bleiben Notpuffer, nicht Modellbudget. |
 
@@ -256,28 +257,94 @@ Der verschluesselte dauerhafte Beleg bestaetigt identische Altoperationen/Bucket
 Aktive Readiness200 und anonyme Ablehnung403 wurden mit echter Backend-Identitaet
 belegt. Flag-Sperre, Schluesselwiderruf und Grantablauf wurden modellfrei im
 isolierten Laufzeitcheck geprueft. Der erste Ownergrant wurde regulaer erneuert;
-aktueller Grant endet **20.09.2026,19:55:07UTC**, das Pilotende bleibt
+der damalige manuelle Grant endete **20.09.2026,19:55:07UTC**. Er wurde durch den
+unten beschriebenen automatischen Ablauf ersetzt. Das Pilotende bleibt
 **18.10.2026,22:19:10UTC**. Technischer Ablauf stoppt Admissions, nicht ACR/Hosting.
 
-Die privaten Betriebsdateien unter `local/20260919/` bleiben ausserhalb Git.
-Vom Repositoryroot, mit neuem eindeutigen Label fuer jeden Vorgang:
+### Automatische Grant-Erneuerung
 
-```sh
-CHECK_LABEL="owner-check-$(date -u +%Y%m%d%H%M%S)"
-GRANT_LABEL="owner-renew-$(date -u +%Y%m%d%H%M%S)"
-ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/owner_release_ops.py runtime --label "$CHECK_LABEL" --enabled
-ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/correction_operations.py capture "$CHECK_LABEL"
-ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/owner_release_ops.py renew --label "$GRANT_LABEL" --runtime-label "$CHECK_LABEL" --previous owner-owner-renew1-signed.json
-```
+Die Eingangspruefung fand **keinen** installierten Erneuerungsjob. Der bisherige
+private CLI-Ablauf war manuell und wird nicht unveraendert zeitgesteuert ausgefuehrt:
+Er konnte das Gateway aktualisieren und das KI-Flag setzen.
 
-`--previous` muss danach jeweils die zuletzt installierte private Datei
-`owner-<GRANT_LABEL>-signed.json` benennen. Nach Rollout erneut `runtime` und
-`capture` mit neuem Label ausfuehren. Ein fehlender Konsolenbeleg ist kein Grund,
-den Job zu wiederholen: Status pruefen und den persistenten Beleg mit `receipt`
-und demselben Joblabel lesen. Nur fuer aktive Konfiguration `--enabled` verwenden;
-ein abgelaufener, sonst korrekt gebundener Grant darf nach frischen Pruefungen
-erneuert werden, eine manuelle Sperre oder das Pilotende dagegen nicht.
-Nach Abschluss den temporaeren Betriebsjob entfernen; nie Ledger/Holds loeschen.
+Jetzt laeuft `pft-pilot-20260919-renewal` im bestehenden ACA-Consumption-Umfeld:
+`python -m app.pilot_renewal`, Cron **`15 7,19 * * *`** (UTC), eine Replica,
+0.25vCPU/0.5GiB, Timeout180 Sekunden, **Retrylimit0**. Kein neuer Always-on-Dienst,
+keine neue Registry und kein kostenpflichtiger Loggingdienst. Im normalen Betrieb
+ist **keine taegliche manuelle Grant-Erneuerung** erforderlich. Das aendert nicht
+die kleine Gesamtfreigabe von12 Analysen und ist keine Verfuegbarkeitsgarantie.
+
+Die eigene Betriebsidentitaet darf ausgewaehlte ARM-Konfiguration, Rollen und
+Cost Management lesen, den bestehenden `PilotLedger` nur lesen, das bestehende
+Image ziehen und vier benoetigte Secrets lesen. Schreibrecht besteht ausschliesslich
+fuer `owner-release-bundle`; zusaetzlich darf sie **nur ihren eigenen Job loeschen**.
+Keine Gateway-/Flag-Aenderung, kein Schluesselwechsel, keine Rollenverwaltung,
+kein Ledger-/Hold-/Budgetschreibrecht und keine Modellrolle. Der Job uebernimmt
+nicht die privilegierten Identitaeten des temporaeren Abnahmehelfers.
+
+Jeder Lauf vergleicht die freigegebene Gatewaykonfiguration einschliesslich des
+**fest gebundenen Widerrufsschluessels**, Backend/Easy Auth, Rollen, Storage und
+Modellkonfiguration mit der geprueften Baseline. Er liest denselben Ledger,
+das unveraenderte Owner-Migrationsaudit und alle16 eingefrorenen Altoperationen.
+Vier Holds, Zaehler, kumulierte Reserven, Policy und urspruengliches Ende bleiben
+unveraendert. Aktive Operation, neuer Hold/Sperrstatus, Drift, fehlende Evidenz,
+fehlgeschlagene Kostenabfrage, fremde Waehrung oder unvollstaendige Kostendaten
+verhindern einen neuen Grant. Budget-/Privacy-Hashes bleiben erhalten.
+
+Cost Management wird in jedem Lauf frisch fuer dieselbe Pilotgruppe seit
+Periodenstart abgefragt, ohne stillen Nullwert oder alten Fallback. EUR12 netto
+bleiben die Stoppschwelle. Die zusaetzliche konservative Prognose zaehlt gebuchte
+Kosten mit Faktor1.50, restliches Registryhosting, alle verbleibenden
+Owner-Vollreserven, die alte Kosten-/Holdbaseline, EUR4.30 Betrieb und EUR1.50
+Cleanup; ueber EUR18 wird nicht erneuert. Moegliche Doppelzaehlungen sind
+absichtlich konservativ. Rechnungsnachlauf bleibt unbekannt.
+
+Kostenpruefung **vor** Bereitstellung: bis zu64 geplante Laeufe einschliesslich
+begrenzter Abnahme, jeweils180 Sekunden Job plus315 Sekunden konservativer
+Gateway-Start-/Neustartnachlauf. Mit den vorhandenen aktiven ACA-Listenpreisen
+USD0.000024/vCPU-s und USD0.000003/GiB-s und Faktor1.50 ergibt das EUR0.3564.
+Die **EUR0.50**-Teilreserve deckt zusaetzlich kleine KV-/Tableoperationen ab;
+sie kommt aus den bestehenden EUR4.30, nicht aus neuem Modell- oder Setupbudget.
+Keine Free-Tier-Annahme. Das ist eine Planungsreserve, keine Azure-Spending-Cap.
+
+Freigabe und Signatur werden als **ein** JSON-Secret veroeffentlicht und ueber
+`AI_PILOT_RELEASE_BUNDLE_JSON` konsumiert. Vorhandenes, aber ungueltiges Bundle
+faellt niemals auf die alten separaten Variablen zurueck. Die versionlose
+[Key-Vault-Referenz](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets#key-vault-secret-uri-and-secret-rotation)
+wird laut ACA innerhalb von30 Minuten aktualisiert; aktive referenzierende
+Revisionen werden dabei automatisch neu gestartet. Die12-Stunden-Kadenz laesst
+Abstand zum24-Stunden-Grantende. Ein fehlgeschlagener Lauf veroeffentlicht nichts:
+ein bereits gueltiger Grant bleibt nur bis zu seinem bisherigen Ablauf gueltig.
+Das ist kein sofortiger technischer Widerruf; bei bewusstem Stopp gilt der
+nachstehende Sperrbefehl. Keine automatischen Fehler-Retries oder Modellproben.
+
+Auch bei Sperre oder Schluesselwechsel unmittelbar nach der letzten Pruefung kann
+der Worker nur mit dem alten Schluessel signieren und niemals das KI-Flag setzen.
+Der Gateway verwirft solche Grants. Eine neue Schluesselbindung, geaenderte Policy
+oder Konfiguration wird nicht automatisch zur neuen Baseline erklaert.
+
+Nach **2026-10-18T22:19:10Z** wird kein Grant mehr erteilt. Beim ersten spaeteren
+Termin (19.10.,07:15UTC) loescht der Worker seinen eigenen Job **vor** Secret-,
+Settings- oder Ledgerzugriffen. Das loescht weder Holds noch andere Pilotressourcen.
+Bei Plattform-/Identity-/Imagefehlern kann auch dieser Abbau scheitern; dann ist
+ein gezielter Cleanup erforderlich, keine automatische Verlaengerung des Piloten.
+Registry und sonstige Ressourcen bleiben Teil des separat vorgesehenen Abschlusses.
+
+Geprueft wurden normale Erneuerung, fehlende Voraussetzung, parallele und spaete
+Flag-/Schluesselsperre, unveraenderte Daten, Kostenfehler und Periodenende.
+**Live am19.09.2026:** Ein echter Crontermin um20:29UTC startete den Worker ohne
+manuellen Start erfolgreich. Das signierte Bundle wurde bis20.09.,20:29:20UTC
+erneuert. Ein separater Worker-Fehlerlauf scheiterte mit `missing_evidence`.
+Der echte Backend-Readiness-GET lieferte200, anonym403; isolierte Flag-, Ablauf-
+und Widerrufspruefungen wiesen ab. Ledger **einschliesslich ETag**, Audit und
+alle Altoperationen sind unveraendert: Ownerzaehler0, vier Holds, Modellaufrufe0.
+Der temporaere Readiness-Pruefjob wurde entfernt; nur der Erneuerungsjob bleibt.
+**887 Gatewaytests bestanden,14 uebersprungen**; Image-Scan ohne gemeldete
+Schwachstellen oder Secrets. Das API-only-Image ist fest auf
+`sha256:9cd006e46fada0fba8ebacf77b9697d1444fcb18ef64540fb4bcfa7ca4fb8f1b` gebunden.
+Die private Bereitstellungsbaseline und Livebelege unter `local/20260919/`
+bleiben ausserhalb Git. `main.json` ist weiterhin der historische Bootstrap,
+kein Auftrag zum erneuten Anlegen von Ledger, Schluesseln oder Budget.
 
 Sperren und bestehende Grants widerrufen:
 

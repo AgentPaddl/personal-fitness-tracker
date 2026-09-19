@@ -10,7 +10,7 @@ COPY app/api ./app/api
 COPY app/schemas ./app/schemas
 COPY app/use_cases ./app/use_cases
 COPY app/providers/__init__.py app/providers/base.py app/providers/openai_api.py app/providers/pricing.py app/providers/strict_schema.py ./app/providers/
-COPY app/api_runtime.py app/workload_auth.py app/pilot_release.py ./app/
+COPY app/api_runtime.py app/workload_auth.py app/pilot_release.py app/pilot_renewal.py ./app/
 RUN touch /app/app/.api-only
 USER gateway
 EXPOSE 8000
