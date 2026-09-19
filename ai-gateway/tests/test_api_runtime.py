@@ -92,6 +92,46 @@ def test_api_entrypoint_disabled_without_signed_release(monkeypatch):
         assert client.get("/docs").status_code == 404
 
 
+@pytest.mark.parametrize("route,method", [("/readyz", "GET"), ("/v1/food-analysis", "POST")])
+def test_disabled_release_cannot_attest_workload_or_domain_authentication(monkeypatch, route, method):
+    from app.pilot import PilotError
+
+    monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "synthetic")
+    reached = []
+
+    def active():
+        reached.append("release")
+        raise PilotError()
+
+    def verify(token):
+        reached.append("workload")
+        raise ValueError()
+
+    async def inner(scope, receive, send):
+        reached.append("domain")
+
+    async def ready():
+        reached.append("ledger")
+
+    async def receive():
+        reached.append("body")
+        return {"type": "http.request", "body": b"{}"}
+
+    for token in ("Bearer synthetic", "Bearer tampered"):
+        reached.clear()
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {"type": "http", "path": route, "method": method, "headers": [
+            (b"authorization", token.encode()), (b"x-service-token", b"synthetic"),
+            (b"content-type", b"application/json"), (b"content-length", b"2")], "query_string": b""}
+        asyncio.run(ApiIngress(inner, SimpleNamespace(verify=verify), active, ready)(scope, receive, send))
+        assert sent[0]["status"] == 503
+        assert reached == ["release"]
+
+
 @pytest.fixture
 def release_config(monkeypatch):
     import hashlib

@@ -125,25 +125,72 @@ partition. It never calls a provider. It verifies the real ledger's content and
 ETag are unchanged and deletes only that test partition. Three focused local
 tests passed, including a full partition-isolation test and the API-off gate;
 the final ledger/runtime regression run passed all 191 tests.
-Its live run is **not yet passed**: initial exec transport failures preceded
-execution; the first executed probe stopped at the ordinary settings loader's
-intentional AI-off release check, before any Table access. The administrative
-helper now explicitly supplies `Settings()` without changing the HTTP runtime.
-The corrected run was rejected at the exec handshake at **07:31:18Z** with
-HTTP429/Retry-After600, so it was not executed. Respect that cooldown rather than
-polling or counting the CLI exit status as proof. The Functions Flex SCM
+The earlier executed probe stopped at the ordinary settings loader's intentional
+AI-off release check, before Table access. The helper now explicitly supplies
+`Settings()` without changing the HTTP runtime. Its next transport attempt was
+rejected at **07:31:18Z** with HTTP429/Retry-After600.
+
+The subsequent continuation checked UTC time at **07:41:25Z**, after the
+**07:41:18Z** deadline, then made **exactly one** new Container Exec attempt.
+That attempt started at **07:41:54Z** and completed successfully at
+**07:42:38Z**. The in-process result, not merely the CLI exit code, proves:
+
+- Duplicate operation, changed fingerprint, invalid UUID and foreign identity
+  are denied by the Coordinator using the real Azure Table store.
+- Unknown full-cost holds survive Coordinator reconstruction; replay and double
+  settlement are denied, and a mismatched policy digest fails closed.
+- Only the isolated synthetic partition was modified; it was deleted afterwards.
+  The actual pilot ledger content and ETag were unchanged, with **attempts0,
+  reserved0**, no active operations, and no provider invocation.
+- Pilot ledger SHA-256:
+  `8e1995108f21459ea5c269813c8fb6926a04e45ecd79b27c78483a41d6b606c7`.
+
+The token-free private receipt is `local/20260919/ledger-retry-1789803714.json`.
+This is a real Table/Coordinator test, not an HTTP HMAC-tampering test or a real
+provider-response-loss test. Earlier passed CAS/routing/RBAC checks were not
+repeated. No further Container Exec call was made in this continuation.
+The Functions Flex SCM
 environment is administratively reachable, but its command endpoint returned404;
 no new diagnostic endpoint or workload permission was added.
 
 Still required before any model call: analysis-route Easy Auth claim mapping;
 end-to-end backend Managed Identity JWT/HMAC; native and
 foreign workload rejection; delegated/direct bypass attempts; actual ingress
-body/slow-client/scale behavior; log inspection; live replay/unknown-hold and
+body/slow-client/scale behavior; active-path log inspection and live
 revocation/renewal qualification. Offline regressions do not attest these checks.
 No `CHECKS` record has been fabricated and no signature has been issued.
 The gateway remains `AI_API_ONLY_ENABLED=false`. The backend's similarly named
 flag is true to select mandatory workload authentication; it is not an enabled
 gateway model release. No model request was made during this continuation.
+
+### Existing-path qualification blocker
+
+The blocker after the successful Table run is **not another throttle**.
+`ApiIngress._dispatch` calls its release guard before workload verification,
+body buffering and the domain's HMAC verification on both `/readyz` and
+`/v1/food-analysis`. Two new focused local control-flow tests confirm that a
+failing release guard returns503 without reaching those stages, regardless of
+the supplied token. They are local ordering evidence, not live JWT validation.
+
+| Existing authorized path | Evidence possible / not established |
+| --- | --- |
+| Native readiness and ARM/Graph inspection | Existing evidence establishes owner/native admission and configured workload role/issuer/audience. It does not show that the gateway validated an actual backend MI token. |
+| Disabled gateway readiness/analysis | Establishes the closed release gate, not rejection specifically caused by native/foreign JWTs, wrong roles/signatures, or a tampered HMAC body/operation/timestamp. No more equivalent503 probes were sent. |
+| Real Table qualifier | Replay, conflicts, unknown holds, restart, policy binding and unchanged pilot accounting now passed. It cannot establish HTTP authentication or invalidate cached workload tokens. |
+| Existing in-process JWT/HMAC and renewal tests | Previously passed with synthetic signing keys, claims and grants. No blanket rerun and no relabelling as cloud evidence. |
+| Approval/renewal CLI | Requires complete true, configuration-bound evidence, including JWT/HMAC checks. It cannot honestly bootstrap those checks by signing an incomplete checklist. No current accepted grant exists to revoke or renew live. |
+
+Non-substitutable live evidence is therefore: an actual backend MI JWT accepted
+by the gateway with negative caller/claim controls; authenticated HMAC rejection
+on the real route without provider dispatch; and an accepted technical grant
+subsequently revoked/expired with denial under still-valid cached workload tokens
+and unchanged accounting. Being disabled from the outset is not a revocation test.
+The prepared artifact has no independent model-free HTTP qualification path past
+the release guard. Fabricated attestations, bypassing that guard, adding a debug
+endpoint or loosening access are not used to break this dependency. Model
+acceptance remains blocked; neither a repeated readiness-only login nor another
+Table/Exec retry resolves it. A separately reviewed qualification design is
+needed to resolve this dependency before progressing to model calls.
 
 Synthetic acceptance is a separate policy option. It admits only SHA-256 hashes
 of normalized nonprivate DTOs and only one person. Its CAS-backed lifetime
