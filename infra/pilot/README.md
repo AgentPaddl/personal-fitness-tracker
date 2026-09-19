@@ -233,7 +233,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project ios
 
 Without generated deployment values this **must fail**. No replacement hostname
 is invented. The build phase checks the final resolved values, Release mode,
-bundle ID, signing team, redirect URI and unchanged build number 5. Ordinary
+bundle ID, signing team, redirect URI and reviewed build numbers 5, 6 or 7. Ordinary
 Debug/Release builds do not opt in and keep their existing configuration.
 Use the same reviewed configuration for a later signed Archive. A scheme-only
 environment variable is not an installed-app configuration.

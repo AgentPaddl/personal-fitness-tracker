@@ -1,9 +1,124 @@
-# Persoenliche iPhone-Pilotabnahme: Vorbereitung
+# Persoenliche iPhone-Pilotabnahme
 
-Stand 2026-09-19, Ausgangscommit `cba6ee4`. **Plan und technische Folgebefunde,
-keine Freigabe weiterer Tests.** Kontakt- und Einwilligungsfragen sind keine
-stellvertretend beantworteten Erklaerungen. Keine Aufnahme weiterer Teilnehmer
-und keine Aktivierung; Stufe B bleibt ein nicht freigegebener Zukunftsentwurf.
+## Gebuendelte Vorbereitung ab main 7acda4c
+
+Stand 2026-09-19: Der begrenzte Auftrag umfasst das private AI-off-Deployment,
+das datenerhaltende Update und genau zwei neue synthetische Geraeteversuche,
+**L1 und P5 je einmal**. Keine weitere Teilnehmeraufnahme und keine Aenderung
+der alten Produktion. Die aelteren Freigabevorschlaege weiter unten sind
+historisch und werden fuer diesen Auftrag durch diesen Abschnitt ersetzt.
+
+Bereits ausgefuehrt:
+
+- Der korrigierte Gateway wurde als `iphone7-off` veroeffentlicht, Image
+  `sha256:dc77fba44372a476f8f2e0c4346c4d4e2a6ef4deb1e26f2dab725768e050e927`.
+  Das Backendpaket mit optionaler Fehlergrundweitergabe ist veroeffentlicht.
+  Ein authentifizierter AI-off-POST bestaetigte503 `pilot_unavailable` mit
+  `pilot_not_activated`, unveraenderten Ledger und alle14 Operationen:
+  **kein Providerdispatch und keine neue Reserve**. Der iPhone-Sichttest
+  dieses Textes ist noch offen.
+- Vorher direkt installierter Build6, lokale Archive1-5 und sichtbare
+  TestFlight-Builds1-5 geprueft. Build **1.0 (7)** signiert gebaut, als Update
+  installiert und unmittelbar vom Geraet zurueckgelesen. Signatur, Profil,
+  Bundle-/Team-/Keychain-Identitaet und eingebettete Pilotwerte gegen Build6
+  geprueft. Keine Deinstallation, Datenloeschung oder Backuperstellung.
+  SwiftData-Modelle und Containerkonfiguration wurden nicht geaendert.
+  Ein fachlicher Sichtvergleich des persoenlichen Bestands nach Build7 bleibt
+  eine Geraetepruefung, keine aus Installationsmetadaten ableitbare Aussage.
+- Nur der opt-in Pilotbuild zeigt **Abnahmebild > L1 / P5**. Die zwei
+  freigegebenen Originale liegen lokal und im gesonderten App-Cache. Der Helfer
+  akzeptiert ausschliesslich ihre eingefrorenen Originalhashes, verwendet den
+  normalen `FoodImagePreprocessor` und prueft die identische Aufbereitung bei
+  Auswahl. Keine Anmeldung, Analyse oder Mahlzeitenspeicherung durch Auswahl.
+- Die tatsaechlichen JPEGs aus Build7 wurden offline vom iPhone zurueckgelesen
+  und mit den bekannten Originalen abgeglichen. Kein Auslesen persoenlicher
+  Fotos oder der SwiftData-Datenbank. Diese Abnahme prueft den echten JPEG-/
+  Multipart-/Reviewpfad, **nicht** PhotosPicker, Kamera oder Fotoimport.
+
+| Fall | SHA-256 des normalisierten Gateway-Payloads |
+| --- | --- |
+| L1 | `4bedc4c13dc962fa6f564a172048976caa6d9c17f120426efed21480200fa34c` |
+| P5 | `a08e6f14ab67709f6fe336f455b6e0c6c2c501b877187b04c1bab231f87a8931` |
+
+Der getestete `extend_acceptance(..., iphone_payload_sha256=...)`-Zweig erlaubt
+ausschliesslich14->16 mit zwei verschiedenen neuen Hashes, AI-off, exaktem
+Ledgerhash/ETag und atomarem Create-only-Audit. Alte Zaehler, Operationen, vier
+Holds und monetaere Tages-/Monatsgrenzen bleiben erhalten. Die CLI-Fallfolge
+bleibt bei14 beendet und kann diese Geraeteversuche nicht ausfuehren. Neue
+Lebenszeitobergrenze USD3.7488, **keine neue16er-Serie**.
+
+Die atomare Live-Erweiterung ist bestaetigt: Limit16, weiterhin14 verbrauchte
+Versuche und USD3.2802 kumulative Vollreserve; alle14 Operationen und vier
+Holds unveraendert. Der Auditbeleg `acceptance-extension-16-v1` wurde gemeinsam
+mit der einzigen Ledgeraenderung (Policybindung) erzeugt. Die nachfolgende
+Revision `iphone7-bound-off` bindet dieselben zwei Hashes und den tatsaechlichen
+Image-Digest. Kein Zaehler-/Hold-Reset und kein zusaetzlicher Modellversuch.
+
+Zwei neue Vollreserven ergeben USD0.4686, konservativ EUR0.85, zuzueglich
+EUR0.50 Neben-/Abschlussreserve: **hoechstens EUR1.35 innerhalb EUR20+5**.
+Nach429-Drosselungen und abgewartetem Retry-Hinweis war der einzelne lesende
+Abruf um18:05:16UTC erfolgreich: gebucht EUR0.0900451973209686 netto fuer den
+Pilot. Abrechnungsnachlauf bleibt offen, kein Echtzeit-Istkostendeckel. Die
+bestehende EUR18-Betriebshuelse und bisherige EUR2.19-Korrekturreserve bleiben
+konservativ gebunden; der ungebundene Puffer sinkt von EUR4.81 auf EUR3.46.
+Alte Holds USD0.9372 und bekannte Modellkosten USD0.01378905 unveraendert.
+Kein neues Budget, EUR12-Netto-Stopp und urspruengliches Periodenende bleiben.
+
+Lokale Checks:429 Gateway-/Ledger-/Provider-/Buildvalidator-Tests,
+144 Backendtests,152 FoodAnalysisKit-Tests und28 EntraAuthKit-Tests bestanden;
+danach28 fokussierte Amendmentchecks inklusive vier neuer Negativfaelle fuer
+doppelte/alte Bildhashes bestanden. Signierter Release-Device-Build7 erfolgreich. Der konkrete Gatewayimagescan
+meldet keine Schwachstellen oder Secrets; bekannte Scannergrenzen aus dem
+Deploymentbericht bleiben bestehen. Kein interaktiver iPhone-Abnahmenachweis
+wird daraus abgeleitet. **KI bleibt aus, kein neuer Grant und kein laufendes
+Abnahmefenster.**
+
+Die live nachgepruefte Revision `iphone7-bound-off` ist gesund, Image-/Policy-
+Bindung stimmen. Neun Authpruefungen, sechs Eingangsgrenzen, fremde Workload-
+Abweisung, Table-RBAC und isolierte modellfreie Ledgerchecks bestanden; deren
+Testpartition wurde entfernt. Der echte Pilotledger blieb dabei unveraendert.
+Die erneute Snapshotpruefung bestaetigt14 Versuche, active0, blockedfalse,
+vier Holds und identische14 Altoperationen. Operationshash:
+`bc9eb34b657e573163b2cf9ed38e0a20952d50c7bad43580fb2ad8832a88b110`.
+Der neue Ledgerhash nach ausschliesslicher Policybindung lautet
+`7c47330d4b20428732baf4aa1227f5a7978f56c17b7708da6303c062eeb9e043`.
+
+### Konkreter Geraeteablauf
+
+1. Bestehende Daten nur ansehen und auf unveraenderten Bestand pruefen.
+2. Solange KI aus: **Ernaehrung > Abnahmebild > L1 > Analysieren** einmal.
+   Erwartet: "Die KI ist fuer diesen Pilot noch nicht aktiviert."
+   Kein Review/Eintrag. Bei Anmeldung nur das bestehende eigene Konto nutzen.
+   Silent-Login ist kein Nachweis eines interaktiven MSAL-Ruecksprungs.
+3. Danach die App vollstaendig schliessen und neu oeffnen. Die Sperrantwort
+   deaktiviert weitere Analysen im laufenden ViewModel absichtlich; kein Retry
+   und keine Ersatzberechnung. **Abnahmebild > L1** erneut auswaehlen, noch
+   nicht analysieren. Erst bei tatsaechlicher Testbereitschaft wird der frische
+   gebundene Grant fuer hoechstens eine Stunde ausgestellt.
+4. Nach bestaetigter Aktivierung L1 genau einmal analysieren. Die vorgegebene
+   Beschreibung nennt150g. Review erwartet300kcal,15g Protein,30g Kohlenhydrate,
+   12g Fett. Werte/Unsicherheit ansehen, dann **Abbrechen**, nicht Uebernehmen
+   und nicht verfeinern. Kein neuer Eintrag.
+5. Nach Ledgerabgleich und mindestens65Sekunden seit Admission P5 auswaehlen
+   und genau einmal analysieren. Kein speicherbarer Review und kein neuer
+   Eintrag. Der bekannte generische Fehlertext bleibt ein UX-Mangel; daraus
+   keine allgemeine semantische Refusal-Abnahme ableiten. Weder Retry noch
+   neue Berechnung bestaetigen.
+6. Bei429, Timeout, unklarem Ausgang oder Abbruch keine Wiederholung. Nach
+   maximal zwei Versuchen oder Abbruch sofort KI sperren, Grant widerrufen,
+   alte und neue Operationen/Kosten getrennt abgleichen. Keine Alt-Holds
+   aufloesen und keinen persoenlichen Eintrag loeschen.
+
+L1/P5-Liveergebnisse, anschliessender Widerruf und finaler Kostenabgleich sind
+**noch nicht ausgefuehrt**. Private Geraete-/Deployment-/Ledgerbelege bleiben
+unter dem ignorierten `local/20260919/`; keine Einwilligungsdaten oder Secrets
+werden durch diesen Bericht veroeffentlicht.
+
+## Historie ab cba6ee4
+
+Die folgenden Abschnitte erhalten den frueheren Vorbereitungsstand. Alte
+Formulierungen "noch nicht genehmigt" oder "Build6" beschreiben nicht den
+oben dokumentierten Build7-Auftrag.
 
 ## Bestaetigter Folgestand
 

@@ -1,3 +1,27 @@
+# Bundled iPhone Acceptance Preparation (2026-09-19)
+
+Current delta from `7acda4c`: the activation-lock error contract is deployed
+only to the private pilot gateway and backend. Gateway revision
+`iphone7-bound-off` is healthy, AI remains disabled, and no new grant or test
+window has been issued. Signed iPhone build1.0(7) was installed in place and
+read back directly, preserving app/team/keychain identity. No uninstall,
+data deletion, backup creation or old-production change.
+
+The reviewed atomic extension14->16 is applied:14 used attempts, all14 old
+operations and four unknown holds remain unchanged. Only the two exact
+device-processed L1/P5 payloads are admitted by the new policy. Additional
+reservation is at most EUR1.35 within the existing allowance. Posted pilot
+cost at18:05:16UTC was EUR0.0900451973209686 net, incomplete due to billing lag.
+
+Live authenticated AI-off evidence confirms503 `pilot_unavailable` with
+`reason=pilot_not_activated`, no provider dispatch and no new reservation.
+Model-free auth/RBAC/ledger qualification passed. Physical iPhone error-text
+confirmation, the two single model attempts, post-test lock/revocation and
+final cost reconciliation are pending. L1 is review-and-cancel, never save.
+See [the current acceptance steps](IPHONE-ABNAHME-ENTWURF.md#gebuendelte-vorbereitung-ab-main-7acda4c).
+Older entries below retain their historical state; they are not a new
+participant admission or authorization for ordinary personal-data use.
+
 # Private pilot deployment: 2026-09-19
 
 ## Authorization and current state
