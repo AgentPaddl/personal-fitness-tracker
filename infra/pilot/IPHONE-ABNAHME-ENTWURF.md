@@ -1,6 +1,79 @@
 # Persoenliche iPhone-Pilotabnahme
 
+## Abschluss der zwei Build7-Geraeteversuche
+
+Stand 2026-09-19,20:29:15 Berlin: **KI gesperrt, Grant widerrufen,
+16/16 Versuche verbraucht**. Die gesunde Single-Revision `iphone7-locked`
+hat `AI_API_ONLY_ENABLED=false`; ihr geladener neuer Freigabeschluessel weist
+genau den zuvor ausgestellten Grant zurueck. Signaturinhalt und unveraenderte
+Konfigurationsbindung wurden im laufenden Container nachgeprueft, Health200.
+Keine weiteren Modellaufrufe, Retries, Verfeinerungen oder CLI-Modelltests.
+Alte Produktion und Teilnehmerkreis unveraendert, keine Alltagsfreigabe.
+
+Am iPhone wurden erhaltener Datenbestand und die erwartete Meldung
+"Die KI ist fuer diesen Pilot noch nicht aktiviert." bestaetigt. Der folgende
+Live-Ledgervergleich zeigte weiterhin14 Versuche und unveraenderte Altoperationen:
+auch dieser Geraete-Sperrtest erzeugte keine neue Reserve. Nach App-Neustart
+und Bereitschaft wurde der frische Grant erst um20:19:57 Berlin ausgestellt,
+die aktive Revision um20:21:18 bestaetigt. Nominelles Ende21:19:57; tatsaechlich
+nach den beiden Versuchen vorzeitig gesperrt und durch Schluesselrotation widerrufen.
+
+| Fall | Admission (Berlin) | Geraeterueckmeldung | Ledgerkosten USD |
+| --- | --- | --- | --- |
+| L1 | 20:22:50 | "geklappt"; numerische Einzelwerte und Abbrechen ohne Speichern noch nicht ausdruecklich bestaetigt | 0.0015279 |
+| P5 | 20:25:05 | "es liegt kein nutzbares Ergebnis vor"; kein erneuter Versuch | 0.0008877 |
+
+Der Zwischencheck vor P5 bestaetigte genau eine neue, abgerechnete Operation
+und mindestens65Sekunden seit L1-Admission. Final genau zwei neue Operationen,
+beide `settled=true`, `usage_known=true`; keine aktive Ausfuehrung und kein
+gesperrter Ledger. Alle14 Altoperationen einschliesslich der vier Holds sind
+inhaltlich unveraendert. Die neue Lebenszeitgrenze16 und kumulative Vollreserve
+USD3.7488 sind erreicht; das ist keine Istkostensumme und keine neue16er-Serie.
+
+Die beiden neuen Ledgerzustaende `succeeded` bezeichnen abgeschlossene
+Provider-/Abrechnungsschritte, **keinen fachlich erfolgreichen Review**.
+Insbesondere kann der Bild-Fachpfad nach erfolgreicher strukturierter Antwort
+`is_food=false` noch in den generischen Fehler laufen. Die fluechtigen Logs
+der inzwischen abgeschalteten aktiven Revision waren mangels Replik nicht
+mehr abrufbar. Daher ist fuer diesen P5-Aufruf die semantische Nicht-Lebensmittel-
+Erkennung nicht separat belegt; der Fehlertext allein reicht dafuer nicht.
+Es wurde kein Modellaufruf zur Nachweisbeschaffung wiederholt.
+
+Abgleich der Modellkosten:
+
+- L1 und P5 zusammen **USD0.0024156**, beide mit bekanntem Verbrauch.
+- Bekannte Modellkosten insgesamt **USD0.01620465**.
+- Vier unveraenderte unbekannte Alt-Holds **USD0.9372**; keine neuen Holds.
+- Bekannte Kosten plus konservative Alt-Holds **USD0.95340465**.
+- EUR1.35 Zusatzreserve bleibt innerhalb EUR20+5 konservativ gebunden;
+   keine Freigabe des Restpuffers aus verzoegerten Abrechnungswerten ableiten.
+   EUR12-Netto-Stopp, EUR18-Betriebshuelse und Periodenende unveraendert.
+
+Der einmalige Abschlusskostenabruf erhielt429 mit10Sekunden Retry-Hinweis.
+Ein einzelner lesender Folgeabruf nach Ablauf des Hinweises war um18:28:26UTC
+erfolgreich: weiterhin **EUR0.0900451973209686 netto** gebucht. Dieser
+nachlaufende Azurewert ist keine endgueltige Rechnung und nicht mit den
+USD-Modellkosten ohne Weiteres addierbar. Keine automatische Wiederholung.
+Keine temporaeren Cloudjobs mehr vorhanden; die lokale Build-VM war bereits
+gestoppt. Private Grants, Schluessel, Operatorhilfen und Laufzeitbelege bleiben
+im ignorierten `local/20260919/`, nicht in Git.
+
+Abschluss-Ledgerhash:
+`1f6aba267c91d85f5e8327291c541823a3075a5d3c8c70398376581b26ef502c`.
+Hash aller16 Operationen:
+`c7a39d1f8f9a018455db92a6f99cc88356d360ced13052dab349c39cdc3c4cb2`.
+
+Noch zu bestaetigen, **ohne weitere Analyse**: Entsprachen die L1-Werte fuer150g
+exakt300kcal,15g Protein,30g Kohlenhydraten und12g Fett, und wurde danach ohne
+Speichern abgebrochen? Blieben bei P5 ein speicherbarer Review und ein neuer
+Eintrag aus? Die bisherigen Kurzmeldungen belegen diese Einzelpunkte nicht
+ausdruecklich. PhotosPicker/Kamera, interaktiver MSAL-Ruecksprung,
+Wiederherstellung und Alltagsnutzung bleiben ausserhalb dieser Abnahme.
+
 ## Gebuendelte Vorbereitung ab main 7acda4c
+
+Historischer Vorbereitungsstand vor dem oben dokumentierten Testfenster.
+"Noch offen" und "kein Grant" beschreiben in diesem Abschnitt diesen Zeitpunkt.
 
 Stand 2026-09-19: Der begrenzte Auftrag umfasst das private AI-off-Deployment,
 das datenerhaltende Update und genau zwei neue synthetische Geraeteversuche,

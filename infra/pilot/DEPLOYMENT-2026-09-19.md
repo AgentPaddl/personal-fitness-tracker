@@ -1,24 +1,37 @@
-# Bundled iPhone Acceptance Preparation (2026-09-19)
+# Bundled iPhone Acceptance Closure (2026-09-19)
 
-Current delta from `7acda4c`: the activation-lock error contract is deployed
-only to the private pilot gateway and backend. Gateway revision
-`iphone7-bound-off` is healthy, AI remains disabled, and no new grant or test
-window has been issued. Signed iPhone build1.0(7) was installed in place and
-read back directly, preserving app/team/keychain identity. No uninstall,
-data deletion, backup creation or old-production change.
+Current state at18:29:15UTC: **AI off, grant revoked,16/16 attempts used**.
+Healthy single revision `iphone7-locked` loads the rotated release key and
+rejects the exact grant issued for the two iPhone attempts. Configuration
+binding is unchanged; runtime verification and health200 passed. No temporary
+cloud jobs remain. No further model calls or automatic retries.
 
-The reviewed atomic extension14->16 is applied:14 used attempts, all14 old
-operations and four unknown holds remain unchanged. Only the two exact
-device-processed L1/P5 payloads are admitted by the new policy. Additional
-reservation is at most EUR1.35 within the existing allowance. Posted pilot
-cost at18:05:16UTC was EUR0.0900451973209686 net, incomplete due to billing lag.
+The activation-lock error contract is deployed only to the private pilot.
+Signed iPhone build1.0(7) was installed in place and read back directly,
+preserving app/team/keychain identity. The device user confirmed retained data
+and the exact expected AI-off message. No uninstall, data deletion, backup
+creation, old-production change or participant admission.
 
-Live authenticated AI-off evidence confirms503 `pilot_unavailable` with
-`reason=pilot_not_activated`, no provider dispatch and no new reservation.
-Model-free auth/RBAC/ledger qualification passed. Physical iPhone error-text
-confirmation, the two single model attempts, post-test lock/revocation and
-final cost reconciliation are pending. L1 is review-and-cancel, never save.
-See [the current acceptance steps](IPHONE-ABNAHME-ENTWURF.md#gebuendelte-vorbereitung-ab-main-7acda4c).
+After the reviewed14->16 extension and actual readiness, the one-hour grant
+was issued at18:19:57UTC and activation verified at18:21:18UTC. L1 was admitted
+once at18:22:50UTC, P5 once at18:25:05UTC after the ledger/minimum-spacing check.
+L1 was reported as working; P5 displayed no usable result. Exact L1 review
+values, cancellation without saving and absence of a P5 review/new entry
+still need explicit device confirmation, without another analysis.
+
+All14 old operations and four holds remain unchanged. Both new operations
+have known, settled usage: L1 USD0.0015279; P5 USD0.0008877; sum USD0.0024156.
+The ledger state `succeeded` is not proof of a usable domain result. P5's
+generic error alone does not prove semantic non-food detection; ephemeral
+logs were unavailable after the active replica stopped. No diagnostic model
+retry was made. The final cumulative full-reserve counter is USD3.7488,
+known model cost USD0.01620465, old unknown holds USD0.9372, combined USD0.95340465.
+
+The EUR1.35 reserve remains within existing funding, with no new allowance.
+After a429 and its10-second retry interval, one explicit cost read succeeded
+at18:28:26UTC: EUR0.0900451973209686 net posted, still incomplete due to billing
+lag. No reserve release or final-invoice claim follows from that value.
+See [the closure and remaining limits](IPHONE-ABNAHME-ENTWURF.md#abschluss-der-zwei-build7-geraeteversuche).
 Older entries below retain their historical state; they are not a new
 participant admission or authorization for ordinary personal-data use.
 
