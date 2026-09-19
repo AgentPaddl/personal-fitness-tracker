@@ -334,7 +334,10 @@ Geprueft wurden normale Erneuerung, fehlende Voraussetzung, parallele und spaete
 Flag-/Schluesselsperre, unveraenderte Daten, Kostenfehler und Periodenende.
 **Live am19.09.2026:** Ein echter Crontermin um20:29UTC startete den Worker ohne
 manuellen Start erfolgreich. Das signierte Bundle wurde bis20.09.,20:29:20UTC
-erneuert. Ein separater Worker-Fehlerlauf scheiterte mit `missing_evidence`.
+erneuert. Um20:44:40UTC wurde genau dieser Grant auch im laufenden Gateway-Prozess
+bestaetigt: **automatische Uebernahme ohne manuellen Neustart**. Damit ist der
+Zeitplan-/Veroeffentlichungs-/Konsumptionspfad Ende zu Ende belegt.
+Ein separater Worker-Fehlerlauf scheiterte mit `missing_evidence`.
 Der echte Backend-Readiness-GET lieferte200, anonym403; isolierte Flag-, Ablauf-
 und Widerrufspruefungen wiesen ab. Ledger **einschliesslich ETag**, Audit und
 alle Altoperationen sind unveraendert: Ownerzaehler0, vier Holds, Modellaufrufe0.
