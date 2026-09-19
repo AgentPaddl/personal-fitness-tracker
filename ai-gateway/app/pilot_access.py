@@ -83,6 +83,9 @@ async def generate(provider, request):
     control = build_coordinator()
     identity, operation, payload = context
     try:
+        acceptance = control.policy.acceptance
+        if acceptance and hashlib.sha256(canonical(payload)).hexdigest() not in acceptance.payload_sha256:
+            raise PilotError("pilot_forbidden")
         operation_id(operation, time.time(), control.policy.operation_max_age_seconds)
         fingerprint = digest(control.secret, "request-v1", [identity, payload])
         return await control.generate(provider, request, identity, operation, fingerprint)

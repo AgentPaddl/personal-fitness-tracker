@@ -174,6 +174,29 @@ def test_release_requires_bound_owner_approval(monkeypatch, release_config, muta
             pilot_release.validate_release(settings)
 
 
+@pytest.mark.parametrize("count,duplicate", [(1, False), (2, False), (0, False), (3, False), (2, True)])
+def test_release_allowlist_admits_only_one_or_two_distinct_approved_users(monkeypatch, release_config, count, duplicate):
+    import json
+    from app import pilot_release
+    from app.pilot import PilotError
+
+    identities = [{"tid": TENANT, "oid": principal} for principal in (PRINCIPAL, CLIENT, AUDIENCE)][:count]
+    if duplicate:
+        identities[1] = identities[0]
+    monkeypatch.setenv("AI_PILOT_ALLOWLIST_JSON", json.dumps(identities))
+    evidence = {name: {"configuration_sha256": pilot_release.configuration_digest(release_config),
+                       "checked_at": int(time.time()), "checks": {check: True for check in checks}}
+                for name, checks in pilot_release.CHECKS.items()}
+    signed = pilot_release.prepare_approval(release_config, evidence)
+    monkeypatch.setenv("AI_PILOT_RELEASE_JSON", json.dumps(signed["approval"]))
+    monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", signed["signature"])
+    if count in (1, 2) and not duplicate:
+        assert pilot_release.validate_release(release_config)["approved"] is True
+    else:
+        with pytest.raises(PilotError):
+            pilot_release.validate_release(release_config)
+
+
 @pytest.mark.parametrize("missing", [None, "identity", "deployment", "table_rbac", "ledger", "budget", "privacy"])
 def test_approval_tool_requires_all_fresh_evidence(release_config, missing):
     from app import pilot_release
@@ -190,6 +213,59 @@ def test_approval_tool_requires_all_fresh_evidence(release_config, missing):
         result = pilot_release.prepare_approval(release_config, evidence)
         assert result["approval"]["approved"] is True
         assert len(result["signature"]) == 64
+
+
+def test_acceptance_release_cannot_authorize_regular_inputs(monkeypatch, release_config):
+    import hashlib
+    import json
+    import os
+    from app import pilot_access, pilot_release
+    from app.pilot import PilotError, canonical
+    from tests.test_pilot import MemoryCAS, operation, request
+
+    payload = {"food_description": "Synthetic example: 50 g rice"}
+    policy = json.loads(os.environ["AI_PILOT_POLICY_JSON"])
+    policy["acceptance"] = {"max_attempts": 10, "max_reserved_usd": "2.343",
+                            "payload_sha256": [hashlib.sha256(canonical(payload)).hexdigest()],
+                            "expires_at": policy["deployment_verified_until"]}
+    monkeypatch.setenv("AI_PILOT_POLICY_JSON", json.dumps(policy))
+    monkeypatch.setenv("AI_PILOT_ALLOWLIST_JSON", json.dumps([{"tid": TENANT, "oid": PRINCIPAL}]))
+    evidence = {name: {"configuration_sha256": pilot_release.configuration_digest(release_config),
+                       "checked_at": int(time.time()), "checks": {check: True for check in checks}}
+                for name, checks in pilot_release.CHECKS.items()}
+    with pytest.raises(PilotError):
+        pilot_release.prepare_approval(release_config, evidence)
+    evidence["privacy"]["checks"] = {check: True for check in pilot_release.ACCEPTANCE_PRIVACY_CHECKS}
+    signed = pilot_release.prepare_approval(release_config, evidence)
+    monkeypatch.setenv("AI_PILOT_RELEASE_JSON", json.dumps(signed["approval"]))
+    monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", signed["signature"])
+    assert pilot_release.validate_release(release_config)["approved"] is True
+    control = pilot_access.build_coordinator(MemoryCAS(), settings=release_config)
+    dispatched = []
+
+    async def dispatch(*args):
+        dispatched.append(True)
+        return "synthetic-result"
+
+    monkeypatch.setattr(control, "generate", dispatch)
+    monkeypatch.setattr(pilot_access, "build_coordinator", lambda: control)
+
+    async def run():
+        token = pilot_access._context.set(((TENANT, PRINCIPAL), operation(), payload))
+        try:
+            assert await pilot_access.generate(None, request()) == "synthetic-result"
+            pilot_access._context.set(((TENANT, PRINCIPAL), operation(), {"food_description": "Unapproved"}))
+            with pytest.raises(PilotError):
+                await pilot_access.generate(None, request())
+        finally:
+            pilot_access._context.reset(token)
+
+    asyncio.run(run())
+    assert dispatched == [True]
+    policy.pop("acceptance")
+    monkeypatch.setenv("AI_PILOT_POLICY_JSON", json.dumps(policy))
+    with pytest.raises(PilotError):
+        pilot_release.validate_release(release_config)
 
 
 @pytest.mark.parametrize("mutation", [None, "missing", "not_denied", "legacy_network"])
@@ -510,6 +586,7 @@ def test_pilot_template_is_separate_bounded_and_inactive():
     resources = template["resources"]
     assert template["parameters"]["enableAI"]["defaultValue"] is False
     assert template["parameters"]["deployGateway"]["defaultValue"] is False
+    assert template["parameters"]["allowlist"] == {"type": "array", "minLength": 1, "maxLength": 2}
     assert "defaultValue" not in template["parameters"]["policy"]
     app = next(resource for resource in resources if resource["type"] == "Microsoft.App/containerApps")
     assert app["properties"]["template"]["scale"]["minReplicas"] == 0
@@ -518,7 +595,7 @@ def test_pilot_template_is_separate_bounded_and_inactive():
     backend = next(resource for resource in resources if resource["type"] == "Microsoft.Web/sites")
     scale = backend["properties"]["functionAppConfig"]["scaleAndConcurrency"]
     assert scale == {"maximumInstanceCount": 1, "instanceMemoryMB": 512,
-                     "http": {"perInstanceConcurrency": 2}, "alwaysReady": []}
+                     "triggers": {"http": {"perInstanceConcurrency": 2}}, "alwaysReady": []}
     assert "@" in app["properties"]["template"]["containers"][0]["image"]
     storage = next(resource for resource in resources if resource["type"] == "Microsoft.Storage/storageAccounts")
     assert storage["properties"]["allowSharedKeyAccess"] is False
@@ -544,6 +621,7 @@ def test_variant_b_uses_managed_network_without_weakening_identity_controls():
     assert "vnetConfiguration" not in environment["properties"]
     assert "infrastructureResourceGroup" not in environment["properties"]
     assert environment["properties"]["workloadProfiles"] == [{"name": "Consumption", "workloadProfileType": "Consumption"}]
+    assert environment["properties"]["appLogsConfiguration"] == {"destination": "[json('null')]"}
     for resource_type in ("Microsoft.Storage/storageAccounts", "Microsoft.KeyVault/vaults", "Microsoft.CognitiveServices/accounts"):
         properties = next(resource["properties"] for resource in resources if resource["type"] == resource_type)
         assert properties["publicNetworkAccess"] == "Enabled"
@@ -554,6 +632,7 @@ def test_variant_b_uses_managed_network_without_weakening_identity_controls():
     assert model["properties"]["disableLocalAuth"] is True
     app = next(resource for resource in resources if resource["type"] == "Microsoft.App/containerApps")
     ingress = app["properties"]["configuration"]["ingress"]
+    assert app["dependsOn"][1] == "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('registry')), 'Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, 'pilot-acr-gateway'))]"
     assert ingress["external"] is True and ingress["allowInsecure"] is False
     env = {entry["name"]: entry for entry in app["properties"]["template"]["containers"][0]["env"]}
     assert env["GATEWAY_BACKEND_PRINCIPAL_ID"]["value"] == "[reference(variables('backendIdentityId'), '2023-01-31').principalId]"
@@ -590,6 +669,112 @@ def load_local_module(relative):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_acceptance_manifest_binds_exact_gateway_normalization():
+    import hashlib
+    from app.pilot import canonical
+    from app.schemas.food_analysis import FoodAnalysisRequest
+
+    helper = load_local_module("infra/pilot/prepare.py")
+    manifest = helper.acceptance_manifest()
+    assert manifest["max_attempts"] == 10
+    assert manifest["max_reserved_usd"] == "2.343"
+    assert [case["id"] for case in manifest["cases"]] == ["T2", "T5", "T4", "T1", "L1", "L2", "P1", "R1", "R4", "P5"]
+    for case in manifest["cases"]:
+        payload = FoodAnalysisRequest.model_validate(case["payload"]).model_dump(mode="json")
+        assert hashlib.sha256(canonical(payload)).hexdigest() == case["payload_sha256"]
+    assert manifest["cases"][0]["expected"]["calories"] == 272
+
+
+def test_pilot_bootstrap_resumes_without_duplicate_mutations_or_secret_arguments(monkeypatch, tmp_path):
+    from datetime import datetime, timedelta
+    import json
+    import shutil
+
+    root = Path(__file__).resolve().parents[2] / "infra/pilot"
+    monkeypatch.syspath_prepend(str(root))
+    helper = load_local_module("infra/pilot/provision.py")
+    helper.ROOT = tmp_path
+    shutil.copyfile(root / "policy.proposed.json", tmp_path / "policy.proposed.json")
+    args = SimpleNamespace(name="synthetic", azure_config=tmp_path, subscription=CLIENT, tenant=TENANT)
+    bootstrap = helper.Bootstrap(args)
+    owner = {"id": PRINCIPAL, "mail": None, "userPrincipalName": "synthetic#EXT#@example.invalid",
+             "otherMails": ["synthetic@example.invalid"]}
+    calls = []
+
+    def cli(*arguments):
+        calls.append(arguments)
+        if arguments[:2] == ("group", "exists"):
+            return False
+        if arguments[:3] == ("ad", "app", "list") or arguments[:2] == ("resource", "list"):
+            return []
+        if arguments[:3] in (("ad", "app", "create"), ("ad", "sp", "create")):
+            return {"id": f"00000000-0000-4000-8000-{len(calls):012d}",
+                    "appId": f"00000000-0000-4000-9000-{len(calls):012d}"}
+        return None
+
+    monkeypatch.setattr(bootstrap, "cli", cli)
+    bootstrap.initialize(owner)
+    original = list(calls)
+    bootstrap.initialize(owner)
+    assert calls == original
+    state = json.loads((bootstrap.directory / "period.json").read_text())
+    assert datetime.fromisoformat(state["end"]) - datetime.fromisoformat(state["start"]) == timedelta(days=30)
+    parameters_file = bootstrap.directory / "parameters.json"
+    parameters = json.loads(parameters_file.read_text())["parameters"]
+    assert parameters["enableAI"]["value"] is False
+    assert parameters["deployGateway"]["value"] is False
+    assert parameters["allowlist"]["value"] == [{"tid": TENANT, "oid": PRINCIPAL}]
+    assert parameters["budgetEmails"]["value"] == ["synthetic@example.invalid"]
+    assert parameters_file.stat().st_mode & 0o777 == 0o600
+    keys = [parameters[name]["value"] for name in ("serviceToken", "signingKey", "fingerprintKey", "releaseKey")]
+    assert len(set(keys)) == 4 and all(len(key) >= 32 for key in keys)
+    assert not any(key in str(calls) for key in keys)
+    helper.private_json(bootstrap.directory / "unresolved.intent.json", {})
+    with pytest.raises(RuntimeError, match="Unresolved"):
+        bootstrap.once("unresolved", "group", "create")
+    assert calls == original
+
+
+def test_pilot_login_probe_never_persists_tokens_or_posts_model_requests(monkeypatch, tmp_path, capsys):
+    import json
+    import msal
+    import requests
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "infra/pilot"))
+    helper = load_local_module("infra/pilot/provision.py")
+    helper.ROOT = tmp_path
+    args = SimpleNamespace(name="synthetic", azure_config=tmp_path, subscription=CLIENT, tenant=TENANT)
+    bootstrap = helper.Bootstrap(args)
+    helper.private_json(bootstrap.directory / "period.json", {
+        "subscription": CLIENT, "tenant": TENANT, "owner": PRINCIPAL, "end": "2030-01-01T00:00:00+00:00"})
+    helper.private_json(bootstrap.directory / "runtime-create.json", {"properties": {"outputs": {
+        name: {"value": value} for name, value in {
+            "nativeClientId": CLIENT, "backendAudience": AUDIENCE,
+            "apiBaseURL": "https://pft-pilot-synthetic.azurewebsites.net/api"}.items()}}})
+    result = {"access_token": "synthetic-access-token", "refresh_token": "synthetic-refresh-token",
+              "id_token_claims": {"tid": TENANT, "oid": PRINCIPAL}}
+    monkeypatch.setattr(msal, "PublicClientApplication", lambda *args, **kwargs: SimpleNamespace(
+        initiate_device_flow=lambda **kwargs: {"user_code": "synthetic", "message": "Synthetic sign-in instruction"},
+        acquire_token_by_device_flow=lambda flow: result))
+    calls = []
+
+    def get(self, url, **kwargs):
+        calls.append((url, kwargs))
+        return SimpleNamespace(status_code=503, json=lambda: {"status": "not_ready"})
+
+    monkeypatch.setattr(requests.Session, "get", get)
+    bootstrap.login_probe()
+    assert len(calls) == 1 and calls[0][0].endswith("/api/readiness")
+    assert calls[0][1]["allow_redirects"] is False
+    assert result == {}
+    evidence = list(bootstrap.directory.glob("native-login-probe-*.json"))
+    assert len(evidence) == 1
+    assert json.loads(evidence[0].read_text())["expected_ai_off_backend_response"] is True
+    assert evidence[0].stat().st_mode & 0o777 == 0o600
+    captured = capsys.readouterr().out + "".join(file.read_text() for file in bootstrap.directory.glob("*.json"))
+    assert "synthetic-access-token" not in captured and "synthetic-refresh-token" not in captured
 
 
 @pytest.mark.parametrize("mutation", [None, "url", "tenant", "scope", "team", "bundle", "build", "missing", "legacy"])

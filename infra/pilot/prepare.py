@@ -1,9 +1,12 @@
 """Offline packaging and public deployment-output conversion. Never runs Azure CLI."""
 
 import argparse
+import base64
+import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 from urllib.parse import urlsplit
 from uuid import UUID
 import zipfile
@@ -64,15 +67,47 @@ def backend_package(destination):
         archive.writestr("requirements.txt", requirements)
 
 
+def acceptance_manifest():
+    sys.path.insert(0, str(ROOT / "ai-gateway"))
+    from app.schemas.food_analysis import FoodAnalysisRequest
+
+    fixtures = ROOT / "ai-gateway/tests/fixtures"
+    baseline = json.loads((fixtures / "gpt54-mini-benchmark.v1.json").read_text())
+    selected = ("T2", "T5", "T4", "T1", "L1", "L2", "P1", "R1", "R4", "P5")
+    cases = []
+    for identifier in selected:
+        case = next(case for case in baseline["cases"] if case["id"] == identifier)
+        payload = dict(case.get("payload", {}))
+        if "asset" in case:
+            asset = fixtures / case["asset"]["file"]
+            content = asset.read_bytes()
+            if hashlib.sha256(content).hexdigest() != case["asset"]["sha256"]:
+                raise ValueError("Acceptance asset does not match its reviewed public fixture.")
+            payload["image"] = {"media_type": "image/png" if asset.suffix == ".png" else "image/jpeg",
+                                "data_base64": base64.b64encode(content).decode("ascii")}
+        if "refinement" in case:
+            payload["refinement"] = {**case["refinement"], "current_estimate": baseline["baseline"]}
+        normalized = FoodAnalysisRequest.model_validate(payload).model_dump(mode="json")
+        serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+        cases.append({"id": identifier, "payload": payload, "payload_sha256": hashlib.sha256(serialized).hexdigest(),
+                      "criterion": case["criterion"], "expected": case.get("expected")})
+    return {"version": "private-pilot-acceptance-v1", "max_attempts": 10, "max_reserved_usd": "2.343",
+            "provenance": "Existing fabricated text/labels and reviewed CC0 images P1/P5 only. No benchmark ledger or allowance reused.",
+            "cases": cases}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["ios", "entra", "backend-package"])
+    parser.add_argument("mode", choices=["ios", "entra", "backend-package", "acceptance-manifest"])
     parser.add_argument("--outputs", type=Path)
     parser.add_argument("--gateway-service-principal")
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
     if args.mode == "backend-package":
         backend_package(args.destination)
+    elif args.mode == "acceptance-manifest":
+        with args.destination.open("x") as target:
+            json.dump(acceptance_manifest(), target, indent=2)
     else:
         data = outputs(json.loads(args.outputs.read_text()))
         content = ios_config(data) if args.mode == "ios" else json.dumps(entra_requests(data, args.gateway_service_principal), indent=2) + "\n"

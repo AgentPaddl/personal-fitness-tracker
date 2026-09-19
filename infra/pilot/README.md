@@ -1,6 +1,9 @@
 # Private two-person pilot package
 
-Local preparation based on `63c81e2`. **Not deployed or activated; no operating approval.**
+Prepared through `3d15cc4`; the separately authorized pilot is now **deployed with
+AI disabled**, not accepted for ordinary use. See the current
+[deployment and privacy record](DEPLOYMENT-2026-09-19.md). Historical local checks
+and cost proposals below describe the pre-deployment package, not current approval.
 The EUR 10 benchmark allowance does not fund this pilot. No benchmark resource,
 ledger, operation, unknown hold, identity grant or cost headroom is reused.
 The existing Dockerfile, Release URL, app identity and installed production are
@@ -237,8 +240,8 @@ environment variable is not an installed-app configuration.
 
 ## Deployment sequence, only after separate authorization
 
-1. Obtain private subscription ownership, recurring funding, stop owner/end date,
-   privacy approval and separate bounded live-test authorization. Verify currency
+1. Obtain private subscription ownership, period funding, stop owner/end date,
+   applicable privacy basis and separate bounded live-test authorization. Verify currency
    EUR for budget alerts; the ARM currency confirmation is an owner assertion,
    not a currency conversion. Reprice all SKUs and check regional capacity.
 2. Create **new** single-tenant backend API, gateway API and native-client Entra
@@ -253,15 +256,16 @@ environment variable is not an installed-app configuration.
    JWKS URL is used. Key rotation uses the bounded JWKS cache.
 3. Prepare a new resource group named `pft-pilot-<private-name>` and a private
    parameter file. All required template parameters are explicit: pilot name;
-   tenant/native/backend/gateway application IDs; exactly two `{tid, oid}` entries;
+  tenant/native/backend/gateway application IDs; one or two approved `{tid, oid}`
+  entries (initial synthetic acceptance permits only the owner);
    the reviewed policy; all-in budget/currency/dates/email recipients; model
    capacity; four independent random secrets of at least 32 characters. Secret
    values must come from a secure operator context, never this repository.
    Bootstrap with `deployGateway=false`, `enableAI=false`. This creates only new
    pilot infrastructure, identities and the empty Table, not a working AI route.
-    The template is locally schema-validated/contract-tested but **ARM provider validation,
-   what-if, quota and RBAC propagation remain unverified**, because no cloud call
-   was authorized. Do not treat successful JSON parsing as Azure validation.
+    The current deployment record identifies completed provider validation, quota
+    and live RBAC checks and remaining gaps. Do not treat successful JSON parsing
+    as Azure validation or assume a previous deployment qualifies a new one.
 4. Build/scan/pin the API-only artifact and Linux backend package. Push only to
    the new registry after approval. Apply the runtime template with
    `deployGateway=true`, exact image digest, **enableAI=false**. The API-only
@@ -280,7 +284,7 @@ environment variable is not an installed-app configuration.
    Configure the gateway service principal and apply the generated role assignment
    using the actual backend identity output, not its name or the iOS client ID.
    Verify Easy Auth signature/lifetime validation, header stripping, exact
-   issuer/audience/client and the two-person allowlist on all backend ingress.
+  issuer/audience/client and the approved allowlist on all backend ingress.
 6. Initialize the new ledger **once**, using the gateway identity, while
    `AI_API_ONLY_ENABLED=false`, with the reviewed settings and policy:
    `python -m app.pilot_release initialize-ledger --confirm-new-pilot-ledger`.
@@ -296,6 +300,9 @@ environment variable is not an installed-app configuration.
    test/inventory/owner records privately; these booleans are owner attestations,
    not proof manufactured by the software. Distinguish local tests from live
    observations. Never label a required live check passed from a mock alone.
+  For a policy with `acceptance`, the privacy criteria are the explicitly
+  synthetic `ACCEPTANCE_PRIVACY_CHECKS`, including metadata legal basis and a
+  reviewed fixed manifest. These do not authorize ordinary health-data input.
    `python -m app.pilot_release approve --owner-approved --evidence EVIDENCE_JSON
    --destination NEW_APPROVAL_JSON` signs only complete, current, config-bound
   records. Set `deployment_verified_until` to the explicitly approved pilot end
@@ -399,7 +406,9 @@ pseudonymous personal data; restrict access and retain only as approved.
 
 ## Live acceptance matrix
 
-All checks need separate permission; no live result is claimed by local tests.
+Live checks are authorized within the EUR 20 / 30-day plus EUR 5 setup scope.
+Only the current deployment record claims completed live checks; local tests
+are not substitutes. The second participant remains excluded.
 
 | Boundary | Required acceptance |
 | --- | --- |
@@ -426,8 +435,9 @@ by this implementation or by signing an empty checklist.
 
 ## Complete monthly cost proposal
 
-**No recurring or one-time budget is approved.** EUR 50/month remains an old
-proposal, not an authorization, hard cap or approved increase. The calculations
+**Historical proposal, superseded by the one-time authorization in the current
+deployment record.** EUR 50/month remains an old proposal, not an authorization,
+hard cap or approved increase. The calculations
 below replace the arbitrary USD 20 ACA and USD 5 network allowances. Prices were
 checked against official public pricing and the unauthenticated Azure Retail
 Prices API on **2026-09-18**, USD Consumption, Sweden Central unless noted.
@@ -639,7 +649,8 @@ Apple membership are not priced as zero business cost or newly purchased here.
 ARM/Entra setup has no separate request SKU assumed, but created resources start
 billing immediately, including while AI is disabled.
 
-A **proposal requiring its own approval** is at most 40 new live model attempts
+A **historical, unapproved proposal, now superseded by at most ten attempts**, was
+at most 40 new live model attempts
 over two setup days: expected model spend USD 0.33 at the token assumption, or
 conservative aggregate full-input reservation **USD 9.372**. Add two days of fixed
 resources **USD 0.3332** and normal host execution about USD 0.13 (40 cold calls,

@@ -78,6 +78,14 @@ class BenchmarkRun(BaseModel):
     expires_at: Positive
 
 
+class AcceptanceRun(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    max_attempts: Annotated[int, Field(strict=True, ge=1, le=10)]
+    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("2.343"), allow_inf_nan=False)]
+    payload_sha256: list[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]] = Field(min_length=1, max_length=10)
+    expires_at: Positive
+
+
 class PilotPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: str = Field(pattern=r"^[A-Za-z0-9_-]{1,60}$")
@@ -91,11 +99,14 @@ class PilotPolicy(BaseModel):
     max_output_tokens: Annotated[int, Field(strict=True, ge=1, le=32768)]
     deployment_verified_until: Positive
     benchmark: BenchmarkRun | None = None
+    acceptance: AcceptanceRun | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def retention_covers_admission(self):
         if self.retention_seconds <= self.operation_max_age_seconds + 300:
             raise ValueError("Retention must exceed the operation acceptance window.")
+        if self.acceptance and (self.benchmark or self.acceptance.expires_at > self.deployment_verified_until):
+            raise ValueError("Acceptance must be separate from benchmarks and within the pilot period.")
         return self
 
 
@@ -173,8 +184,11 @@ class Coordinator:
 
     def initial_ledger(self):
         benchmark = self.policy.benchmark
-        return {"policy": self.policy_id, "buckets": {}, "active": {}, "blocked": False, "last_time": 0,
+        ledger = {"policy": self.policy_id, "buckets": {}, "active": {}, "blocked": False, "last_time": 0,
             "benchmark": {"run_id": benchmark.run_id, "attempts": 0, "reserved": 0} if benchmark else None}
+        if self.policy.acceptance:
+            ledger["acceptance"] = {"attempts": 0, "reserved": 0}
+        return ledger
 
     def bound(self, request: StructuredGenerationRequest) -> int:
         policy = self.policy
@@ -243,6 +257,11 @@ class Coordinator:
             if (not isinstance(run, dict) or run.get("run_id") != self.policy.benchmark.run_id
                     or any(type(run.get(field)) is not int or run[field] < 0 for field in ("attempts", "reserved"))):
                 raise PilotError()
+        if self.policy.acceptance:
+            run = ledger.get("acceptance")
+            if (not isinstance(run, dict)
+                    or any(type(run.get(field)) is not int or run[field] < 0 for field in ("attempts", "reserved"))):
+                raise PilotError()
         return ledger, etag
 
     async def reserve(self, identity, operation, fingerprint, amount, admission=None):
@@ -262,6 +281,14 @@ class Coordinator:
             if now < ledger["last_time"]:
                 raise PilotError()
             ledger["last_time"] = max(now, ledger["last_time"])
+            acceptance = self.policy.acceptance
+            if acceptance:
+                run = ledger["acceptance"]
+                if (now >= acceptance.expires_at or run["attempts"] >= acceptance.max_attempts
+                        or run["reserved"] + amount > units(acceptance.max_reserved_usd, ROUND_FLOOR)):
+                    raise PilotError("pilot_limit")
+                run["attempts"] += 1
+                run["reserved"] += amount
             benchmark = self.policy.benchmark
             if benchmark:
                 run = ledger["benchmark"]
@@ -299,7 +326,8 @@ class Coordinator:
     async def mark_dispatched(self, key):
         record, etag = await self.store.read(key)
         if (not record or record["state"] != "pending" or self.clock() > record["dispatch_before"]
-            or self.policy.benchmark is not None and self.clock() >= self.policy.benchmark.expires_at):
+            or self.policy.benchmark is not None and self.clock() >= self.policy.benchmark.expires_at
+            or self.policy.acceptance is not None and self.clock() >= self.policy.acceptance.expires_at):
             raise PilotError()
         record["state"] = "unknown"
         await self.store.commit([(key, record, etag)])

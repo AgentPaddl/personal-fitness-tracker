@@ -7,7 +7,7 @@
     "nativeClientId": {"type": "string"},
     "backendAudience": {"type": "string"},
     "gatewayAudience": {"type": "string"},
-    "allowlist": {"type": "array", "minLength": 2, "maxLength": 2},
+    "allowlist": {"type": "array", "minLength": 1, "maxLength": 2},
     "policy": {"type": "object"},
     "allInMonthlyEUR": {"type": "int", "minValue": 1, "maxValue": 1000},
     "billingCurrency": {"type": "string", "allowedValues": ["EUR"]},
@@ -117,12 +117,12 @@
     },
     {
       "type": "Microsoft.App/managedEnvironments", "apiVersion": "2024-03-01", "name": "[variables('environment')]", "location": "[variables('location')]", "tags": "[variables('tags')]",
-      "properties": {"workloadProfiles": [{"name": "Consumption", "workloadProfileType": "Consumption"}], "appLogsConfiguration": {"destination": "none"}, "zoneRedundant": false}
+      "properties": {"workloadProfiles": [{"name": "Consumption", "workloadProfileType": "Consumption"}], "appLogsConfiguration": {"destination": "[json('null')]"}, "zoneRedundant": false}
     },
     {
       "condition": "[parameters('deployGateway')]", "type": "Microsoft.App/containerApps", "apiVersion": "2024-03-01", "name": "[variables('gateway')]", "location": "[variables('location')]", "tags": "[variables('tags')]",
       "identity": {"type": "UserAssigned", "userAssignedIdentities": {"[variables('gatewayIdentityId')]": {}}},
-      "dependsOn": ["[resourceId('Microsoft.App/managedEnvironments', variables('environment'))]", "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, 'pilot-acr-gateway'))]", "secretRoles"],
+      "dependsOn": ["[resourceId('Microsoft.App/managedEnvironments', variables('environment'))]", "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('registry')), 'Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, 'pilot-acr-gateway'))]", "secretRoles"],
       "properties": {
         "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('environment'))]", "workloadProfileName": "Consumption",
         "configuration": {"activeRevisionsMode": "Single", "ingress": {"external": true, "allowInsecure": false, "targetPort": 8000, "transport": "http", "traffic": [{"latestRevision": true, "weight": 100}]},
@@ -154,7 +154,7 @@
       "identity": {"type": "UserAssigned", "userAssignedIdentities": {"[variables('backendIdentityId')]": {}}},
       "dependsOn": ["[resourceId('Microsoft.Web/serverfarms', concat(variables('prefix'), '-plan'))]", "[variables('backendIdentityId')]", "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('storage'), 'default', 'deployments')]", "[resourceId('Microsoft.App/containerApps', variables('gateway'))]", "secretRoles"],
       "properties": {"serverFarmId": "[resourceId('Microsoft.Web/serverfarms', concat(variables('prefix'), '-plan'))]", "httpsOnly": true, "publicNetworkAccess": "Enabled", "keyVaultReferenceIdentity": "[variables('backendIdentityId')]",
-        "functionAppConfig": {"runtime": {"name": "python", "version": "3.13"}, "deployment": {"storage": {"type": "blobContainer", "value": "[concat('https://', variables('storage'), '.blob.core.windows.net/deployments')]", "authentication": {"type": "UserAssignedIdentity", "userAssignedIdentityResourceId": "[variables('backendIdentityId')]"}}}, "scaleAndConcurrency": {"maximumInstanceCount": 1, "instanceMemoryMB": 512, "http": {"perInstanceConcurrency": 2}, "alwaysReady": []}},
+        "functionAppConfig": {"runtime": {"name": "python", "version": "3.13"}, "deployment": {"storage": {"type": "blobContainer", "value": "[concat('https://', variables('storage'), '.blob.core.windows.net/deployments')]", "authentication": {"type": "UserAssignedIdentity", "userAssignedIdentityResourceId": "[variables('backendIdentityId')]"}}}, "scaleAndConcurrency": {"maximumInstanceCount": 1, "instanceMemoryMB": 512, "triggers": {"http": {"perInstanceConcurrency": 2}}, "alwaysReady": []}},
         "siteConfig": {"minTlsVersion": "1.2", "ftpsState": "Disabled", "httpLoggingEnabled": false, "detailedErrorLoggingEnabled": false, "appSettings": [
           {"name": "APP_ENV", "value": "production"}, {"name": "AI_API_ONLY_ENABLED", "value": "true"}, {"name": "AI_PILOT_ENABLED", "value": "true"}, {"name": "EASY_AUTH_ENABLED", "value": "true"},
           {"name": "AI_GATEWAY_BASE_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('gateway')), '2024-03-01').configuration.ingress.fqdn)]"}, {"name": "AI_GATEWAY_TIMEOUT_SECONDS", "value": "100"},
@@ -170,7 +170,7 @@
       "condition": "[parameters('deployGateway')]", "type": "Microsoft.Web/sites/config", "apiVersion": "2024-04-01", "name": "[concat(variables('backend'), '/authsettingsV2')]", "dependsOn": ["[resourceId('Microsoft.Web/sites', variables('backend'))]"],
       "properties": {"platform": {"enabled": true}, "globalValidation": {"requireAuthentication": true, "unauthenticatedClientAction": "Return401", "excludedPaths": ["/api/health"]},
         "httpSettings": {"requireHttps": true}, "login": {"tokenStore": {"enabled": false}},
-        "identityProviders": {"azureActiveDirectory": {"enabled": true, "registration": {"clientId": "[parameters('backendAudience')]", "openIdIssuer": "[concat('https://login.microsoftonline.com/', parameters('tenantId'), '/v2.0')]"}, "validation": {"allowedAudiences": ["[parameters('backendAudience')]"], "defaultAuthorizationPolicy": {"allowedApplications": ["[parameters('nativeClientId')]"], "allowedPrincipals": {"identities": ["[parameters('allowlist')[0].oid]", "[parameters('allowlist')[1].oid]"]}}}}}}
+        "identityProviders": {"azureActiveDirectory": {"enabled": true, "registration": {"clientId": "[parameters('backendAudience')]", "openIdIssuer": "[concat('https://login.microsoftonline.com/', parameters('tenantId'), '/v2.0')]"}, "validation": {"allowedAudiences": ["[parameters('backendAudience')]"], "defaultAuthorizationPolicy": {"allowedApplications": ["[parameters('nativeClientId')]"], "allowedPrincipals": {"identities": "[if(equals(length(parameters('allowlist')), 1), createArray(parameters('allowlist')[0].oid), createArray(parameters('allowlist')[0].oid, parameters('allowlist')[1].oid))]"}}}}}}
     },
     {
       "type": "Microsoft.Consumption/budgets", "apiVersion": "2023-11-01", "name": "[concat(variables('prefix'), '-monthly')]",

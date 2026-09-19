@@ -22,12 +22,13 @@ EVIDENCE = {"identity", "deployment", "table_rbac", "ledger", "budget", "privacy
 RENEWABLE = {"identity", "deployment", "table_rbac", "ledger"}
 CHECKS = {
     "identity": {"exact_backend_role", "native_token_denied", "foreign_workload_denied", "tampered_request_denied", "easy_auth_provenance"},
-    "deployment": {"api_only_inventory", "image_digest_verified", "legacy_access_revoked", "body_limits_verified", "scale_limits_verified", "model_profile_verified"},
+    "deployment": {"api_only_inventory", "image_digest_verified", "pilot_legacy_access_absent", "body_limits_verified", "scale_limits_verified", "model_profile_verified"},
     "table_rbac": {"table_scoped_role", "no_shared_keys", "anonymous_access_denied", "foreign_identity_denied"},
     "ledger": {"new_pilot_ledger", "policy_digest_matches", "cas_race_passed", "replay_denied", "unknown_holds_preserved"},
-    "budget": {"recurring_budget_approved", "billing_currency_eur", "prices_reviewed", "shutdown_owner_assigned"},
+    "budget": {"period_budget_approved", "billing_currency_eur", "prices_reviewed", "shutdown_owner_assigned"},
     "privacy": {"health_data_basis_recorded", "datazone_terms_reviewed", "no_payload_logs_verified", "retention_deletion_approved"},
 }
+ACCEPTANCE_PRIVACY_CHECKS = {"synthetic_manifest_reviewed", "metadata_basis_recorded", "datazone_terms_reviewed", "no_payload_logs_verified", "retention_deletion_approved"}
 
 
 def is_api_artifact():
@@ -76,7 +77,9 @@ def validate_release(settings):
             raise ValueError()
         identities = json.loads(os.environ["AI_PILOT_ALLOWLIST_JSON"])
         pairs = {(str(UUID(entry["tid"])), str(UUID(entry["oid"]))) for entry in identities}
-        if len(identities) != 2 or len(pairs) != 2 or {tenant for tenant, person in pairs} != {os.environ["AI_PILOT_TENANT_ID"]}:
+        if not 1 <= len(identities) <= 2 or len(pairs) != len(identities) or {tenant for tenant, person in pairs} != {os.environ["AI_PILOT_TENANT_ID"]}:
+            raise ValueError()
+        if policy.acceptance and (len(identities) != 1 or now >= policy.acceptance.expires_at):
             raise ValueError()
         routes = settings.azure_openai_model_routes()
         if (len(set(routes.values())) != 1
@@ -142,10 +145,11 @@ def prepare_approval(settings, evidence, *, previous=None):
             or not now < policy.deployment_verified_until <= now + 31 * 86400):
         raise PilotError()
     for name, record in evidence.items():
+        checks = ACCEPTANCE_PRIVACY_CHECKS if name == "privacy" and policy.acceptance else CHECKS[name]
         if (set(record) != {"configuration_sha256", "checked_at", "checks"}
                 or record["configuration_sha256"] != configuration
                 or type(record["checked_at"]) is not int or not now - 86400 <= record["checked_at"] <= now
-                or set(record["checks"]) != CHECKS[name]
+                or set(record["checks"]) != checks
                 or any(value is not True for value in record["checks"].values())):
             raise PilotError()
     hashes = dict(prior["evidence"]) if prior is not None else {}
