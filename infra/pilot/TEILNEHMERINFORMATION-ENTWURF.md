@@ -1,14 +1,22 @@
 # Persoenlicher Ernaehrungs-KI-Pilot: Teilnehmerinformation
 
-Stand: 2026-09-19, technische Grundlage `d5de5c6`. **Entwurf, nicht freigegeben.**
-Dieser Text erteilt weder eine Einwilligung noch eine Teilnahmeberechtigung.
-Vorbereitet wird ausschliesslich die regulaere Nutzung durch den Betreiber
-als ersten und einzigen Pilotnutzer. Derzeit ist die KI gesperrt und der letzte
-Grant widerrufen; die Abnahme ist mit16/16 Versuchen und vier unveraenderten
-Holds abgeschlossen. Nur nichtprivate Testeingaben und notwendige eigene
-Kontometadaten waren freigegeben. Echte Mahlzeiten-/Gesundheitsdaten und die
-Teilnahme der Ehefrau sind weiterhin nicht freigegeben. Die vollstaendige
-Information muss vor einer eigenen Entscheidung vorliegen.
+Stand: 2026-09-19, Ownercode `a150af6`. **Informationsentwurf, kein Einwilligungsformular.**
+Die ausschliesslich eigene Nutzung von Mahlzeitentexten, Bildern und Refinements
+wurde separat beauftragt und aktiviert:3 Berechnungen/UTC-Tag,12 insgesamt,
+urspruengliches Ende18.10.2026,22:19:10UTC.16 Abnahmeversuche und vier Holds bleiben
+erhalten. Ehefrau und weitere Nutzer sind weiterhin ausgeschlossen.
+
+Fuer diese persoenliche Eigennutzung gilt die dokumentierte Einordnung zur
+Haushaltsausnahme aus Art.2(2)(c)/Erwaegungsgrund18 DSGVO; Microsofts eigene
+Pflichten und MCA/DPA bleiben bestehen. Ein Selbsteinwilligungsformular,
+Supportticket, MSAL-Loeschdialog oder formelle DSFA sind keine pauschalen
+Aktivierungsbedingungen. Fruehere P-/N-/V-Formulierungen weiter unten sind
+historische Vorsorgevorschlaege, nicht aktuelle Pflichtfelder fuer die
+Eigennutzung. Verbindlicher Umfang und Begruendung stehen im
+[aktuellen Betriebsstand](README.md#datenschutz-und-verbleibende-unsicherheiten).
+Die Quellen, Datenwege, unbeantworteten Anbieterfragen und Qualitaetsgrenzen
+bleiben erhalten. Eine Information fuer weitere Teilnehmer ist damit nicht
+freigegeben; persoenliche Kontaktangaben und Erklaerungen werden nicht erfunden.
 
 Build7 erhielt die bestehenden Daten. Im begrenzten Geraetetest wurden die
 L1-Reviewwerte und der Abbruch ohne Speichern sowie fuer P5 kein speicherbarer

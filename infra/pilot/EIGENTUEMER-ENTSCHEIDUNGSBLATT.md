@@ -1,6 +1,13 @@
 # Entscheidungsblatt: nur eigene Pilotnutzung
 
-Vorbereitung vom19.09.2026 ab `d5de5c6`, **nicht unterschrieben oder freigegeben**.
+Historische, optionale Vorbereitung vom19.09.2026 ab `d5de5c6`, nicht unterschrieben.
+**Kein Selbsteinwilligungsformular und keine Aktivierungsvoraussetzung.** Die
+Eigennutzung von Text, Bild und Refinements wurde inzwischen separat freigegeben
+und aktiviert. Verbindlich ist der [aktuelle Betriebsstand](README.md), nicht die
+fruehere V-Einstufung weiter unten. Insbesondere Supportantwort, formelle DSFA,
+integrierter MSAL-Loeschdialog und persoenliche Formularfelder sind fuer diesen
+ausschliesslich privaten Ownerumfang keine pauschalen Vorbedingungen.
+Anbieterunsicherheiten bleiben dokumentiert, weitere Nutzer ausgeschlossen.
 Ausgefuellte Fassung ausschliesslich privat, nicht in Git. Keine Antwort im Chat
 mit Anschrift, Kontokennung oder sonstigen vertraulichen Angaben erforderlich.
 
@@ -84,5 +91,6 @@ bei neuer Erkenntnis neu bewerten. Keine Risikoakzeptanz ersetzt fehlende
 wesentliche Anbieterinformationen. Ausgefuellte Entscheidungen ausserhalb von Git.
 
 Abnahme16/16 und vier Holds bleiben erhalten. Generische P5-Meldung und begrenzte
-Qualitaetsnachweise bleiben bekannt. Details, Geldmechanik und einziger spaeterer
-[Aktivierungsplan](README.md#ein-gebuendelter-aktivierungsplan) im README.
+Qualitaetsnachweise bleiben bekannt. Details, Geldmechanik und
+[durchgefuehrte Aktivierung](README.md#durchgefuehrte-aktivierung-und-erneuerung)
+stehen im README.

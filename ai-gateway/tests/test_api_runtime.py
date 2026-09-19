@@ -483,6 +483,42 @@ def test_renewal_preserves_owner_scope_and_ledger(monkeypatch, release_config, m
         pilot_release.validate_release(release_config)
 
 
+def test_expired_owner_grant_renews_only_inside_original_period(monkeypatch, release_config):
+    import json
+    import os
+    from app import pilot_release
+    from app.pilot import PilotError
+    from tests.test_pilot import owner_transition_fixture
+
+    now = int(time.time())
+    _, template = owner_transition_fixture()
+    policy = template.model_dump(mode="json")
+    deadline = now + 90000
+    policy["deployment_verified_until"] = deadline
+    policy["acceptance"]["expires_at"] = deadline
+    policy["owner_usage"]["expires_at"] = deadline
+    monkeypatch.setenv("AI_PILOT_POLICY_JSON", json.dumps(policy))
+    monkeypatch.setenv("AI_PILOT_ALLOWLIST_JSON", json.dumps([{"tid": TENANT, "oid": PRINCIPAL}]))
+    settings = release_config.model_copy(update={"ai_provider_max_concurrency": 1})
+    evidence = {name: {"configuration_sha256": pilot_release.configuration_digest(settings),
+        "checked_at": now, "checks": {check: True for check in checks}}
+        for name, checks in {**pilot_release.CHECKS, "ledger": pilot_release.OWNER_LEDGER_CHECKS}.items()}
+    first = pilot_release.prepare_approval(settings, evidence)
+    original_policy = os.environ["AI_PILOT_POLICY_JSON"]
+    later = first["approval"]["expires_at"] + 1
+    monkeypatch.setattr(pilot_release.time, "time", lambda: later)
+    fresh = {name: {**evidence[name], "checked_at": later} for name in pilot_release.RENEWABLE}
+    renewed = pilot_release.prepare_approval(settings, fresh, previous=first)
+    assert renewed["approval"]["expires_at"] == deadline
+    assert renewed["approval"]["configuration_sha256"] == first["approval"]["configuration_sha256"]
+    assert all(renewed["approval"]["evidence"][name] == first["approval"]["evidence"][name]
+               for name in ("budget", "privacy"))
+    assert os.environ["AI_PILOT_POLICY_JSON"] == original_policy
+    later = deadline
+    with pytest.raises(PilotError):
+        pilot_release.prepare_approval(settings, fresh, previous=renewed)
+
+
 def test_readiness_requires_workload_authentication(monkeypatch):
     from starlette.applications import Starlette
     from starlette.testclient import TestClient

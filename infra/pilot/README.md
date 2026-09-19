@@ -1,54 +1,53 @@
 # Private pilot package
 
-## Regulaere Ein-Nutzer-Nutzung ab d5de5c6
+## Aktivierte Ein-Nutzer-Nutzung
 
-Stand19.09.2026, **Vorschlag zur Entscheidung, keine Aktivierung**. Phasenwechsel
-lokal implementiert und offline getestet; Anbieterbedingungen oeffentlich und
-durch gezielte lesende Kontoabfragen geprueft. Keine Cloudaenderung, kein
-Deployment, Modellaufruf oder echter Phasenwechsel. Die folgende Policy ist weder deploybare
-Konfiguration noch ein erteilter Grant. `policy.proposed.json` weiter unten
-ist der alte Zwei-Personen-Entwurf, nicht diese neue Ein-Nutzer-Policy.
+Stand19.09.2026: **Eigentuemer-KI aktiviert**, nach ausdruecklichem Ausfuehrungsauftrag.
+Gatewaycode aus `a150af6` API-only bereitgestellt; bestehender Ledger atomar
+migriert, Ownerpolicy gebunden und echter Backend-Readiness-GET mit200 bestaetigt.
+Keine Modellaufrufe zur Vorbereitung, Migration oder Verifikation. Der technische
+Grant wurde regulaer erneuert, ohne Budget-, Policy- oder Periodenreset.
+`policy.proposed.json` weiter unten bleibt der historische Zwei-Personen-Entwurf,
+nicht die aktuelle Ein-Nutzer-Konfiguration.
 
-Ausgangspunkt ist der abgeschlossene Build7-Test unter `d5de5c6`: **16/16**
+Ausgangspunkt war der abgeschlossene Build7-Test unter `d5de5c6`: **16/16**
 Abnahmeversuche, vier unveraenderte Holds, KI aus, Grant widerrufen. Nur der
-bereits verifizierte Betreiber soll erster Pilotnutzer sein; die Ehefrau bleibt
+bereits verifizierte Betreiber ist zugelassen; die Ehefrau bleibt
 bis zu ihrer eigenen Information, Entscheidung, Identitaets- und Geraeteaufnahme
 ausgeschlossen. Alte Produktion, Benchmark und persoenlicher Datenbestand bleiben
 unveraendert. Kein neues Feature, keine allgemeine Produktionsfreigabe.
 
-### Datenschutz und persoenliche Restpunkte
+### Datenschutz und verbleibende Unsicherheiten
 
-Die [vervollstaendigte Teilnehmerinformation](TEILNEHMERINFORMATION-ENTWURF.md)
-enthaelt Datenwege, konkrete belegte Fristen, den wiederverwendeten MCA/DPA,
-Rechtsgrundlagenvorschlag, leeres Einwilligungsmuster und die DSFA-Vorpruefung.
-Das kurze [Eigentuemer-Entscheidungsblatt](EIGENTUEMER-ENTSCHEIDUNGSBLATT.md)
-fasst die vorausgefuellten Fakten und persoenlichen Restentscheidungen zusammen.
-Die Tabelle **P1-P6** der Teilnehmerinformation bleibt die detaillierte Liste:
-Kontakt, rechtlicher Anwendungsbereich, Retention/Transfers/Geraetekopien, eigene
-Text-/Bildentscheidung, DSFA-Ergebnis und Betrieb/Policy. Ausfuellung bleibt privat.
-**N1-N4** sind die dort getrennt benannten externen oder technischen Nachweise,
-keine Behauptungen, die der Nutzer stellvertretend fuer Microsoft bestaetigen soll.
-Keine neue MCA-Annahme oder separate DPA-Unterschrift ist erforderlich.
+Freigegeben sind ausschliesslich eigene private Mahlzeitentexte, Bilder und
+Refinements. Jeder Versand bleibt eine bewusste Nutzerhandlung, jedes Ergebnis
+ein zu pruefender Schaetzwert. Keine selbst fingierte Einwilligung, kein
+Selbsteinwilligungsformular, keine neue Auditserie und kein Supportticket sind
+pauschale Aktivierungsvoraussetzungen. Die frueheren V-Einstufungen in den
+Vorbereitungsformularen sind fuer diese Eigennutzung insoweit ueberholt.
 
-Das Entscheidungsblatt unterscheidet V (vor Aktivierung), U (dokumentierte
-Unsicherheit) und T (zusaetzlich vor weiteren Teilnehmern). Ohne konkrete
-Abuse-Monitoring-Frist/Loeschkriterien und wesentliche Empfaengerzuordnung ist
-die Information noch nicht aushaendigungsfertig. Interne Betriebs-/Billingdetails
-sind nicht pauschal Aktivierungsblocker; unbekannte Kopien von Mahlzeiteninhalten
-waeren es. ARM Global betrifft Verwaltungs-/Supportdaten, nicht automatisch die
-EU-DataZone-Inferenz. Die allgemeinen Transferausnahmen sind bereits beschrieben.
-Ohne eigene informierte Entscheidung und gegebenenfalls erforderliche ausdrueckliche
-Einwilligung/DSFA keine echte Mahlzeit senden. Text und Bilder sind getrennt
-waehlbar, heute aber nicht technisch getrennt freischaltbar: nur Text genehmigt
-heisst deshalb vorerst KI aus, nicht stillschweigende Bilderlaubnis. Das wird
-in diesem Vorbereitungsauftrag nicht durch ein neues Feature geloest.
+Fuer diesen ausschliesslich persoenlichen Rahmen ist die Haushaltsausnahme nach
+[Art.2(2)(c) und Erwaegungsgrund18 DSGVO](https://eur-lex.europa.eu/eli/reg/2016/679/oj/deu)
+die dokumentierte Einordnung; Cloudnutzung allein schliesst sie nicht aus.
+Daraus folgt keine pauschale Rechtsfreigabe fuer andere Zwecke oder Teilnehmer.
+Microsofts eigene Pflichten und die vorhandenen MCA/DPA-Nutzungsbedingungen
+bleiben bestehen. Ein eigener MSAL-Loeschdialog oder eine formelle DSFA sind
+nicht allein wegen dieser Eigennutzung technische Vorbedingungen.
 
-### Vorgeschlagene Nutzungspolicy
+Die [Teilnehmerinformation](TEILNEHMERINFORMATION-ENTWURF.md) erhaelt die belegten
+Datenwege und Grenzen: EU DataZone ist nicht Schweden-only; `store=false` ist
+keine Nullspeicherung; konkrete Human-Review-Loeschfristen und die aktuelle
+dienstbezogene Unterauftragnehmerzuordnung bleiben ungeklaert. Keine Auskunft
+Microsofts oder persoenliche Erklaerung wurde erfunden. Das
+[Entscheidungsblatt](EIGENTUEMER-ENTSCHEIDUNGSBLATT.md) bleibt ein optionales,
+historisches Hilfsmittel und ist kein auszufuellendes Freigabeformular.
 
-| Regel | Konkreter Vorschlag fuer den ersten Nutzer |
+### Freigegebene Nutzungspolicy
+
+| Regel | Verbindlicher Umfang fuer den Eigentuemer |
 | --- | --- |
 | Identitaet und Zweck | Genau die vorhandene eigene Tenant-/Nutzeridentitaet; bewusst abgesendete eigene Mahlzeiten, Review vor lokaler Speicherung. Keine Drittpersonen oder medizinischen Unterlagen. |
-| Zeitraum | Erst nach gesonderter gebuendelter Aktivierung; unveraendertes Ende **2026-10-18T22:19:10Z**, entsprechend19.10.2026,00:19:10 Berlin. Der30-Tage-Zeitraum begann18.09.2026,22:19:10UTC; kein neuer30-Tage-Lauf ab Aktivierung. |
+| Zeitraum | Aktiviert am19.09.2026; unveraendertes Ende **2026-10-18T22:19:10Z**, entsprechend19.10.2026,00:19:10 Berlin. Der30-Tage-Zeitraum begann18.09.2026,22:19:10UTC; kein neuer30-Tage-Lauf ab Aktivierung. |
 | Regelmaessige Berechnungen | **3 pro UTC-Tag**, **12 insgesamt** im Restzeitraum, gemeinsam fuer Text, Bild und Verfeinerung. UTC-Tageswechsel ist derzeit02:00 Berlin. Nicht genutzte Tagesplaetze werden nicht uebertragen; Oktober erneuert das Gesamtlimit nicht. |
 | Rate und Parallelitaet | Maximal1 regulaere Admission je UTC-Minute,1 laufende Operation fuer Person und gesamten Pilot. Bestehende vorgelagerte Minute-/Replay-/Authkontrollen bleiben zusaetzlich erhalten. |
 | Zaehlersemantik | Jede zugelassene neue Operation zaehlt einmal, auch Verfeinerung, Fehler, Nicht-Lebensmittel oder Abbruch nach Admission. Kein automatischer Retry, Fallback oder Repair. Replay liefert keinen neuen Dispatch; bereits verbrauchte Versuche werden nicht erstattet. |
@@ -56,19 +55,18 @@ in diesem Vorbereitungsauftrag nicht durch ein neues Feature geloest.
 | Vollreserve je Operation | **USD0.2343**, nicht der niedrige Durchschnitt der Abnahme. Vor Dispatch muss der volle Betrag in allen Kontrollen frei sein. |
 | Neue Phasenobergrenzen | Tages-Vollreserven hoechstens **USD0.7029**; kumulierte regulaere Vollreserven hoechstens **USD2.8116** und12 Admissions. Bekannte Kosten koennen unter der Reserve liegen; das fuellt weder die12 Plaetze noch die kumulierte Vollreserve wieder auf. |
 | Gemeinsame Geldgrenzen | Historisch bekannte Kosten/Holds plus neue Kosten/Reserven werden gemeinsam geprueft. Bestehende personenbezogene und globale Tages-/Monats-Geldgrenze **USD2.343** bleibt zusaetzlich bestehen und kann frueher sperren. Neue nicht monatlich ruecksetzende Periodengrenze **USD3.76500465** fuer bekannte Modellkosten plus ungeklaerte/aktive Reserven aller Phasen, auf heutiger Baseline berechnet. |
-| Ablauf des technischen Grants | Je bewusster Ausstellung maximal24 Stunden, niemals ueber das Periodenende oder die Evidenzgueltigkeit hinaus. Taegliche Erneuerung nur nach Betreiberpruefung und aktivem Start, keine automatische Verlaengerung. Bei abgelaufenem Nachweis KI aus; kein Testfenster waehrend Vorbereitung verbrauchen. |
+| Ablauf des technischen Grants | Maximal24 Stunden, niemals ueber das Periodenende oder die Evidenzgueltigkeit hinaus. Regulaere Erneuerung nach frischem Identitaets-/Deployment-/Ledger-/Kostenabgleich ist implementiert und live ausgefuehrt. Kein automatischer Scheduler; nach Grantablauf keine Admission bis zur Erneuerung. Kein Zaehlerreset. |
 | Sofortstopp | Unklare Kosten/neuer Hold,429/Timeout/unklarer Ausgang, Sicherheits-/Datenschutzproblem, nicht eingehaltene Kosten-/Retentionspruefung, Widerruf oder irgendeine erreichte Grenze: keine weitere Analyse, KI sperren, Grant widerrufen und klaeren. Keine automatische Wiederaufnahme. |
 
 Zwoelf Versuche sind eine kleine erste Nutzungsphase, kein versprochener
-taeglicher Monatsbetrieb. Zustimmung zu diesem Vorschlag waere keine Zusage,
+taeglicher Monatsbetrieb. Die Freigabe ist keine Zusage,
 dass alle zwoelf bei unveraenderten gemeinsamen Grenzen noch moeglich sind.
 Andere Limits beduerfen eines neuen begruendeten Vorschlags, nicht einer
 stillen Umverteilung oder Auffuellung am Kalenderwechsel.
 
 ### Budget innerhalb bestehender Freigabe
 
-Alle Zahlen stammen aus vorhandenen Belegen, nicht aus einer neuen Cloudabfrage.
-Letzter Abgleich19.09.,18:28:26UTC: **EUR0.0900451973209686 netto gebucht**,
+Live-Abgleich19.09.,19:55:58UTC: **EUR0.104338845268762 netto gebucht**,
 mit unbekanntem Nachlauf. Bekannte Modellkosten **USD0.01620465**, vier alte
 Holds **USD0.9372**, zusammen **USD0.95340465**. Keine Holds als bezahlt,
 kostenlos oder erledigt umdeuten. Gebuchte Azurekosten und Tokenkosten koennen
@@ -98,8 +96,8 @@ im Betrieb und EUR1.46 im Setup; kein Transfer des Setuprests in neue Nutzung.
 Diese konservative Sicht haelt moegliche Reservenueberlappungen absichtlich
 aufrecht, statt daraus neue Kapazitaet zu erzeugen.
 
-Vor Aktivierung, danach vor der ersten Analyse jedes Tages und vor jedem
-Folgegrant: einmaliger kumulierter Kosten-/Ledgerabgleich fuer die bestehende
+Vor jedem Folgegrant und bei konkreten Kostenwarnungen: kumulierter
+Kosten-/Ledgerabgleich fuer die bestehende
 Pilotgruppe ueber September **und** Oktober, nachvollziehbare Zuordnung bereits
 gebuchter gegen noch geschaetzte Positionen. Neue unbekannte Positionen erhalten
 eine Reserve; keine Nullannahme bei fehlenden Metern. Bei429 Retry-Hinweis
@@ -139,14 +137,14 @@ die Owner-Phase sperrt weitere Admissions. Keine automatische Hold-Aufloesung.
 
 ### Abnahmehistorie und regulaere Phase
 
-**Lokal implementiert, nicht deployt:** `PilotPolicy.owner_usage` ergaenzt den
+**Deployt und live migriert:** `PilotPolicy.owner_usage` ergaenzt den
 vorhandenen `acceptance`-Block; dieser bleibt als eingefrorene Historie erhalten.
 `Coordinator.transition_to_owner_usage` verwendet denselben Store und Ledger.
 `acceptance=null`, ein neues leeres Ledger oder eine zweite unabhaengige
 Partition waeren kein zulaessiger Aktivierungsschritt. Auch das bisherige
 14->16-Amendment ist keine Freigabe fuer regulaere Eingaben.
 
-Konfigurierbare Felder des neuen Blocks, **Vorschlag, kein Grant**:
+Freigegebene und live gebundene Felder des neuen Blocks, getrennt vom Grant:
 
 ```json
 {
@@ -164,7 +162,7 @@ dem urspruenglichen Abnahme-/Pilotende. Jede Aenderung veraendert die Policy-/
 Grantbindung und bedarf weiterhin bewusster Freigabe. Kein zweiter Uebergang,
 kein Runtime-Reset und keine Funktion zur nachtraeglichen Erhoehung.
 
-Implementierte Invarianten und noch ausstehender Live-Nachweis:
+Implementierte und beim Phasenwechsel live bestaetigte Invarianten:
 
 - Abnahmestand `attempts=16`, `reserved=3.7488 USD`, alle16 Operationen,
   vier Holds und Auditbelege einfrieren. Historischen Ledgerhash
@@ -235,46 +233,63 @@ env -u AI_PILOT_ENABLED -u AI_API_ONLY_ENABLED -u APP_ENV \
   .venv/bin/python -B -m pytest tests/test_pilot.py tests/test_api_runtime.py tests/test_openai_api.py -q
 ```
 
-### Ein gebuendelter Aktivierungsplan
+### Durchgefuehrte Aktivierung und Erneuerung
 
-Dieser Plan ist **noch nicht zur Ausfuehrung freigegeben**. Es gibt keinen
-gesonderten vorsorglichen Grant und keine vorgezogene Nutzeraufnahme.
+Abschlusspruefung19.09.2026: **479 Repository-Regressionsfaelle und acht private
+Helfertests bestanden**. Die Helfertests pruefen die erzeugte Migration gegen
+synthetische Daten, atomare Aenderung, Wiederholungsschutz, Konflikte, Erhalt der
+Zaehler/Holds sowie Zielbindung und Schluesselwiderruf des Sperrbefehls.
+Zusaetzliche allgemeine Regression: abgelaufener Ownergrant bleibt nur innerhalb
+des unveraenderten Pilotzeitraums erneuerbar; Budget-/Privacybindung bleibt erhalten.
 
-1. **Offene Unterlagen schliessen:** die V-Anteile von N1-N3 konkret belegen,
-  U-Anteile offen dokumentieren; erforderliche P1-P5-Angaben privat vervollstaendigen.
-  T-Schritte fuer weitere Teilnehmer nicht vorziehen. Vertrag und Build7-
-   Nachweise wiederverwenden, keine erneute Einwilligung durch den Agenten.
-   Bei Rechts-/DSFA- oder nur-Text-Blockade bleibt KI aus.
-2. **Policy und einen Ausfuehrungsauftrag entscheiden:** P6 bestaetigen, einschliesslich
-   notwendigem minimalem Phasenwechsel N4, taeglicher Betreiberpflicht, Sperr-/
-   Cleanupweg und etwaigem dafuer erforderlichem API-only-Deployment. Keine
-   Freigabe neuer Features, weiterer Nutzer oder Modelltests. Diesen Auftrag
-   gibt die heutige lokale Implementierungs-/Vorbereitungsanfrage noch nicht.
-3. **Lokalen Diff abnehmen:** N4 ist implementiert und offline geprueft; bei
-   spaeterer Freigabe den abgenommenen Stand und ein daraus gebautes Artefakt
-   an genau diese Policy binden. Noch kein neues Artefakt gebaut oder deployt.
-   Vorhandene Build7-/Backend-/Vertragsnachweise bei unveraenderten Teilen nutzen,
-   nur tatsaechlich geaenderte Teile neu pruefen. Kein pauschaler Gesamtaudit.
-4. **Nach diesem Auftrag, weiterhin KI aus:** privates Ziel und einzelne Identitaet,
-   Ledger/Hashes/Holds, aktuelle Preise/Kosten/Reserven und Konfiguration lesen.
-   Erforderliche API-only-Aenderung nur gesperrt deployen, atomaren auditierten
-   Phasenwechsel einmal ausfuehren und zuruecklesen; niemals neues leeres Ledger.
-   Noetige Konfigurations-/Auth-/Ledgerpruefungen modellfrei. Stopproute vorhalten.
-5. **Erst bei tatsaechlicher Nutzungsbereitschaft:** vollstaendige datierte
-   Unterlagen und gepruefte Policy/Imagebindung bestaetigen, frischen Grant
-   fuer maximal24 Stunden innerhalb des bestehenden Enddatums ausstellen,
-   genau einen privaten Pilot aktivieren und Bereitschaft modellfrei nachweisen.
-   Keinen CLI-Warmup, synthetischen Modelltest oder stellvertretenden Mahlzeiten-
-   POST senden. Der erste eigene bewusst ausgeloeste Aufruf zaehlt regulaer1/12.
-6. **Betrieb und Ende:** taegliche Kosten-/Retentionspruefung, jeder Folgegrant
-   nur bewusst nach Pruefung; bei Stoppgrund sofort KI aus/Grant widerrufen.
-   Spaetestens zum urspruenglichen Enddatum keine neue Admission; Ressourcen-
-   Cleanup rechtzeitig einplanen, ACR/Hosting nicht nur gesperrt weiterlaufen
-   lassen. Vor Abbau minimale geschuetzte Hold-/Kostenbelege sichern, periodische
-   Loeschungen/Nachlauf aus der bestehenden Cleanupreserve bearbeiten.31 Tage
-  sind eine Hoechstfrist fuer normale Operationen, keine Pflicht zu31 Tagen
-   weiterem bezahltem Hosting. Letzte moegliche normale Faelligkeit bei spaetester
-   Admission:18.11.2026,22:19:10UTC. Vertrags-/Provider-Ausnahmen gesondert beachten.
+Die gesperrte Bereitstellung verwendete Image
+`sha256:235698c8c8b8796ec5b1c3a435dc5590d407649dc18d2cc01a29e75ba58d5bc9`.
+Ein privater Helfer hatte unter Python3.13.15 einen `IndentationError` in Zeile149;
+nach lokaler Reparatur wurden Datei und erzeugte Vorlage vollstaendig geprueft.
+Lange ACA-Exec-Auftraege scheiterten vor Prozessstart mit WebSocket-Handshake404.
+Live-Ledger, ETag und fehlender Auditdatensatz wurden vor jedem Wechsel des
+Ausfuehrungswegs erneut geprueft. Ein separater Python-Managed-Identity-Job ohne
+automatische Wiederholung fuehrte genau eine erfolgreiche CAS-Migration aus.
+Der verschluesselte dauerhafte Beleg bestaetigt identische Altoperationen/Buckets,
+16 Abnahmeversuche, vier Holds und Ownerzaehler0. Kein Modellkontingent verbraucht.
+
+Aktive Readiness200 und anonyme Ablehnung403 wurden mit echter Backend-Identitaet
+belegt. Flag-Sperre, Schluesselwiderruf und Grantablauf wurden modellfrei im
+isolierten Laufzeitcheck geprueft. Der erste Ownergrant wurde regulaer erneuert;
+aktueller Grant endet **20.09.2026,19:55:07UTC**, das Pilotende bleibt
+**18.10.2026,22:19:10UTC**. Technischer Ablauf stoppt Admissions, nicht ACR/Hosting.
+
+Die privaten Betriebsdateien unter `local/20260919/` bleiben ausserhalb Git.
+Vom Repositoryroot, mit neuem eindeutigen Label fuer jeden Vorgang:
+
+```sh
+CHECK_LABEL="owner-check-$(date -u +%Y%m%d%H%M%S)"
+GRANT_LABEL="owner-renew-$(date -u +%Y%m%d%H%M%S)"
+ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/owner_release_ops.py runtime --label "$CHECK_LABEL" --enabled
+ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/correction_operations.py capture "$CHECK_LABEL"
+ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/owner_release_ops.py renew --label "$GRANT_LABEL" --runtime-label "$CHECK_LABEL" --previous owner-owner-renew1-signed.json
+```
+
+`--previous` muss danach jeweils die zuletzt installierte private Datei
+`owner-<GRANT_LABEL>-signed.json` benennen. Nach Rollout erneut `runtime` und
+`capture` mit neuem Label ausfuehren. Ein fehlender Konsolenbeleg ist kein Grund,
+den Job zu wiederholen: Status pruefen und den persistenten Beleg mit `receipt`
+und demselben Joblabel lesen. Nur fuer aktive Konfiguration `--enabled` verwenden;
+ein abgelaufener, sonst korrekt gebundener Grant darf nach frischen Pruefungen
+erneuert werden, eine manuelle Sperre oder das Pilotende dagegen nicht.
+Nach Abschluss den temporaeren Betriebsjob entfernen; nie Ledger/Holds loeschen.
+
+Sperren und bestehende Grants widerrufen:
+
+```sh
+ai-gateway/.venv/bin/python -B infra/pilot/local/20260919/owner_release_ops.py stop --label "owner-stop-$(date -u +%Y%m%d%H%M%S)"
+```
+
+Danach gesperrten Rollout modellfrei zuruecklesen. Kein automatischer Neustart,
+kein neuer30-Tage-Zeitraum. Vor Ende Ressourcenabbau und minimale geschuetzte
+Hold-/Kostenbelege aus der bestehenden Cleanupreserve organisieren.31 Tage sind
+eine Hoechstfrist normaler Operationsmetadaten, kein Auftrag zu weiterem bezahltem
+Hosting. Microsofts gesonderte Aufbewahrungsausnahmen bleiben dokumentiert.
 
 Bekannte Grenzen bleiben: P5 zeigt einen generischen Fehler, dessen semantischer
 Nicht-Lebensmittel-Grund im letzten Geraetelauf nicht separat belegt ist;
@@ -282,11 +297,10 @@ ein korrektes L1-Etikett ist keine belastbare allgemeine Genauigkeitsquote.
 Keine medizinische Verwendung, kein automatisches Speichern. PhotosPicker/
 Kamera, interaktiver MSAL-Ruecksprung und Wiederherstellung sind damit nicht
 umfassend abgenommen. Der Abschluss der begrenzten Tests ist keine Garantie
-fuer persoenliche Mahlzeiten. Die Vorbereitung bleibt als **reviewbarer Diff,
-bis zum Abschlussreview**; der Folgeauftrag erlaubt nach bestandenem technischen
-Review Commit und regulaeren Push dieser zusammengehoerigen Vorbereitung.
-Das erteilt keine Aktivierungsfreigabe. Deployment, Aktivierung und Modellaufrufe
-sind nicht erfolgt; ausgefuellte private Entscheidungen bleiben ausserhalb von Git.
+fuer persoenliche Mahlzeiten. Die installierte Build7-App und der Backendvertrag
+blieben unveraendert; keine Neuinstallation, Signing- oder Schemaaenderung.
+Die Aktivierung ersetzt keine erneute Geraeteabnahme. Ausgefuellte private
+Entscheidungen, Grants, Betriebsdateien und Livebelege bleiben ausserhalb Git.
 
 ## Historischer Vorbereitungsstand
 
