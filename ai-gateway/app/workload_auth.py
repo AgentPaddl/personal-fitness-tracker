@@ -2,6 +2,7 @@
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import time
@@ -106,13 +107,8 @@ class ApiIngress:
         analysis = route == "/v1/food-analysis" and scope["method"] == "POST"
         if not (readiness or analysis) or scope.get("query_string"):
             return await self.reject(scope, receive, send, 404)
-        scope["pilot_boundary"] = "release"
-        try:
-            self.active()
-        except Exception:
-            return await self.reject(scope, receive, send, 503)
         headers = Headers(scope=scope)
-        scope["pilot_boundary"] = "workload"
+        scope["pilot_boundary"] = "shape"
         protected = ("authorization", "x-service-token", "x-pilot-authorization", "x-operation-id", "content-length", "content-type")
         if any(len(headers.getlist(name)) > 1 for name in protected):
             return await self.reject(scope, receive, send, 400)
@@ -124,6 +120,10 @@ class ApiIngress:
                 return await self.reject(scope, receive, send, 413)
             if analysis and headers.get("content-type", "").split(";")[0] != "application/json":
                 return await self.reject(scope, receive, send, 415)
+        except ValueError:
+            return await self.reject(scope, receive, send, 400)
+        scope["pilot_boundary"] = "workload"
+        try:
             secret = os.environ.get("GATEWAY_SERVICE_TOKEN", "")
             if not secret or not hmac.compare_digest(secret, headers.get("x-service-token", "")):
                 raise ValueError()
@@ -131,6 +131,45 @@ class ApiIngress:
         except Exception:
             return await self.reject(scope, receive, send, 403)
         scope["api_only_workload_verified"] = True
+        body = bytearray()
+        if analysis:
+            scope["pilot_boundary"] = "body"
+            try:
+                async with asyncio.timeout(10):
+                    while True:
+                        message = await receive()
+                        if message["type"] != "http.request":
+                            return
+                        chunk = message.get("body", b"")
+                        if len(body) + len(chunk) > MAX_BODY_BYTES:
+                            return await self.reject(scope, receive, send, 413)
+                        body.extend(chunk)
+                        if not message.get("more_body", False):
+                            break
+            except TimeoutError:
+                return await self.reject(scope, receive, send, 408)
+            if length is not None and len(body) != int(length):
+                return await self.reject(scope, receive, send, 400)
+            try:
+                payload = json.loads(body)
+                if not isinstance(payload, dict):
+                    raise ValueError()
+            except (ValueError, UnicodeError, RecursionError):
+                return await self.reject(scope, receive, send, 400)
+            scope["pilot_boundary"] = "assertion"
+            try:
+                from app.pilot_access import configured_allowlist, verify
+
+                identity = verify(headers, payload)
+                if identity is None or identity[0] not in configured_allowlist():
+                    raise ValueError()
+            except Exception:
+                return await self.reject(scope, receive, send, 403)
+        scope["pilot_boundary"] = "release"
+        try:
+            self.active()
+        except Exception:
+            return await self.reject(scope, receive, send, 503)
         if readiness:
             scope["pilot_boundary"] = "ledger"
             try:
@@ -138,24 +177,6 @@ class ApiIngress:
             except Exception:
                 return await self.reject(scope, receive, send, 503)
             return await JSONResponse({"status": "ready"})(scope, receive, send)
-        body = bytearray()
-        scope["pilot_boundary"] = "body"
-        try:
-            async with asyncio.timeout(10):
-                while True:
-                    message = await receive()
-                    if message["type"] != "http.request":
-                        return
-                    chunk = message.get("body", b"")
-                    if len(body) + len(chunk) > MAX_BODY_BYTES:
-                        return await self.reject(scope, receive, send, 413)
-                    body.extend(chunk)
-                    if not message.get("more_body", False):
-                        break
-        except TimeoutError:
-            return await self.reject(scope, receive, send, 408)
-        if length is not None and len(body) != int(length):
-            return await self.reject(scope, receive, send, 400)
         supplied = False
 
         async def buffered():

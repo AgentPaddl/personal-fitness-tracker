@@ -44,6 +44,19 @@ def verify(headers, payload):
         raise PilotError("pilot_forbidden") from None
 
 
+def configured_allowlist():
+    try:
+        entries = json.loads(os.environ["AI_PILOT_ALLOWLIST_JSON"])
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 2:
+            raise ValueError()
+        identities = {(str(UUID(entry["tid"])), str(UUID(entry["oid"]))) for entry in entries}
+        if len(identities) != len(entries):
+            raise ValueError()
+        return identities
+    except Exception:
+        raise PilotError() from None
+
+
 def build_coordinator(store=None, *, settings=None):
     from app.config import get_settings
     from app.pilot_table import AzureTableStore
@@ -53,10 +66,7 @@ def build_coordinator(store=None, *, settings=None):
         if settings.ai_provider != "azure_openai":
             raise PilotError()
         policy = PilotPolicy.model_validate_json(os.environ["AI_PILOT_POLICY_JSON"])
-        entries = json.loads(os.environ["AI_PILOT_ALLOWLIST_JSON"])
-        if not isinstance(entries, list) or not 1 <= len(entries) <= 2:
-            raise PilotError()
-        allowlist = {(str(UUID(entry["tid"])), str(UUID(entry["oid"]))) for entry in entries}
+        allowlist = configured_allowlist()
         secret = os.environ["AI_PILOT_FINGERPRINT_KEY"].encode()
         if len(secret) < 32 or secret == os.environ["AI_PILOT_SIGNING_KEY"].encode():
             raise PilotError()

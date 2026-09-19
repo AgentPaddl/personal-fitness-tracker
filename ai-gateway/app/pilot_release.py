@@ -29,6 +29,7 @@ CHECKS = {
     "privacy": {"health_data_basis_recorded", "datazone_terms_reviewed", "no_payload_logs_verified", "retention_deletion_approved"},
 }
 ACCEPTANCE_PRIVACY_CHECKS = {"synthetic_manifest_reviewed", "metadata_basis_recorded", "datazone_terms_reviewed", "no_payload_logs_verified", "retention_deletion_approved"}
+ACCEPTANCE_GRANT_SECONDS = 3600
 
 
 def is_api_artifact():
@@ -114,12 +115,14 @@ def verify_approval(settings, signed):
         approval = signed["approval"]
         now = time.time()
         policy = PilotPolicy.model_validate_json(os.environ["AI_PILOT_POLICY_JSON"])
+        lifetime = ACCEPTANCE_GRANT_SECONDS if policy.acceptance else 86400
         if (set(signed) != {"approval", "signature"}
                 or set(approval) != {"configuration_sha256", "issued_at", "expires_at", "evidence", "approved"}
                 or approval["approved"] is not True
                 or any(type(approval[field]) is not int for field in ("issued_at", "expires_at"))
                 or not 0 < approval["issued_at"] <= now
-                or not approval["issued_at"] < approval["expires_at"] <= approval["issued_at"] + 86400
+                or not approval["issued_at"] < approval["expires_at"] <= approval["issued_at"] + lifetime
+                or policy.acceptance is not None and approval["expires_at"] > policy.acceptance.expires_at
                 or not approval["expires_at"] <= policy.deployment_verified_until <= now + 31 * 86400
                 or now >= policy.deployment_verified_until or policy.benchmark is not None
                 or approval["configuration_sha256"] != configuration_digest(settings)
@@ -154,8 +157,9 @@ def prepare_approval(settings, evidence, *, previous=None):
             raise PilotError()
     hashes = dict(prior["evidence"]) if prior is not None else {}
     hashes.update({name: hashlib.sha256(canonical(record)).hexdigest() for name, record in evidence.items()})
+    deadline = min(int(now) + ACCEPTANCE_GRANT_SECONDS, policy.acceptance.expires_at) if policy.acceptance else policy.deployment_verified_until
     approval = {"configuration_sha256": configuration, "issued_at": int(now),
-                "expires_at": min(policy.deployment_verified_until,
+                "expires_at": min(policy.deployment_verified_until, deadline,
                                   *(record["checked_at"] + 86400 for record in evidence.values())),
                 "approved": True, "evidence": hashes}
     if approval["expires_at"] <= approval["issued_at"]:

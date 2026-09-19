@@ -291,7 +291,14 @@ environment variable is not an installed-app configuration.
    The command refuses benchmark policy/table names and an existing ledger;
    creation uses the existing CAS store. It never clears or replaces old state.
    Validate Table RBAC and concurrency with synthetic data under separate approval.
-7. In a secure local/operator context, load the exact runtime configuration and
+7. **Pre-activation qualification, AI off:** the existing API-only ingress now
+  applies route/header/size bounds, exact workload JWT and service secret,
+  bounded body decoding, request-bound HMAC and the configured user allowlist,
+  then the activation grant. `/readyz` is workload-authenticated but has no
+  analysis body/HMAC. Invalid authentication is denied even with AI off; a
+  valid signed analysis receives503 before dependencies, ledger reservation or
+  provider construction. No qualification endpoint or bypass is added.
+  In a secure local/operator context, load the exact runtime configuration and
    keys. `python -m app.pilot_release digest` returns its SHA-256 binding, not its
    contents. Capture evidence as one JSON object with the six keys in
    `app.pilot_release.CHECKS`: identity, deployment, table_rbac, ledger, budget,
@@ -309,13 +316,26 @@ environment variable is not an installed-app configuration.
   date, at most 31 days ahead, before ledger initialization. Put approval
    JSON and signature in their separate Key Vault secrets. The release key is
    distinct from service, request-signing and fingerprint keys.
-8. Only the separately authorized, bounded activation sets `enableAI=true` for
+8. **Controlled technical acceptance, not participant release:** only the
+  separately authorized, bounded activation sets `enableAI=true` for
    this exact digest/config. Runtime checks every request and every production
    provider dispatch; readiness additionally checks the existing unblocked ledger
    with the exact policy digest. The Coordinator still performs the only budget
    reservation and single-use dispatch permit. Neither an environment rename,
    an activation flag alone nor a valid user token enables the old Azure path.
-   Finish the live matrix below before the two-person pilot is generally usable.
+  Synthetic acceptance grants last at most one hour and never beyond the fixed
+  acceptance/pilot expiry. Issuing the initial technical grant requires the
+  completed pre-activation evidence, not evidence of revoking that same grant.
+  Next prove acceptance and revocation with still-valid workload tokens using
+  readiness and signed nonmanifest analysis probes, without a model call. The
+  signed nonmanifest payload must fail before reservation while active and at
+  the release gate after revocation. Record this second-stage evidence separately;
+  never rewrite prior failed/absent checks as passed. Renew only inside the same
+  authorized scope, without changing lifetime counters, budgets or unknown holds.
+  Run at most ten existing-manifest model attempts only after safety acceptance,
+  without retries, then disable AI/revoke the technical grant. Participant and
+  health-data release, the second identity and device acceptance remain separate.
+  Finish the live matrix below before the two-person pilot is generally usable.
 
 The image marker is a packaging boundary, not a remote attestation service. An
 operator able to replace code/secrets can defeat application controls. Image/RBAC

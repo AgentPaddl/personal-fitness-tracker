@@ -48,6 +48,8 @@ def test_workload_requires_exact_signed_app_identity(mutation):
 @pytest.mark.parametrize("mode,expected", [("valid", 204), ("foreign", 403), ("oversized", 413), ("chunked", 413), ("disabled", 503)])
 def test_ingress_rejects_before_dispatch_and_bounds_body(monkeypatch, mode, expected):
     monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "synthetic")
+    monkeypatch.setattr("app.pilot_access.verify", lambda headers, payload: ((TENANT, PRINCIPAL), "synthetic"))
+    monkeypatch.setattr("app.pilot_access.configured_allowlist", lambda: {(TENANT, PRINCIPAL)})
     reads, dispatches, sent = [], [], []
 
     def active():
@@ -76,7 +78,7 @@ def test_ingress_rejects_before_dispatch_and_bounds_body(monkeypatch, mode, expe
     asyncio.run(ApiIngress(app, SimpleNamespace(verify=verify), active, None)(scope, receive, send))
     assert sent[0]["status"] == expected
     assert bool(dispatches) == (mode == "valid")
-    assert bool(reads) == (mode in {"valid", "chunked"})
+    assert bool(reads) == (mode in {"valid", "chunked", "disabled"})
     assert "private-marker" not in str(sent)
 
 
@@ -87,13 +89,13 @@ def test_api_entrypoint_disabled_without_signed_release(monkeypatch):
     monkeypatch.delenv("AI_API_ONLY_ENABLED", raising=False)
     with TestClient(create_api_app()) as client:
         assert client.get("/healthz").status_code == 200
-        assert client.get("/readyz").status_code == 503
-        assert client.post("/v1/food-analysis", json={}).status_code == 503
+        assert client.get("/readyz").status_code == 403
+        assert client.post("/v1/food-analysis", json={}).status_code == 403
         assert client.get("/docs").status_code == 404
 
 
 @pytest.mark.parametrize("route,method", [("/readyz", "GET"), ("/v1/food-analysis", "POST")])
-def test_disabled_release_cannot_attest_workload_or_domain_authentication(monkeypatch, route, method):
+def test_disabled_release_authenticates_before_denying_without_ledger_or_dispatch(monkeypatch, route, method):
     from app.pilot import PilotError
 
     monkeypatch.setenv("GATEWAY_SERVICE_TOKEN", "synthetic")
@@ -105,7 +107,15 @@ def test_disabled_release_cannot_attest_workload_or_domain_authentication(monkey
 
     def verify(token):
         reached.append("workload")
-        raise ValueError()
+        if token != "Bearer synthetic":
+            raise ValueError()
+
+    def assertion(headers, payload):
+        reached.append("assertion")
+        return (TENANT, PRINCIPAL), "synthetic"
+
+    monkeypatch.setattr("app.pilot_access.verify", assertion)
+    monkeypatch.setattr("app.pilot_access.configured_allowlist", lambda: {(TENANT, PRINCIPAL)})
 
     async def inner(scope, receive, send):
         reached.append("domain")
@@ -128,8 +138,9 @@ def test_disabled_release_cannot_attest_workload_or_domain_authentication(monkey
             (b"authorization", token.encode()), (b"x-service-token", b"synthetic"),
             (b"content-type", b"application/json"), (b"content-length", b"2")], "query_string": b""}
         asyncio.run(ApiIngress(inner, SimpleNamespace(verify=verify), active, ready)(scope, receive, send))
-        assert sent[0]["status"] == 503
-        assert reached == ["release"]
+        assert sent[0]["status"] == (503 if token == "Bearer synthetic" else 403)
+        assert reached == (["workload", *(["body", "assertion"] if method == "POST" else []), "release"]
+                   if token == "Bearer synthetic" else ["workload"])
 
 
 @pytest.fixture
@@ -277,6 +288,8 @@ def test_acceptance_release_cannot_authorize_regular_inputs(monkeypatch, release
         pilot_release.prepare_approval(release_config, evidence)
     evidence["privacy"]["checks"] = {check: True for check in pilot_release.ACCEPTANCE_PRIVACY_CHECKS}
     signed = pilot_release.prepare_approval(release_config, evidence)
+    assert signed["approval"]["expires_at"] <= signed["approval"]["issued_at"] + 3600
+    assert not any("revok" in check or "revocation" in check for record in evidence.values() for check in record["checks"])
     monkeypatch.setenv("AI_PILOT_RELEASE_JSON", json.dumps(signed["approval"]))
     monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", signed["signature"])
     assert pilot_release.validate_release(release_config)["approved"] is True
@@ -422,27 +435,48 @@ def test_api_artifact_cannot_bypass_ingress_via_legacy_entrypoint(monkeypatch, r
     asyncio.run(require_authenticated_caller(Request(scope)))
 
 
-@pytest.mark.parametrize("mutation", [None, "body", "operation", "hmac", "timestamp", "workload", "duplicate", "anonymous", "missing_token", "missing_service"])
-def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_config, mutation):
+@pytest.mark.parametrize("ai_enabled", [True, False])
+@pytest.mark.parametrize("mutation", [None, "body", "operation", "hmac", "timestamp", "identity", "workload", "duplicate", "anonymous", "missing_token", "missing_service", "disabled", "expired", "revoked"])
+def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_config, mutation, ai_enabled):
     import base64
     import hashlib
     import hmac
     import json
     import os
+    from copy import deepcopy
     from starlette.testclient import TestClient
     from app.main import create_app
     from app.dependencies import get_food_analysis_use_case
-    from app.pilot import canonical
+    from app.pilot import canonical, consume_permit
+    from app.pilot_access import _context, build_coordinator
     from app.pilot_release import validate_release
+    from app.providers.base import GenerationMessage, StructuredGenerationRequest, StructuredGenerationResult
     from app.schemas.food_analysis import FoodAnalysisResponse
     from tests.test_openai_api import _food_data
-    from tests.test_pilot import operation
+    from tests.test_pilot import MemoryCAS, operation
 
     calls = []
+    provider_calls = []
+    control = build_coordinator(MemoryCAS(), settings=release_config)
+    control.store.rows["ledger"] = (control.initial_ledger(), "1")
+    original_rows = deepcopy(control.store.rows)
+    generation = StructuredGenerationRequest(next(iter(control.routes)), [GenerationMessage("user", "synthetic")],
+                                             {"type": "object"}, 1, max_output_tokens=2000)
+
+    class Provider:
+        async def generate(self, request):
+            admission = control.admission(request)
+            consume_permit(request, deployment=admission["deployment"], profile_id=admission["profile_id"],
+                           max_output_tokens=admission["max_output_tokens"], price_version=admission["price_version"])
+            provider_calls.append(True)
+            assert len(control.store.rows["ledger"][0]["active"]) == 1
+            return StructuredGenerationResult({})
 
     class UseCase:
         async def execute(self, request):
             calls.append(request)
+            identity, identifier, payload = _context.get()
+            await control.generate(Provider(), generation, identity, identifier, "synthetic")
             return FoodAnalysisResponse(estimate=_food_data())
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -455,7 +489,7 @@ def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_con
         algorithm="RS256", headers={"kid": "synthetic"})
     payload = {"food_description": "synthetic"}
     identifier = operation()
-    envelope = {"tid": TENANT, "oid": PRINCIPAL, "operation": identifier,
+    envelope = {"tid": TENANT, "oid": AUDIENCE if mutation == "identity" else PRINCIPAL, "operation": identifier,
                 "issued": now - 300 if mutation == "timestamp" else now,
                 "body": hashlib.sha256(canonical(payload)).hexdigest(), "aud": "fitness-gateway-pilot-v1"}
     encoded = base64.urlsafe_b64encode(canonical(envelope)).decode()
@@ -473,13 +507,25 @@ def test_full_ingress_binds_workload_and_signed_request(monkeypatch, release_con
         headers = [(name, value) for name, value in headers if name != "Authorization"]
     elif mutation == "missing_service":
         headers = [(name, value) for name, value in headers if name != "X-Service-Token"]
+    if mutation == "disabled" or not ai_enabled:
+        monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+    elif mutation == "revoked":
+        monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", "0" * 64)
+    elif mutation == "expired":
+        approval = json.loads(os.environ["AI_PILOT_RELEASE_JSON"])
+        approval["issued_at"], approval["expires_at"] = now - 100, now - 1
+        monkeypatch.setenv("AI_PILOT_RELEASE_JSON", json.dumps(approval))
+        monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", hmac.new(os.environ["AI_PILOT_RELEASE_KEY"].encode(), canonical(approval), hashlib.sha256).hexdigest())
     monkeypatch.setattr("app.security.get_settings", lambda: release_config)
     inner = create_app()
     inner.dependency_overrides[get_food_analysis_use_case] = UseCase
     with TestClient(ApiIngress(inner, verifier, lambda: validate_release(release_config), None)) as client:
         response = client.post("/v1/food-analysis", json=payload, headers=headers)
-    assert response.status_code == (200 if mutation is None else 400 if mutation == "duplicate" else 403)
-    assert len(calls) == (1 if mutation is None else 0)
+    assert response.status_code == (200 if mutation is None and ai_enabled else 503 if mutation in {None, "disabled", "expired", "revoked"} else 400 if mutation == "duplicate" else 403)
+    assert len(calls) == (1 if mutation is None and ai_enabled else 0)
+    assert len(provider_calls) == len(calls)
+    if not calls:
+        assert control.store.rows == original_rows
 
 
 def test_ingress_diagnostics_are_content_free_and_bounded(monkeypatch, caplog):
@@ -739,6 +785,31 @@ def test_model_free_ledger_qualification_preserves_unknown_holds():
     assert result["unknown_hold_survives_restart"] is True
     assert all(value is True for name, value in result.items() if name != "model_attempts")
     assert control.store.rows["ledger"][0]["acceptance"] == {"attempts": 1, "reserved": 234300000}
+
+
+def test_auth_qualifier_only_sends_nonmanifest_probes_and_stops_on_mismatch():
+    import base64
+    import json
+
+    helper = load_local_module("infra/pilot/qualify_auth.py")
+    calls = []
+    token = "synthetic.synthetic." + base64.urlsafe_b64encode(b"synthetic-signature").decode()
+
+    class Client:
+        def post(self, url, *, headers, json):
+            calls.append((url, headers, json))
+            return SimpleNamespace(status_code=503 if len(calls) == 1 else 403)
+
+    results = helper.probe(Client(), "https://synthetic.invalid", token, (TENANT, PRINCIPAL), "s" * 48, "t" * 48, 503)
+    assert len(results) == len(calls) == 9
+    assert all(record["passed"] for record in results)
+    manifest = load_local_module("infra/pilot/prepare.py").acceptance_manifest()
+    assert helper.PAYLOAD not in [case["payload"] for case in manifest["cases"]]
+    assert token not in json.dumps(results)
+    calls.clear()
+    with pytest.raises(RuntimeError, match="valid_authentication"):
+        helper.probe(Client(), "https://synthetic.invalid", token, (TENANT, PRINCIPAL), "s" * 48, "t" * 48, 403)
+    assert len(calls) == 1
 
 
 def test_ledger_qualification_isolates_writes_and_uses_ai_off_settings(monkeypatch, capsys):

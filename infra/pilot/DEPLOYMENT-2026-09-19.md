@@ -163,9 +163,10 @@ The gateway remains `AI_API_ONLY_ENABLED=false`. The backend's similarly named
 flag is true to select mandatory workload authentication; it is not an enabled
 gateway model release. No model request was made during this continuation.
 
-### Existing-path qualification blocker
+### Earlier existing-path qualification blocker
 
-The blocker after the successful Table run is **not another throttle**.
+The blocker at commit `a9edc0d`, before the ordering correction below, was
+**not another throttle**.
 `ApiIngress._dispatch` calls its release guard before workload verification,
 body buffering and the domain's HMAC verification on both `/readyz` and
 `/v1/food-analysis`. Two new focused local control-flow tests confirm that a
@@ -191,6 +192,35 @@ endpoint or loosening access are not used to break this dependency. Model
 acceptance remains blocked; neither a repeated readiness-only login nor another
 Table/Exec retry resolves it. A separately reviewed qualification design is
 needed to resolve this dependency before progressing to model calls.
+
+### Auth-first correction
+
+The user authorized correcting this dependency without bypassing authentication.
+The existing gateway route now checks early limits, exact workload JWT/service
+secret, the bounded JSON body and request HMAC/user allowlist, then activation,
+then the unchanged Coordinator/budget/one-shot provider permit. Readiness checks
+the workload before activation and ledger but has no analysis HMAC. The second
+HMAC check in the domain remains as defense in depth. Anonymous requests now
+receive403 instead of the previous release-first503; valid signed requests while
+AI is off still receive503 without any reservation or provider dispatch.
+
+Initial synthetic technical grants require pre-activation evidence and last at
+most3600seconds. Revocation is a second-stage test, not a prerequisite to issuing
+the first test grant. It must use authenticated readiness/nonmanifest probes,
+not artificial model calls. No grant or participant consent is implied by the
+code change. Existing policy, fixed end date, acceptance counters and budget are
+unchanged. The earlier blocked-path description is historical, not the corrected
+artifact's behavior.
+
+Corrected image:
+`pftposyuw3m453fx4.azurecr.io/gateway@sha256:1229c6d530ce628bfa5c1d8cdd105845883e34117f446667032e9e18131e6ac8`.
+Local affected suites:211passed before the additional live-probe-helper test;
+28ingress variants additionally used the real Coordinator/permit with an in-memory
+CAS store to prove unchanged ledger on every denial. These are local tests.
+Trivy on the actual image:0reported vulnerabilities,0secrets; existing Alpine
+EOL-list warning remains. An unpatched public-base probe alternative was scanned
+and rejected due to High findings, not deployed. Live correction evidence follows
+only after actual deployment and probes; no incomplete evidence is signed.
 
 Synthetic acceptance is a separate policy option. It admits only SHA-256 hashes
 of normalized nonprivate DTOs and only one person. Its CAS-backed lifetime
