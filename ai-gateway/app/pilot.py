@@ -80,8 +80,8 @@ class BenchmarkRun(BaseModel):
 
 class AcceptanceRun(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    max_attempts: Annotated[int, Field(strict=True, ge=1, le=14)]
-    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("3.2802"), allow_inf_nan=False)]
+    max_attempts: Annotated[int, Field(strict=True, ge=1, le=16)]
+    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("3.7488"), allow_inf_nan=False)]
     payload_sha256: list[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]] = Field(min_length=1, max_length=10)
     expires_at: Positive
 

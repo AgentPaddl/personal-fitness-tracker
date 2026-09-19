@@ -159,7 +159,7 @@ def test_acceptance_is_opt_in_and_cannot_expand_setup_authorization():
     assert "acceptance" not in coordinator().policy.model_dump(mode="json")
     acceptance = {"max_attempts": 10, "max_reserved_usd": "2.343",
                   "payload_sha256": ["a" * 64], "expires_at": 1900000000}
-    for changes in ({"max_attempts": 15}, {"max_reserved_usd": "3.280200001"}, {"payload_sha256": []},
+    for changes in ({"max_attempts": 17}, {"max_reserved_usd": "3.748800001"}, {"payload_sha256": []},
                     {"expires_at": 2000000001}):
         with pytest.raises(ValueError):
             profile_coordinator(acceptance={**acceptance, **changes})

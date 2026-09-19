@@ -1,9 +1,36 @@
 import CoreGraphics
+import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 import XCTest
 
 @testable import FoodAnalysisKit
+
+final class PilotAcceptanceFixtureTests: XCTestCase {
+    func testOnlyReviewedFixturesPrepareDeterministicallyWithoutOverwriting() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixtures = repository.appendingPathComponent("ai-gateway/tests/fixtures/gpt54-mini-assets")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for fixture in PilotAcceptanceFixture.allCases {
+            let target = directory.appendingPathComponent(fixture.filename)
+            try FileManager.default.copyItem(at: fixtures.appendingPathComponent(fixture.filename), to: target)
+            let image = try fixture.prepare(in: directory)
+            XCTAssertEqual(image, try fixture.prepare(in: directory))
+            XCTAssertEqual(image.mimeType, "image/jpeg")
+            XCTAssertLessThan(image.data.count, FoodImagePreprocessor.maxUploadBytes)
+            let output = directory.appendingPathComponent(fixture.rawValue + "-upload.jpg")
+            try Data("changed output".utf8).write(to: output)
+            XCTAssertThrowsError(try fixture.prepare(in: directory))
+            XCTAssertEqual(try Data(contentsOf: output), Data("changed output".utf8))
+            try Data("unapproved input".utf8).write(to: target)
+            XCTAssertThrowsError(try fixture.source(in: directory))
+        }
+    }
+}
 
 /// Builds a synthetic, deterministic test JPEG/PNG in-memory (no bundled
 /// fixture, no network, no user photo), optionally embedding EXIF/GPS

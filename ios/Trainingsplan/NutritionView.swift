@@ -109,6 +109,30 @@ struct NutritionView: View {
                 }
 
                 Section("KI-Analyse (Text & Foto)") {
+#if PILOT_ACCEPTANCE
+                    Menu {
+                        ForEach(PilotAcceptanceFixture.allCases, id: \.rawValue) { fixture in
+                            Button(fixture.rawValue) {
+                                do {
+                                    let directory = URL.cachesDirectory.appendingPathComponent("PilotAcceptance")
+                                    let prepared = try fixture.prepare(in: directory)
+                                    foodAnalysisViewModel.descriptionText = fixture.foodDescription
+                                    foodAnalysisViewModel.setPickedImage(rawData: try fixture.source(in: directory))
+                                    guard foodAnalysisViewModel.selectedImage == prepared else {
+                                        foodAnalysisViewModel.removeSelectedImage()
+                                        throw FoodImagePreprocessingError.encodeFailed
+                                    }
+                                } catch {
+                                    foodAnalysisViewModel.removeSelectedImage()
+                                    foodAnalysisViewModel.errorMessage = "Abnahmebild nicht verifiziert."
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Abnahmebild", systemImage: "photo.badge.checkmark")
+                    }
+                    .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
+#endif
                     Text("Beschreibe dein Essen oder wähle ein Foto - oder beides. Das Ergebnis ist eine Schätzung, die du vor dem Speichern prüfen und anpassen kannst.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)

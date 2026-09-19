@@ -932,8 +932,9 @@ def test_correction_cases_continue_counters_with_separate_receipts(monkeypatch, 
     assert receipts.rows[identifier] == ({"old_receipt": True}, "old-etag")
 
 
-@pytest.mark.parametrize("mutation", [None, "enabled", "ledger", "etag", "policy", "money", "reset", "active", "conflict"])
-def test_acceptance_amendment_preserves_all_existing_state(monkeypatch, mutation):
+@pytest.mark.parametrize("iphone", [False, True])
+@pytest.mark.parametrize("mutation", [None, "enabled", "ledger", "etag", "policy", "money", "reset", "active", "blocked", "expiry", "payload", "duplicate", "old_payload", "conflict"])
+def test_acceptance_amendment_preserves_all_existing_state(monkeypatch, mutation, iphone):
     import hashlib
     import sys
     from copy import deepcopy
@@ -943,15 +944,18 @@ def test_acceptance_amendment_preserves_all_existing_state(monkeypatch, mutation
     monkeypatch.setenv("AI_API_ONLY_ENABLED", "true" if mutation == "enabled" else "false")
     monkeypatch.setitem(sys.modules, "qualify_auth", load_local_module("infra/pilot/qualify_auth.py"))
     helper = load_local_module("infra/pilot/qualify_models.py")
-    limits = {"minute": 2, "day": 10, "month": 10, "concurrent": 1,
+    old_attempts, new_attempts = (14, 16) if iphone else (10, 14)
+    old_reserve, new_reserve = ("3.2802", "3.7488") if iphone else ("2.343", "3.2802")
+    limits = {"minute": 2, "day": old_attempts, "month": old_attempts, "concurrent": 1,
               "daily_usd": "2.343", "monthly_usd": "2.343"}
     control = profile_coordinator(person=limits, total=limits, acceptance={
-        "max_attempts": 10, "max_reserved_usd": "2.343", "payload_sha256": ["a" * 64],
+        "max_attempts": old_attempts, "max_reserved_usd": old_reserve, "payload_sha256": ["a" * 64],
         "expires_at": int(time.time()) + 3600})
     ledger = control.initial_ledger()
-    ledger.update(acceptance={"attempts": 10, "reserved": 2343000000},
-                  buckets={"total:day": {"cost": 945317175, "count": 10}}, last_time=123)
+    ledger.update(acceptance={"attempts": old_attempts, "reserved": old_attempts * 234300000},
+                  buckets={"total:day": {"cost": 945317175, "count": old_attempts}}, last_time=123)
     if mutation == "active": ledger["active"] = {"op-held": "person"}
+    if mutation == "blocked": ledger["blocked"] = True
     if mutation == "reset": ledger["acceptance"] = {"attempts": 0, "reserved": 0}
     control.store.rows["ledger"] = (ledger, "7")
     for index in range(4):
@@ -959,8 +963,19 @@ def test_acceptance_amendment_preserves_all_existing_state(monkeypatch, mutation
                                                   "fingerprint": f"retained-{index}"}, "2")
     previous = deepcopy(control.store.rows)
     policy = control.policy.model_dump(mode="json")
-    policy["acceptance"].update(max_attempts=14, max_reserved_usd="3.2802")
-    for scope in ("person", "total"): policy[scope].update(day=14, month=14)
+    policy["acceptance"].update(max_attempts=new_attempts, max_reserved_usd=new_reserve)
+    hashes = ["b" * 64, "c" * 64]
+    options = {"iphone_payload_sha256": hashes} if iphone else {}
+    if iphone: policy["acceptance"]["payload_sha256"] = hashes.copy()
+    if mutation == "duplicate":
+        options["iphone_payload_sha256"] = ["b" * 64, "b" * 64]
+        policy["acceptance"]["payload_sha256"] = options["iphone_payload_sha256"]
+    if mutation == "old_payload":
+        options["iphone_payload_sha256"] = ["a" * 64, "b" * 64]
+        policy["acceptance"]["payload_sha256"] = options["iphone_payload_sha256"]
+    if mutation == "payload": policy["acceptance"]["payload_sha256"] = ["d" * 64]
+    if mutation == "expiry": policy["acceptance"]["expires_at"] += 1
+    for scope in ("person", "total"): policy[scope].update(day=new_attempts, month=new_attempts)
     if mutation == "money": policy["person"]["daily_usd"] = "3.2802"
     policy_hash = hashlib.sha256(canonical(policy)).hexdigest()
     ledger_hash = hashlib.sha256(canonical(ledger)).hexdigest()
@@ -970,26 +985,28 @@ def test_acceptance_amendment_preserves_all_existing_state(monkeypatch, mutation
     arguments = (control, PilotPolicy.model_validate(policy), "0" * 64 if mutation == "ledger" else ledger_hash,
                  "wrong" if mutation == "etag" else "7", "0" * 64 if mutation == "policy" else policy_hash)
     if mutation:
-        with pytest.raises(Conflict if mutation == "conflict" else RuntimeError):
-            asyncio.run(helper.extend_acceptance(*arguments))
+        expected_error = {"conflict": Conflict, "blocked": PilotError}.get(mutation, RuntimeError)
+        with pytest.raises(expected_error):
+            asyncio.run(helper.extend_acceptance(*arguments, **options))
         assert control.store.rows == previous
     else:
-        amendment = asyncio.run(helper.extend_acceptance(*arguments))
+        amendment = asyncio.run(helper.extend_acceptance(*arguments, **options))
         assert control.store.rows["ledger"][0] == {**ledger, "policy": amendment["revised_policy"]}
         assert all(control.store.rows[key] == value for key, value in previous.items() if key != "ledger")
-        assert control.store.rows["acceptance-extension-14-v1"][0] == amendment
+        assert control.store.rows[f"acceptance-extension-{new_attempts}-v1"][0] == amendment
+        assert amendment["additional_attempts"] == new_attempts - old_attempts
         with pytest.raises(PilotError):
-            asyncio.run(helper.extend_acceptance(*arguments))
+            asyncio.run(helper.extend_acceptance(*arguments, **options))
 
 
-def test_acceptance_schema_has_four_additional_attempts_only():
+def test_acceptance_schema_has_six_additional_attempts_only():
     from app.pilot import AcceptanceRun
     from pydantic import ValidationError
 
-    values = {"max_attempts": 14, "max_reserved_usd": "3.2802", "payload_sha256": ["a" * 64],
+    values = {"max_attempts": 16, "max_reserved_usd": "3.7488", "payload_sha256": ["a" * 64],
               "expires_at": int(time.time()) + 3600}
-    assert AcceptanceRun.model_validate(values).max_attempts == 14
-    for change in ({"max_attempts": 15}, {"max_reserved_usd": "3.280200001"}):
+    assert AcceptanceRun.model_validate(values).max_attempts == 16
+    for change in ({"max_attempts": 17}, {"max_reserved_usd": "3.748800001"}):
         with pytest.raises(ValidationError):
             AcceptanceRun.model_validate({**values, **change})
 
@@ -1524,7 +1541,7 @@ def test_native_analysis_probe_is_nonmanifest_bounded_and_stops_on_mismatch(monk
     assert "private-token" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("build", ["5", "6"])
+@pytest.mark.parametrize("build", ["5", "6", "7"])
 @pytest.mark.parametrize("mutation", [None, "url", "tenant", "scope", "team", "bundle", "build", "unreviewed_build", "missing", "legacy"])
 def test_pilot_ios_build_requires_complete_separate_configuration(mutation, build):
     validator = load_local_module("ios/Config/validate_pilot.py")
@@ -1538,7 +1555,7 @@ def test_pilot_ios_build_requires_complete_separate_configuration(mutation, buil
         field = {"url": "API_BASE_URL", "tenant": "ENTRA_TENANT_ID", "scope": "ENTRA_API_SCOPE", "team": "DEVELOPMENT_TEAM",
                  "bundle": "PRODUCT_BUNDLE_IDENTIFIER", "build": "CURRENT_PROJECT_VERSION", "unreviewed_build": "CURRENT_PROJECT_VERSION",
                  "missing": "PILOT_API_BASE_URL", "legacy": "PILOT_BUILD"}[mutation]
-        values[field] = {"legacy": "NO", "unreviewed_build": "7"}.get(mutation, "")
+        values[field] = {"legacy": "NO", "unreviewed_build": "8"}.get(mutation, "")
     if mutation in {None, "legacy"}:
         validator.validate(values)
     else:

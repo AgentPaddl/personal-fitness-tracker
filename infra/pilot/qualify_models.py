@@ -24,34 +24,45 @@ PARTITION = "qualification-model-v1"
 GATEWAY = "https://pft-pilot-20260919-gateway.gentleriver-150ab3f0.swedencentral.azurecontainerapps.io"
 
 
-async def extend_acceptance(control, revised_policy, ledger_sha256, expected_etag, revised_policy_sha256):
+async def extend_acceptance(control, revised_policy, ledger_sha256, expected_etag, revised_policy_sha256,
+                            *, iphone_payload_sha256=None):
     if os.environ.get("AI_API_ONLY_ENABLED") != "false":
         raise RuntimeError("Policy amendment requires disabled admission")
     previous = control.policy.model_dump(mode="json")
     expected = deepcopy(previous)
-    if (not control.policy.acceptance or previous["acceptance"]["max_attempts"] != 10
-            or previous["acceptance"]["max_reserved_usd"] != "2.343"
-            or any(previous[scope][field] != 10 for scope in ("person", "total") for field in ("day", "month"))):
-        raise RuntimeError("Only the original ten-attempt policy may be amended")
-    expected["acceptance"].update(max_attempts=14, max_reserved_usd="3.2802")
+    iphone = iphone_payload_sha256 is not None
+    old_attempts, new_attempts = (14, 16) if iphone else (10, 14)
+    old_reserve, new_reserve = ("3.2802", "3.7488") if iphone else ("2.343", "3.2802")
+    if (not control.policy.acceptance or previous["acceptance"]["max_attempts"] != old_attempts
+            or previous["acceptance"]["max_reserved_usd"] != old_reserve
+            or any(previous[scope][field] != old_attempts for scope in ("person", "total") for field in ("day", "month"))):
+        raise RuntimeError("Only the reviewed predecessor policy may be amended")
+    if iphone:
+        if (not isinstance(iphone_payload_sha256, list) or len(iphone_payload_sha256) != 2
+                or len(set(iphone_payload_sha256)) != 2
+                or set(iphone_payload_sha256) & set(previous["acceptance"]["payload_sha256"])):
+            raise RuntimeError("Exactly two distinct new iPhone payload hashes are required")
+        expected["acceptance"]["payload_sha256"] = iphone_payload_sha256
+    expected["acceptance"].update(max_attempts=new_attempts, max_reserved_usd=new_reserve)
     for scope in ("person", "total"):
-        expected[scope].update(day=14, month=14)
+        expected[scope].update(day=new_attempts, month=new_attempts)
     if (revised_policy.model_dump(mode="json") != expected
             or hashlib.sha256(canonical(expected)).hexdigest() != revised_policy_sha256):
-        raise RuntimeError("Amendment differs from the reviewed four-attempt extension")
+        raise RuntimeError("Amendment differs from the reviewed bounded extension")
     ledger, etag = await control._read_ledger()
     if (etag != expected_etag or hashlib.sha256(canonical(ledger)).hexdigest() != ledger_sha256
-            or ledger["active"] or ledger["acceptance"] != {"attempts": 10, "reserved": 2343000000}):
-        raise RuntimeError("Ledger differs from the reviewed inactive ten-attempt state")
+            or ledger["blocked"] or ledger["active"]
+            or ledger["acceptance"] != {"attempts": old_attempts, "reserved": old_attempts * 234300000}):
+        raise RuntimeError("Ledger differs from the reviewed inactive predecessor state")
     revised = Coordinator(control.store, revised_policy, control.secret, control.allowlist, control.prices,
                           control.routes, profile_bindings=control.profile_bindings,
                           max_output_tokens=control.max_output_tokens)
     amendment = {"previous_policy": control.policy_id, "revised_policy": revised.policy_id,
                  "previous_ledger_sha256": ledger_sha256, "revised_policy_sha256": revised_policy_sha256,
-                 "acceptance": deepcopy(ledger["acceptance"]), "additional_attempts": 4,
-                 "additional_reserved_usd": "0.9372", "created_at": int(time.time())}
+                 "acceptance": deepcopy(ledger["acceptance"]), "additional_attempts": new_attempts - old_attempts,
+                 "additional_reserved_usd": "0.4686" if iphone else "0.9372", "created_at": int(time.time())}
     ledger["policy"] = revised.policy_id
-    await control.store.commit([("ledger", ledger, etag), ("acceptance-extension-14-v1", amendment, None)])
+    await control.store.commit([("ledger", ledger, etag), (f"acceptance-extension-{new_attempts}-v1", amendment, None)])
     return amendment
 
 
