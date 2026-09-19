@@ -99,13 +99,14 @@ class AzureTableStore:
                     record = json.loads(entity["data"])
                     if record["expires"] >= now:
                         continue
-                    if record["state"] in {"pending", "unknown"}:
+                    if record["state"] in {"pending", "unknown"} or record.get("usage_known") is False:
                         current, current_etag = await self.read("ledger")
                         if current is None:
                             raise PilotError()
                         current["blocked"] = True
                         current["active"].pop(entity["RowKey"], None)
                         await self.commit([("ledger", current, current_etag)])
+                        continue
                     await self.client.delete_entity(self.partition, entity["RowKey"],
                                                     etag=entity.metadata["etag"],
                                                     match_condition=MatchConditions.IfNotModified,

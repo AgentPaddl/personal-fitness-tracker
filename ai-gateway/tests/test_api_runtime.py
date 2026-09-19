@@ -321,6 +321,88 @@ def test_acceptance_release_cannot_authorize_regular_inputs(monkeypatch, release
         pilot_release.validate_release(release_config)
 
 
+def test_owner_input_uses_migrated_coordinator_without_manifest_restriction(monkeypatch):
+    import httpx2
+    from app import pilot_access
+    from tests.test_openai_api import _profile_provider, _profile_completion, _request
+    from tests.test_pilot import IDENTITY, migrate_owner, operation, owner_coordinator, owner_transition_fixture
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+    monkeypatch.setenv("AI_PILOT_ENABLED", "true")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(200, json=_profile_completion())
+
+    async def run():
+        old, policy = owner_transition_fixture()
+        await migrate_owner(old, policy)
+        control = owner_coordinator(old, policy)
+        monkeypatch.setattr(pilot_access, "build_coordinator", lambda: control)
+        monkeypatch.setattr(pilot_access.time, "time", control.clock)
+        token = pilot_access._context.set((IDENTITY, operation(control.clock()), {"food_description": "synthetic owner meal"}))
+        provider = _profile_provider(handler)
+        try:
+            result = await pilot_access.generate(provider, _request(max_output_tokens=2000))
+            assert result.metadata.usage_known
+            ledger = control.store.rows["ledger"][0]
+            assert ledger["acceptance"]["attempts"] == 16
+            assert ledger["owner_usage"]["attempts"] == 1
+            assert ledger["owner_usage"]["period_cost"] == 953556450
+        finally:
+            pilot_access._context.reset(token)
+            await provider.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("mutation", [None, "synthetic_privacy", "new_ledger", "old_grant", "expired", "disabled", "revoked"])
+def test_owner_release_requires_new_scope_and_preserved_ledger(monkeypatch, release_config, mutation):
+    import json
+    import os
+    from app import pilot_release
+    from app.pilot import PilotError
+    from tests.test_pilot import owner_transition_fixture
+
+    release_config = release_config.model_copy(update={"ai_provider_max_concurrency": 1})
+    now = int(time.time())
+    original_grant = {"approval": json.loads(os.environ["AI_PILOT_RELEASE_JSON"]),
+                      "signature": os.environ["AI_PILOT_RELEASE_SIGNATURE"]}
+    _, template = owner_transition_fixture()
+    policy = template.model_dump(mode="json")
+    policy["deployment_verified_until"] = now + 30 * 86400
+    policy["acceptance"]["expires_at"] = now + 30 * 86400
+    policy["owner_usage"]["expires_at"] = now + 90000
+    monkeypatch.setenv("AI_PILOT_POLICY_JSON", json.dumps(policy))
+    monkeypatch.setenv("AI_PILOT_ALLOWLIST_JSON", json.dumps([{"tid": TENANT, "oid": PRINCIPAL}]))
+    evidence = {name: {"configuration_sha256": pilot_release.configuration_digest(release_config),
+                       "checked_at": now, "checks": {check: True for check in checks}}
+                for name, checks in pilot_release.CHECKS.items()}
+    evidence["ledger"]["checks"] = {check: True for check in pilot_release.OWNER_LEDGER_CHECKS}
+    if mutation == "synthetic_privacy":
+        evidence["privacy"]["checks"] = {check: True for check in pilot_release.ACCEPTANCE_PRIVACY_CHECKS}
+    if mutation == "new_ledger":
+        evidence["ledger"]["checks"] = {check: True for check in pilot_release.CHECKS["ledger"]}
+    if mutation in {"synthetic_privacy", "new_ledger"}:
+        with pytest.raises(PilotError): pilot_release.prepare_approval(release_config, evidence)
+        return
+    signed = pilot_release.prepare_approval(release_config, evidence)
+    assert signed["approval"]["expires_at"] == now + 86400
+    if mutation == "old_grant": signed = original_grant
+    monkeypatch.setenv("AI_PILOT_RELEASE_JSON", json.dumps(signed["approval"]))
+    monkeypatch.setenv("AI_PILOT_RELEASE_SIGNATURE", signed["signature"])
+    if mutation == "expired": monkeypatch.setattr(pilot_release.time, "time", lambda: now + 90000)
+    if mutation == "disabled": monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+    if mutation == "revoked": monkeypatch.setenv("AI_PILOT_RELEASE_KEY", "changed-synthetic-key" * 3)
+    if mutation:
+        with pytest.raises(PilotError): pilot_release.validate_release(release_config)
+    else:
+        assert pilot_release.validate_release(release_config)["approved"] is True
+
+
 @pytest.mark.parametrize("mutation", [None, "missing", "not_denied", "legacy_network"])
 def test_variant_b_approval_requires_anonymous_access_denial(release_config, mutation):
     from app import pilot_release

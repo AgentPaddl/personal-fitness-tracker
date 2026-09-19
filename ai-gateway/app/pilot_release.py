@@ -29,6 +29,7 @@ CHECKS = {
     "privacy": {"health_data_basis_recorded", "datazone_terms_reviewed", "no_payload_logs_verified", "retention_deletion_approved"},
 }
 ACCEPTANCE_PRIVACY_CHECKS = {"synthetic_manifest_reviewed", "metadata_basis_recorded", "datazone_terms_reviewed", "no_payload_logs_verified", "retention_deletion_approved"}
+OWNER_LEDGER_CHECKS = (CHECKS["ledger"] - {"new_pilot_ledger"}) | {"acceptance_frozen", "owner_phase_migrated", "shared_period_cost_preserved"}
 ACCEPTANCE_GRANT_SECONDS = 3600
 
 
@@ -82,6 +83,8 @@ def validate_release(settings):
             raise ValueError()
         if policy.acceptance and (len(identities) != 1 or now >= policy.acceptance.expires_at):
             raise ValueError()
+        if policy.owner_usage and now >= policy.owner_usage.expires_at:
+            raise ValueError()
         routes = settings.azure_openai_model_routes()
         if (len(set(routes.values())) != 1
                 or set(settings.azure_openai_profiles().values()) != {GPT_54_MINI.identifier}):
@@ -115,7 +118,7 @@ def verify_approval(settings, signed):
         approval = signed["approval"]
         now = time.time()
         policy = PilotPolicy.model_validate_json(os.environ["AI_PILOT_POLICY_JSON"])
-        lifetime = ACCEPTANCE_GRANT_SECONDS if policy.acceptance else 86400
+        lifetime = ACCEPTANCE_GRANT_SECONDS if policy.acceptance and not policy.owner_usage else 86400
         if (set(signed) != {"approval", "signature"}
                 or set(approval) != {"configuration_sha256", "issued_at", "expires_at", "evidence", "approved"}
                 or approval["approved"] is not True
@@ -123,6 +126,7 @@ def verify_approval(settings, signed):
                 or not 0 < approval["issued_at"] <= now
                 or not approval["issued_at"] < approval["expires_at"] <= approval["issued_at"] + lifetime
                 or policy.acceptance is not None and approval["expires_at"] > policy.acceptance.expires_at
+                or policy.owner_usage is not None and approval["expires_at"] > policy.owner_usage.expires_at
                 or not approval["expires_at"] <= policy.deployment_verified_until <= now + 31 * 86400
                 or now >= policy.deployment_verified_until or policy.benchmark is not None
                 or approval["configuration_sha256"] != configuration_digest(settings)
@@ -148,7 +152,11 @@ def prepare_approval(settings, evidence, *, previous=None):
             or not now < policy.deployment_verified_until <= now + 31 * 86400):
         raise PilotError()
     for name, record in evidence.items():
-        checks = ACCEPTANCE_PRIVACY_CHECKS if name == "privacy" and policy.acceptance else CHECKS[name]
+        checks = CHECKS[name]
+        if name == "privacy" and policy.acceptance and not policy.owner_usage:
+            checks = ACCEPTANCE_PRIVACY_CHECKS
+        if name == "ledger" and policy.owner_usage:
+            checks = OWNER_LEDGER_CHECKS
         if (set(record) != {"configuration_sha256", "checked_at", "checks"}
                 or record["configuration_sha256"] != configuration
                 or type(record["checked_at"]) is not int or not now - 86400 <= record["checked_at"] <= now
@@ -157,7 +165,12 @@ def prepare_approval(settings, evidence, *, previous=None):
             raise PilotError()
     hashes = dict(prior["evidence"]) if prior is not None else {}
     hashes.update({name: hashlib.sha256(canonical(record)).hexdigest() for name, record in evidence.items()})
-    deadline = min(int(now) + ACCEPTANCE_GRANT_SECONDS, policy.acceptance.expires_at) if policy.acceptance else policy.deployment_verified_until
+    if policy.owner_usage:
+        deadline = min(int(now) + 86400, policy.owner_usage.expires_at)
+    elif policy.acceptance:
+        deadline = min(int(now) + ACCEPTANCE_GRANT_SECONDS, policy.acceptance.expires_at)
+    else:
+        deadline = policy.deployment_verified_until
     approval = {"configuration_sha256": configuration, "issued_at": int(now),
                 "expires_at": min(policy.deployment_verified_until, deadline,
                                   *(record["checked_at"] + 86400 for record in evidence.values())),

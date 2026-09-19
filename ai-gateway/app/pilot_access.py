@@ -94,7 +94,8 @@ async def generate(provider, request):
     identity, operation, payload = context
     try:
         acceptance = control.policy.acceptance
-        if acceptance and hashlib.sha256(canonical(payload)).hexdigest() not in acceptance.payload_sha256:
+        if (acceptance and not control.policy.owner_usage
+            and hashlib.sha256(canonical(payload)).hexdigest() not in acceptance.payload_sha256):
             raise PilotError("pilot_forbidden")
         operation_id(operation, time.time(), control.policy.operation_max_age_seconds)
         fingerprint = digest(control.secret, "request-v1", [identity, payload])

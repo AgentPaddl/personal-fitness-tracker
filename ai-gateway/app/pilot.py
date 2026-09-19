@@ -86,6 +86,15 @@ class AcceptanceRun(BaseModel):
     expires_at: Positive
 
 
+class OwnerUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    daily_attempts: Annotated[int, Field(strict=True, ge=1, le=3)]
+    max_attempts: Annotated[int, Field(strict=True, ge=1, le=12)]
+    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("2.8116"), allow_inf_nan=False)]
+    max_period_usd: Annotated[Decimal, Field(gt=0, le=Decimal("3.76500465"), allow_inf_nan=False)]
+    expires_at: Positive
+
+
 class PilotPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: str = Field(pattern=r"^[A-Za-z0-9_-]{1,60}$")
@@ -100,6 +109,7 @@ class PilotPolicy(BaseModel):
     deployment_verified_until: Positive
     benchmark: BenchmarkRun | None = None
     acceptance: AcceptanceRun | None = Field(default=None, exclude_if=lambda value: value is None)
+    owner_usage: OwnerUsage | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def retention_covers_admission(self):
@@ -107,6 +117,10 @@ class PilotPolicy(BaseModel):
             raise ValueError("Retention must exceed the operation acceptance window.")
         if self.acceptance and (self.benchmark or self.acceptance.expires_at > self.deployment_verified_until):
             raise ValueError("Acceptance must be separate from benchmarks and within the pilot period.")
+        if self.owner_usage and (not self.acceptance or self.acceptance.max_attempts != 16
+                or self.acceptance.max_reserved_usd != Decimal("3.7488")
+                or self.owner_usage.expires_at > self.acceptance.expires_at):
+            raise ValueError("Owner usage requires the closed 16-attempt acceptance within its original period.")
         return self
 
 
@@ -183,12 +197,77 @@ class Coordinator:
                                                   for key, profile in self.profiles.items()}, self.max_output_tokens])
 
     def initial_ledger(self):
+        if self.policy.owner_usage:
+            raise PilotError()
         benchmark = self.policy.benchmark
         ledger = {"policy": self.policy_id, "buckets": {}, "active": {}, "blocked": False, "last_time": 0,
             "benchmark": {"run_id": benchmark.run_id, "attempts": 0, "reserved": 0} if benchmark else None}
         if self.policy.acceptance:
             ledger["acceptance"] = {"attempts": 0, "reserved": 0}
         return ledger
+
+    async def transition_to_owner_usage(self, revised_policy, operation_keys, *, ledger_sha256,
+                                        expected_etag, operations_sha256, revised_policy_sha256):
+        if os.environ.get("AI_API_ONLY_ENABLED") != "false":
+            raise PilotError()
+        revised_policy = PilotPolicy.model_validate(revised_policy.model_dump(mode="json"))
+        previous = self.policy.model_dump(mode="json")
+        owner = revised_policy.owner_usage
+        if (self.policy.owner_usage or not self.policy.acceptance or not owner
+                or len(self.allowlist) != 1 or self.policy.acceptance.max_attempts != 16
+                or self.policy.acceptance.max_reserved_usd != Decimal("3.7488")
+                or not self.clock() < owner.expires_at <= self.policy.acceptance.expires_at
+                or any(previous[scope][field] != value for scope in ("person", "total")
+                      for field, value in (("day", 16), ("month", 16),
+                                  ("concurrent", 1 if scope == "person" else 2),
+                                            ("daily_usd", "2.343"), ("monthly_usd", "2.343")))):
+            raise PilotError()
+        expected = self.policy.model_dump(mode="json")
+        expected["owner_usage"] = owner.model_dump(mode="json")
+        for scope in ("person", "total"):
+            expected[scope].update(minute=1, concurrent=1, day=16 + owner.daily_attempts, month=16 + owner.max_attempts)
+        if (revised_policy.model_dump(mode="json") != expected
+                or hashlib.sha256(canonical(expected)).hexdigest() != revised_policy_sha256):
+            raise PilotError()
+        ledger, etag = await self._read_ledger()
+        if (etag != expected_etag or not etag or ledger["active"] or ledger.get("owner_usage") is not None
+                or self.clock() < ledger["last_time"]
+                or hashlib.sha256(canonical(ledger)).hexdigest() != ledger_sha256
+                or ledger["acceptance"] != {"attempts": 16, "reserved": 3748800000}
+                or len(operation_keys) != 16 or len(set(operation_keys)) != 16):
+            raise PilotError()
+        records = {}
+        for key in operation_keys:
+            if (not isinstance(key, str) or not key.startswith("op-") or len(key) != 67
+                    or any(character not in "0123456789abcdef" for character in key[3:])):
+                raise PilotError()
+            record, record_etag = await self.store.read(key)
+            if (not record or not record_etag or record.get("settled") is not True
+                    or record.get("state") not in {"succeeded", "failed", "unknown"}
+                    or type(record.get("usage_known")) is not bool
+                    or type(record.get("charged")) is not int
+                    or not 0 <= record["charged"] <= 234300000
+                    or record.get("reserved") != 234300000 or record.get("phase") is not None
+                    or not record["usage_known"] and record["charged"] != record["reserved"]):
+                raise PilotError()
+            records[key] = record
+        cost = sum(record["charged"] for record in records.values())
+        if (hashlib.sha256(canonical(records)).hexdigest() != operations_sha256
+                or sum(not record["usage_known"] for record in records.values()) != 4
+                or cost != 953404650 or cost > units(owner.max_period_usd, ROUND_FLOOR)):
+            raise PilotError()
+        revised = Coordinator(self.store, revised_policy, self.secret, self.allowlist, self.prices,
+                              self.routes, self.clock, profile_bindings=self.profile_bindings,
+                              max_output_tokens=self.max_output_tokens)
+        audit = {"previous_policy": self.policy_id, "revised_policy": revised.policy_id,
+                 "previous_ledger_sha256": ledger_sha256, "operations_sha256": operations_sha256,
+                 "revised_policy_sha256": revised_policy_sha256, "created": self.clock(),
+                 "acceptance": dict(ledger["acceptance"]), "baseline_cost": cost, "holds": 4}
+        ledger["policy"] = revised.policy_id
+        ledger["owner_usage"] = {"attempts": 0, "reserved": 0, "period_cost": cost,
+                                 "day": "", "day_attempts": 0, "day_reserved": 0}
+        await self.store.commit([("ledger", ledger, etag), ("owner-transition-v1", audit, None)])
+        return audit
 
     def bound(self, request: StructuredGenerationRequest) -> int:
         policy = self.policy
@@ -262,6 +341,18 @@ class Coordinator:
             if (not isinstance(run, dict)
                     or any(type(run.get(field)) is not int or run[field] < 0 for field in ("attempts", "reserved"))):
                 raise PilotError()
+        if self.policy.owner_usage:
+            run = ledger.get("owner_usage")
+            audit, _ = await self.store.read("owner-transition-v1")
+            if (len(self.allowlist) != 1 or not isinstance(run, dict) or not audit
+                    or audit.get("revised_policy") != self.policy_id
+                    or ledger.get("acceptance") != {"attempts": 16, "reserved": 3748800000}
+                    or audit.get("acceptance") != ledger["acceptance"]
+                    or audit.get("baseline_cost") != 953404650 or audit.get("holds") != 4
+                    or any(type(run.get(field)) is not int or run[field] < 0 for field in
+                           ("attempts", "reserved", "period_cost", "day_attempts", "day_reserved"))
+                    or run["period_cost"] < audit["baseline_cost"] or not isinstance(run.get("day"), str)):
+                raise PilotError()
         return ledger, etag
 
     async def reserve(self, identity, operation, fingerprint, amount, admission=None):
@@ -282,7 +373,24 @@ class Coordinator:
                 raise PilotError()
             ledger["last_time"] = max(now, ledger["last_time"])
             acceptance = self.policy.acceptance
-            if acceptance:
+            owner = self.policy.owner_usage
+            if owner:
+                run = ledger["owner_usage"]
+                day = datetime.fromtimestamp(now, timezone.utc).strftime("%Y%m%d")
+                if run["day"] != day:
+                    run.update(day=day, day_attempts=0, day_reserved=0)
+                if (now >= owner.expires_at or type(amount) is not int or not 0 < amount <= 234300000
+                        or run["attempts"] >= owner.max_attempts or run["day_attempts"] >= owner.daily_attempts
+                        or run["reserved"] + amount > units(owner.max_reserved_usd, ROUND_FLOOR)
+                        or run["day_reserved"] + amount > owner.daily_attempts * 234300000
+                        or run["period_cost"] + amount > units(owner.max_period_usd, ROUND_FLOOR)):
+                    raise PilotError("pilot_limit")
+                run["attempts"] += 1
+                run["reserved"] += amount
+                run["day_attempts"] += 1
+                run["day_reserved"] += amount
+                run["period_cost"] += amount
+            elif acceptance:
                 run = ledger["acceptance"]
                 if (now >= acceptance.expires_at or run["attempts"] >= acceptance.max_attempts
                         or run["reserved"] + amount > units(acceptance.max_reserved_usd, ROUND_FLOOR)):
@@ -316,6 +424,8 @@ class Coordinator:
                       "created": now, "expires": now + self.policy.retention_seconds,
                       "dispatch_before": now + 30, "buckets": [entry[0] for entry in keys],
                       "admission": admission}
+            if owner:
+                record["phase"] = "owner-v1"
             try:
                 await self.store.commit([("ledger", ledger, etag), (key, record, None)])
                 return key
@@ -327,6 +437,7 @@ class Coordinator:
         record, etag = await self.store.read(key)
         if (not record or record["state"] != "pending" or self.clock() > record["dispatch_before"]
             or self.policy.benchmark is not None and self.clock() >= self.policy.benchmark.expires_at
+            or self.policy.owner_usage is not None and self.clock() >= self.policy.owner_usage.expires_at
             or self.policy.acceptance is not None and self.clock() >= self.policy.acceptance.expires_at):
             raise PilotError()
         record["state"] = "unknown"
@@ -369,6 +480,12 @@ class Coordinator:
             charged = record["reserved"] if actual is None else actual
             if charged > record["reserved"]:
                 ledger["blocked"] = True
+            if self.policy.owner_usage:
+                if record.get("phase") != "owner-v1":
+                    raise PilotError()
+                ledger["owner_usage"]["period_cost"] += charged - record["reserved"]
+                if actual is None or state == "unknown" or metadata and metadata.status == "rate_limited":
+                    ledger["blocked"] = True
             for bucket_key in record["buckets"]:
                 if bucket_key in ledger["buckets"]:
                     ledger["buckets"][bucket_key]["cost"] += charged - record["reserved"]
