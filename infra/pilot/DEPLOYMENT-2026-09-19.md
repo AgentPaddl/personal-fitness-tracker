@@ -15,9 +15,12 @@ creation, old-production change or participant admission.
 After the reviewed14->16 extension and actual readiness, the one-hour grant
 was issued at18:19:57UTC and activation verified at18:21:18UTC. L1 was admitted
 once at18:22:50UTC, P5 once at18:25:05UTC after the ledger/minimum-spacing check.
-L1 was reported as working; P5 displayed no usable result. Exact L1 review
-values, cancellation without saving and absence of a P5 review/new entry
-still need explicit device confirmation, without another analysis.
+The subsequent explicit device report confirms L1's expected values for150g:
+300kcal,15g protein,30g carbohydrates,12g fat, followed by cancellation without
+saving. P5 displayed no usable result, with no saveable review or new entry.
+These confirmations close the bounded device checks without another analysis;
+the semantic P5 evidence limitation below remains. No reactivation or extension
+of attempts, budget or participant scope.
 
 All14 old operations and four holds remain unchanged. Both new operations
 have known, settled usage: L1 USD0.0015279; P5 USD0.0008877; sum USD0.0024156.

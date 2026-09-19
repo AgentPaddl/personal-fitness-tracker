@@ -20,8 +20,8 @@ nach den beiden Versuchen vorzeitig gesperrt und durch Schluesselrotation widerr
 
 | Fall | Admission (Berlin) | Geraeterueckmeldung | Ledgerkosten USD |
 | --- | --- | --- | --- |
-| L1 | 20:22:50 | "geklappt"; numerische Einzelwerte und Abbrechen ohne Speichern noch nicht ausdruecklich bestaetigt | 0.0015279 |
-| P5 | 20:25:05 | "es liegt kein nutzbares Ergebnis vor"; kein erneuter Versuch | 0.0008877 |
+| L1 | 20:22:50 | 300kcal,15g Protein,30g Kohlenhydrate,12g Fett bestaetigt; anschliessend abgebrochen, nichts gespeichert | 0.0015279 |
+| P5 | 20:25:05 | "es liegt kein nutzbares Ergebnis vor"; kein speicherbarer Review und kein neuer Eintrag bestaetigt; kein erneuter Versuch | 0.0008877 |
 
 Der Zwischencheck vor P5 bestaetigte genau eine neue, abgerechnete Operation
 und mindestens65Sekunden seit L1-Admission. Final genau zwei neue Operationen,
@@ -63,12 +63,15 @@ Abschluss-Ledgerhash:
 Hash aller16 Operationen:
 `c7a39d1f8f9a018455db92a6f99cc88356d360ced13052dab349c39cdc3c4cb2`.
 
-Noch zu bestaetigen, **ohne weitere Analyse**: Entsprachen die L1-Werte fuer150g
-exakt300kcal,15g Protein,30g Kohlenhydraten und12g Fett, und wurde danach ohne
-Speichern abgebrochen? Blieben bei P5 ein speicherbarer Review und ein neuer
-Eintrag aus? Die bisherigen Kurzmeldungen belegen diese Einzelpunkte nicht
-ausdruecklich. PhotosPicker/Kamera, interaktiver MSAL-Ruecksprung,
-Wiederherstellung und Alltagsnutzung bleiben ausserhalb dieser Abnahme.
+Die anschliessende ausdrueckliche Geraeterueckmeldung bestaetigt die erwarteten
+L1-Reviewwerte fuer150g:300kcal,15g Protein,30g Kohlenhydrate und12g Fett;
+danach wurde abgebrochen und nichts gespeichert. Bei P5 entstanden weder ein
+speicherbarer Review noch ein neuer Eintrag. Diese Sichtbestaetigungen wurden
+**ohne weitere Analyse** ergaenzt. Damit sind die begrenzten Geraetepruefungen
+abgeschlossen; die oben benannte P5-Diagnosegrenze bleibt bestehen.
+PhotosPicker/Kamera, interaktiver MSAL-Ruecksprung, Wiederherstellung und
+Alltagsnutzung bleiben ausserhalb dieser Abnahme. Keine erneute Aktivierung
+oder Erweiterung von Versuchen, Budget oder Teilnehmerkreis.
 
 ## Gebuendelte Vorbereitung ab main 7acda4c
 
