@@ -25,6 +25,10 @@ struct NutritionView: View {
     @State private var fat = ""
     @State private var notes = ""
     @State private var selectedEntryToEdit: FoodEntry?
+    @State private var selectedProduct: FoodPreset?
+    @State private var showsProductEditor = false
+    @State private var productSearch = ""
+    @State private var localCaptureID: UUID?
     @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel(
         tokenProvider: EntraAuthServiceFactory.configuredProviderOrNil()
     )
@@ -41,19 +45,46 @@ struct NutritionView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Favoriten") {
+                Section("Produkte und Favoriten") {
+                    TextField("Nach Name suchen", text: $productSearch)
+                    Button {
+                        closeLocalCapture()
+                        localCaptureID = foodAnalysisViewModel.metrics.beginLocalCapture(kind: .productCreation)
+                        showsProductEditor = true
+                    } label: {
+                        Label("Produkt vom Etikett", systemImage: "plus")
+                    }
                     if foodPresets.isEmpty {
                         Text("Noch keine Favoriten angelegt")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(foodPresets) { preset in
+                        ForEach(matchingPresets) { preset in
                             Button {
-                                addPreset(preset)
+                                if preset.productBasis != nil {
+                                    beginProductReuse()
+                                    selectedProduct = preset
+                                }
+                                else if preset.baseQuantity == nil && preset.baseUnit == nil && preset.baseCalories == nil {
+                                    closeLocalCapture()
+                                    addPreset(preset)
+                                }
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(preset.name)
                                             .foregroundStyle(.primary)
+
+                                        if let basis = preset.productBasis {
+                                            Text("\(preset.baseQuantity ?? "") \(basis.unit.title) · \(basis.origin.title)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        } else {
+                                            Text(preset.baseQuantity == nil && preset.baseUnit == nil && preset.baseCalories == nil
+                                                 ? "Feste Portion · \(preset.valueOrigin.flatMap(FoodProductOrigin.init(rawValue:))?.title ?? "Herkunft unbekannt")"
+                                                 : "Produktbasis unvollständig")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
 
                                         Text("\(preset.calories) kcal · \(preset.proteinGrams, specifier: "%.0f") g Protein")
                                             .font(.caption)
@@ -87,6 +118,9 @@ struct NutritionView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.name)
                                     .fontWeight(.semibold)
+                                Text(entry.originTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
 
                                 Text("\(entry.calories) kcal · \(entry.proteinGrams, specifier: "%.0f") g Protein")
                                     .foregroundStyle(.secondary)
@@ -97,6 +131,7 @@ struct NutritionView: View {
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
+                                closeLocalCapture()
                                 selectedEntryToEdit = entry
                             }
                             .swipeActions(edge: .leading) {
@@ -168,6 +203,7 @@ struct NutritionView: View {
                     } else {
                         HStack {
                             Button {
+                                closeLocalCapture()
                                 foodAnalysisViewModel.metrics.begin()
                                 isPhotoPickerPresented = true
                             } label: {
@@ -218,6 +254,7 @@ struct NutritionView: View {
                         }
                     } else {
                         Button(foodAnalysisViewModel.requiresNewOperationConfirmation ? "Neue Berechnung …" : "Analysieren") {
+                            closeLocalCapture()
                             showsLongRunningAnalysisHint = false
                             if foodAnalysisViewModel.requiresNewOperationConfirmation {
                                 confirmsNewAnalysis = true
@@ -283,6 +320,14 @@ struct NutritionView: View {
             .sheet(item: $selectedEntryToEdit) { entry in
                 EditFoodEntryView(entry: entry)
             }
+            .sheet(isPresented: $showsProductEditor, onDismiss: { closeLocalCapture() }) {
+                FoodProductEditorView(metrics: foodAnalysisViewModel.metrics, captureID: localCaptureID)
+            }
+            .sheet(item: $selectedProduct, onDismiss: { closeLocalCapture() }) { preset in
+                if let localCaptureID {
+                    FoodProductPortionView(preset: preset, metrics: foodAnalysisViewModel.metrics, captureID: localCaptureID)
+                }
+            }
             .sheet(item: $foodAnalysisViewModel.reviewDraft, onDismiss: {
                 foodAnalysisViewModel.closeReviewSession()
             }) { _ in
@@ -346,26 +391,36 @@ struct NutritionView: View {
                     confirmsAnalysisRetry = false
                 }
             }
+            .onChange(of: productSearch) { _, search in
+                if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { closeLocalCapture() }
+                else { beginProductReuse() }
+            }
+            .onChange(of: foodAnalysisViewModel.descriptionText) { _, _ in closeLocalCapture() }
+            .onChange(of: [name, calories, protein, carbs, fat, notes]) { _, _ in closeLocalCapture() }
             .onAppear {
                 isCaptureSurfaceVisible = true
                 foodAnalysisViewModel.metrics.setActive(scenePhase == .active)
             }
-            .onDisappear {
-                if !isCameraSheetPresented && !isPhotoPickerPresented
-                    && foodAnalysisViewModel.reviewSession == nil && selectedEntryToEdit == nil {
-                    isCaptureSurfaceVisible = false
-                    foodAnalysisViewModel.metrics.setActive(false)
-                    if !foodAnalysisViewModel.isAnalyzing && !isLoadingPickedPhoto {
-                        foodAnalysisViewModel.leaveCapture()
-                    }
-                }
-            }
+            .onDisappear(perform: leaveNutrition)
+        }
+    }
+
+    private func leaveNutrition() {
+        guard !isCameraSheetPresented, !isPhotoPickerPresented, !showsProductEditor,
+              foodAnalysisViewModel.reviewSession == nil, selectedEntryToEdit == nil,
+              selectedProduct == nil else { return }
+        isCaptureSurfaceVisible = false
+        foodAnalysisViewModel.metrics.setActive(false)
+        closeLocalCapture()
+        if !foodAnalysisViewModel.isAnalyzing && !isLoadingPickedPhoto {
+            foodAnalysisViewModel.leaveCapture()
         }
     }
 
     /// Only checks/requests camera *permission* here, in direct response to
     /// the user tapping "Foto aufnehmen" - never proactively on view load.
     private func requestCameraCapture() {
+        closeLocalCapture()
         foodAnalysisViewModel.metrics.begin()
         let decision = CameraCaptureAvailability.decide(
             isCameraHardwareAvailable: isCameraHardwareAvailable,
@@ -389,10 +444,28 @@ struct NutritionView: View {
         }
     }
 
+    private func beginProductReuse() {
+        if localCaptureID == nil {
+            localCaptureID = foodAnalysisViewModel.metrics.beginLocalCapture(kind: .productReuse)
+        }
+    }
+
+    private func closeLocalCapture() {
+        if let localCaptureID {
+            foodAnalysisViewModel.metrics.finish(.incomplete, captureID: localCaptureID)
+        }
+        localCaptureID = nil
+    }
+
     private var todaysEntries: [FoodEntry] {
         foodEntries.filter {
             Calendar.current.isDateInToday($0.date)
         }
+    }
+
+    private var matchingPresets: [FoodPreset] {
+        let query = productSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? foodPresets : foodPresets.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
     private var totalCalories: Int {
@@ -482,7 +555,8 @@ struct NutritionView: View {
             calories: preset.calories,
             proteinGrams: preset.proteinGrams,
             carbsGrams: preset.carbsGrams,
-            fatGrams: preset.fatGrams
+            fatGrams: preset.fatGrams,
+            valueOrigin: preset.valueOrigin
         )
 
         modelContext.insert(entry)
@@ -512,7 +586,8 @@ private func createPreset(from entry: FoodEntry) {
         $0.calories == entry.calories &&
         $0.proteinGrams == entry.proteinGrams &&
         $0.carbsGrams == entry.carbsGrams &&
-        $0.fatGrams == entry.fatGrams
+        $0.fatGrams == entry.fatGrams &&
+        $0.valueOrigin == entry.valueOrigin && $0.baseQuantity == nil
     }
 
     guard !alreadyExists else {
@@ -524,7 +599,8 @@ private func createPreset(from entry: FoodEntry) {
         calories: entry.calories,
         proteinGrams: entry.proteinGrams,
         carbsGrams: entry.carbsGrams,
-        fatGrams: entry.fatGrams
+        fatGrams: entry.fatGrams,
+        valueOrigin: entry.valueOrigin
     )
 
     modelContext.insert(preset)
@@ -537,7 +613,7 @@ private func createPreset(from entry: FoodEntry) {
 }
     private func deletePresets(at offsets: IndexSet) {
         for index in offsets {
-            let preset = foodPresets[index]
+            let preset = matchingPresets[index]
             modelContext.delete(preset)
         }
 
@@ -591,7 +667,7 @@ private struct FoodCaptureMetricsMenu: View {
             Button(role: .destructive) { confirmingDeletion = true } label: {
                 Label("Messdaten löschen", systemImage: "trash")
             }
-            .disabled(metrics.currentID != nil)
+            .disabled(metrics.hasActiveCaptures)
         } label: {
             Image(systemName: metrics.storageFailed ? "exclamationmark.triangle" : "chart.bar.xaxis")
         }

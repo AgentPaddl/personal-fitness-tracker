@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import FoodAnalysisKit
 
 enum BackupService {
 
@@ -109,7 +110,10 @@ enum BackupService {
                 proteinGrams: $0.proteinGrams,
                 carbsGrams: $0.carbsGrams,
                 fatGrams: $0.fatGrams,
-                notes: $0.notes
+                notes: $0.notes,
+                valueOrigin: $0.valueOrigin,
+                consumedQuantity: $0.consumedQuantity,
+                consumedUnit: $0.consumedUnit
             )
         }
 
@@ -120,7 +124,11 @@ enum BackupService {
                 proteinGrams: $0.proteinGrams,
                 carbsGrams: $0.carbsGrams,
                 fatGrams: $0.fatGrams,
-                createdAt: $0.createdAt
+                createdAt: $0.createdAt,
+                baseQuantity: $0.baseQuantity,
+                baseUnit: $0.baseUnit,
+                valueOrigin: $0.valueOrigin,
+                baseCalories: $0.baseCalories
             )
         }
 
@@ -169,7 +177,36 @@ enum BackupService {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        return try decoder.decode(AppBackup.self, from: data)
+        let backup = try decoder.decode(AppBackup.self, from: data)
+        try validateProducts(in: backup)
+        return backup
+    }
+
+    private static func validateProducts(in backup: AppBackup) throws {
+        for preset in backup.foodPresets {
+            if let origin = preset.valueOrigin, FoodProductOrigin(rawValue: origin) == nil {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            if preset.baseQuantity == nil && preset.baseUnit == nil && preset.baseCalories == nil { continue }
+            guard let quantity = preset.baseQuantity.flatMap(FoodProductBasis.parseQuantity),
+                  let unit = preset.baseUnit.flatMap(FoodProductUnit.init(rawValue:)),
+                  let origin = preset.valueOrigin.flatMap(FoodProductOrigin.init(rawValue:)),
+                  let calories = FoodProductBasis.parseNumber(preset.baseCalories ?? String(preset.calories)),
+                  preset.proteinGrams.isFinite, preset.carbsGrams.isFinite, preset.fatGrams.isFinite,
+                  FoodProductBasis(quantity: quantity, unit: unit, origin: origin,
+                    nutrition: .init(calories: calories, protein: Decimal(preset.proteinGrams),
+                                     carbs: Decimal(preset.carbsGrams), fat: Decimal(preset.fatGrams))) != nil
+            else { throw CocoaError(.fileReadCorruptFile) }
+        }
+        for entry in backup.foodEntries {
+            if let origin = entry.valueOrigin, FoodProductOrigin(rawValue: origin) == nil {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            if entry.consumedQuantity == nil && entry.consumedUnit == nil { continue }
+            guard entry.consumedQuantity.flatMap(FoodProductBasis.parseQuantity) != nil,
+                  entry.consumedUnit.flatMap(FoodProductUnit.init(rawValue:)) != nil,
+                  entry.valueOrigin != nil else { throw CocoaError(.fileReadCorruptFile) }
+        }
     }
     
     static func deleteAllData(
@@ -254,6 +291,7 @@ enum BackupService {
         _ backup: AppBackup,
         modelContext: ModelContext
     ) throws {
+        try validateProducts(in: backup)
         var exerciseMap: [UUID: Exercise] = [:]
 
         // 1. Übungen wiederherstellen
@@ -339,7 +377,10 @@ enum BackupService {
                 proteinGrams: foodBackup.proteinGrams,
                 carbsGrams: foodBackup.carbsGrams,
                 fatGrams: foodBackup.fatGrams,
-                notes: foodBackup.notes
+                notes: foodBackup.notes,
+                valueOrigin: foodBackup.valueOrigin,
+                consumedQuantity: foodBackup.consumedQuantity,
+                consumedUnit: foodBackup.consumedUnit
             )
 
             modelContext.insert(entry)
@@ -353,7 +394,11 @@ enum BackupService {
                 proteinGrams: presetBackup.proteinGrams,
                 carbsGrams: presetBackup.carbsGrams,
                 fatGrams: presetBackup.fatGrams,
-                createdAt: presetBackup.createdAt
+                createdAt: presetBackup.createdAt,
+                baseQuantity: presetBackup.baseQuantity,
+                baseUnit: presetBackup.baseUnit,
+                valueOrigin: presetBackup.valueOrigin,
+                baseCalories: presetBackup.baseCalories
             )
 
             modelContext.insert(preset)

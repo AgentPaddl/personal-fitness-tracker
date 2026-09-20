@@ -35,6 +35,9 @@ struct NutritionDayDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.name)
                                 .fontWeight(.semibold)
+                            Text(entry.originTitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             
                             Text(
                                 "\(entry.calories) kcal · \(entry.proteinGrams, specifier: "%.0f") g Protein"

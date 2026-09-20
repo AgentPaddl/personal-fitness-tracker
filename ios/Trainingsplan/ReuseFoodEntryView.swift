@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import FoodAnalysisKit
 
 struct ReuseFoodEntryView: View {
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +20,7 @@ struct ReuseFoodEntryView: View {
         NavigationStack {
             Form {
                 Section("Eintrag") {
+                    LabeledContent("Ausgangswerte", value: sourceEntry.originTitle)
                     TextField("Bezeichnung", text: $name)
                     
                     TextField("Kalorien", text: $calories)
@@ -132,8 +134,19 @@ struct ReuseFoodEntryView: View {
             fatGrams: fat,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? nil
-            : notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            : notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            valueOrigin: sourceEntry.valueOrigin,
+            consumedQuantity: sourceEntry.consumedQuantity,
+            consumedUnit: sourceEntry.consumedUnit
         )
+
+        if name.trimmingCharacters(in: .whitespacesAndNewlines) != sourceEntry.name
+            || calories != sourceEntry.calories || protein != sourceEntry.proteinGrams
+            || carbs != sourceEntry.carbsGrams || fat != sourceEntry.fatGrams {
+            newEntry.valueOrigin = sourceEntry.valueOrigin == nil ? nil : FoodProductOrigin.manual.rawValue
+            newEntry.consumedQuantity = nil
+            newEntry.consumedUnit = nil
+        }
         
         modelContext.insert(newEntry)
         

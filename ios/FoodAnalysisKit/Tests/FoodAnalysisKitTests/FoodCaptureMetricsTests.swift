@@ -3,6 +3,86 @@ import XCTest
 @testable import FoodAnalysisKit
 
 final class FoodCaptureMetricsTests: XCTestCase {
+    func testLocalReuseDoesNotConsumeOrFinishPendingAICapture() async {
+        await MainActor.run {
+            var now: Double = 0
+            let metrics = FoodCaptureMetrics(clock: { now })
+            let initial = metrics.begin()
+            now = 2
+            metrics.startOperation(UUID(), correction: false)
+            now = 3
+            let reuse = metrics.beginLocalCapture(kind: .productReuse)
+            now = 5
+            metrics.setActive(false)
+            now = 15
+            metrics.setActive(true)
+            metrics.manualCorrection(captureID: reuse)
+            metrics.saveResult(.failed, captureID: reuse)
+            now = 18
+            metrics.saveResult(.saved, captureID: reuse)
+            metrics.finish(.discarded, captureID: reuse)
+            XCTAssertEqual(metrics.currentID, initial)
+            now = 20
+            metrics.endOperation(succeeded: true)
+            now = 22
+            metrics.finish(.productSaved)
+            let capture = metrics.archive.captures[0]
+            let local = metrics.archive.captures[1]
+            XCTAssertEqual(capture.activeSeconds, 7)
+            XCTAssertEqual(capture.inactiveSeconds, 15)
+            XCTAssertEqual(capture.operations[0].waitSeconds, 18)
+            XCTAssertEqual(capture.operations[0].activeWaitSeconds, 3)
+            XCTAssertEqual(capture.outcome, .productSaved)
+            XCTAssertEqual(local.activeSeconds, 5)
+            XCTAssertEqual(local.inactiveSeconds, 10)
+            XCTAssertEqual(local.manualCorrectionRounds, 1)
+            XCTAssertEqual(local.saveFailures, 1)
+            XCTAssertEqual(local.outcome, .saved)
+            XCTAssertTrue(local.operations.isEmpty)
+            XCTAssertEqual(metrics.costSummary.unknownOperations, 1)
+            XCTAssertFalse(metrics.hasActiveCaptures)
+        }
+    }
+
+    func testLocalCancellationRecoveryAndDeletionGuard() async throws {
+        try await MainActor.run {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let url = directory.appendingPathComponent("metrics.json")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let metrics = FoodCaptureMetrics(fileURL: url)
+            let identifier = metrics.beginLocalCapture(kind: .productCreation)
+            XCTAssertFalse(metrics.storageFailed)
+            XCTAssertThrowsError(try metrics.deleteMeasurements())
+            let recovered = FoodCaptureMetrics(fileURL: url)
+            let record = try XCTUnwrap(recovered.archive.captures.first)
+            XCTAssertEqual(record.outcome, .incomplete)
+            XCTAssertFalse(record.timingComplete)
+            metrics.finish(.discarded, captureID: identifier)
+            metrics.saveResult(.skipped, captureID: identifier)
+            XCTAssertEqual(metrics.archive.captures[0].outcome, .discarded)
+            XCTAssertEqual(metrics.costSummary.unknownOperations, 0)
+            try metrics.deleteMeasurements()
+        }
+    }
+
+    func testCaptureKindsAndLegacyArchiveCompatibility() async throws {
+        try await MainActor.run {
+            let metrics = FoodCaptureMetrics()
+            metrics.begin()
+            metrics.finish(.productSaved)
+            metrics.begin(kind: .productReuse)
+            metrics.saveResult(.saved)
+            XCTAssertEqual(metrics.archive.captures.map(\.effectiveKind), [.aiCapture, .productReuse])
+            XCTAssertTrue(metrics.archive.captures[1].operations.isEmpty)
+            var legacy = metrics.archive
+            legacy.captures[0].kind = nil
+            let decoded = try JSONDecoder().decode(FoodCaptureMetrics.Archive.self,
+                from: JSONEncoder().encode(legacy))
+            XCTAssertEqual(decoded.captures[0].effectiveKind, .aiCapture)
+            XCTAssertEqual(decoded.captures[1].effectiveKind, .productReuse)
+        }
+    }
+
     func testDeletingActiveCaptureIsRejectedAndFailedImportDoesNotBecomeKnown() async throws {
         try await MainActor.run {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

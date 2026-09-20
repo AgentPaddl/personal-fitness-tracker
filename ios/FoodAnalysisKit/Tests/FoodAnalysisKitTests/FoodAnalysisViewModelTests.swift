@@ -146,6 +146,61 @@ private func makeEstimate() -> FoodAnalysisResponseDTO.Estimate {
 
 @MainActor
 final class FoodAnalysisViewModelTests: XCTestCase {
+    func testSavingProductIsNotMeasuredAsSavedNutritionEntry() async throws {
+        var now: Double = 0
+        let metrics = FoodCaptureMetrics(clock: { now })
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service, metrics: metrics)
+        model.descriptionText = "synthetic label"
+        now = 3
+        await model.analyze()
+        let session = try XCTUnwrap(model.reviewSession)
+        session.currentDraft.name = "private product name"
+        now = 5
+        XCTAssertNotNil(session.prepareProductSave())
+        XCTAssertNotNil(session.prepareProductSave())
+        XCTAssertEqual(metrics.archive.captures[0].manualCorrectionRounds, 1)
+        metrics.manualCorrection(captureID: session.id)
+        metrics.saveResult(.failed, captureID: session.id, savedOutcome: .productSaved)
+        XCTAssertEqual(metrics.archive.captures[0].outcome, .inProgress)
+        now = 8
+        metrics.saveResult(.saved, captureID: session.id, savedOutcome: .productSaved)
+        session.finishProductSave()
+        model.clearAfterSave()
+        XCTAssertEqual(metrics.archive.captures.map(\.outcome), [.productSaved])
+        XCTAssertEqual(metrics.archive.captures[0].effectiveKind, .aiCapture)
+        XCTAssertEqual(metrics.archive.captures[0].activeSeconds, 8)
+        XCTAssertEqual(metrics.archive.captures[0].manualCorrectionRounds, 2)
+        XCTAssertEqual(metrics.archive.captures[0].saveFailures, 1)
+        XCTAssertFalse(session.persistenceCoordinator.hasCommitted)
+        XCTAssertFalse(session.canConfirmCurrentDraft)
+        XCTAssertNil(session.prepareProductSave())
+        XCTAssertEqual(metrics.costSummary.unknownOperations, 1)
+        XCTAssertEqual(service.callCount, 1)
+        let export = try XCTUnwrap(String(data: metrics.export(), encoding: .utf8))
+        for content in ["synthetic label", "private product name", "Apfel", "calories", "protein"] {
+            XCTAssertFalse(export.contains(content))
+        }
+    }
+
+    func testCancellingProductPreparationLeavesOriginalReviewSaveAvailable() async throws {
+        let metrics = FoodCaptureMetrics()
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service, metrics: metrics)
+        model.descriptionText = "synthetic label"
+        await model.analyze()
+        let session = try XCTUnwrap(model.reviewSession)
+        XCTAssertNotNil(session.prepareProductSave())
+        XCTAssertTrue(session.canConfirmCurrentDraft)
+        XCTAssertEqual(metrics.archive.captures[0].outcome, .inProgress)
+        var entries = 0
+        XCTAssertEqual(session.save(insert: { entries += 1 }, persist: {}, rollback: {}), .saved)
+        XCTAssertEqual(session.save(insert: { entries += 1 }, persist: {}, rollback: {}), .skipped)
+        XCTAssertEqual(entries, 1)
+        XCTAssertEqual(metrics.archive.captures[0].outcome, .saved)
+        XCTAssertEqual(service.callCount, 1)
+    }
+
     func testPreparedInputResumedAfterLeavingHasIncompleteTiming() async throws {
         let metrics = FoodCaptureMetrics()
         let model = FoodAnalysisViewModel(service: StubService(result: .success(makeEstimate())), metrics: metrics)

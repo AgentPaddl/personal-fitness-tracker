@@ -18,6 +18,7 @@ struct EditFoodEntryView: View {
         NavigationStack {
             Form {
                 Section("Eintrag bearbeiten") {
+                    LabeledContent("Herkunft", value: entry.originTitle)
                     TextField("Bezeichnung", text: $name)
 
                     TextField("Kalorien", text: $calories)
@@ -106,6 +107,8 @@ struct EditFoodEntryView: View {
             return
         }
 
+        entry.invalidateOriginIfEdited(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                           calories: calories, protein: protein, carbs: carbs, fat: fat)
         entry.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         entry.calories = calories
         entry.proteinGrams = protein

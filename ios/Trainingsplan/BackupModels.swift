@@ -60,6 +60,9 @@ struct FoodEntryBackup: Codable {
     let carbsGrams: Double
     let fatGrams: Double
     let notes: String?
+    var valueOrigin: String? = nil
+    var consumedQuantity: String? = nil
+    var consumedUnit: String? = nil
 }
 
 struct FoodPresetBackup: Codable {
@@ -69,6 +72,10 @@ struct FoodPresetBackup: Codable {
     let carbsGrams: Double
     let fatGrams: Double
     let createdAt: Date
+    var baseQuantity: String? = nil
+    var baseUnit: String? = nil
+    var valueOrigin: String? = nil
+    var baseCalories: String? = nil
 }
 
 struct WeightEntryBackup: Codable {

@@ -217,6 +217,18 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
         close()
     }
 
+    public func prepareProductSave() -> FoodAnalysisReviewDraft? {
+        guard canConfirmCurrentDraft else { return nil }
+        recordDraftEdits()
+        return currentDraft
+    }
+
+    public func finishProductSave() {
+        recordDraftEdits()
+        if metrics?.currentID == id { metrics?.finish(.productSaved) }
+        close()
+    }
+
     @discardableResult
     public func save(insert: () -> Void, persist: () throws -> Void, rollback: () -> Void) -> FoodEntrySaveResult {
         guard canConfirmCurrentDraft else { return .skipped }

@@ -19,6 +19,7 @@ struct FoodAnalysisReviewView: View {
     @State private var saveErrorMessage: String?
     @State private var confirmsNewRefinement = false
     @State private var confirmsRefinementRetry = false
+    @State private var productDraft: FoodAnalysisReviewDraft?
 
     private var draft: FoodAnalysisReviewDraft {
         get { session.currentDraft }
@@ -56,6 +57,13 @@ struct FoodAnalysisReviewView: View {
                     TextField("Fett in g", text: $session.currentDraft.fat)
                         .keyboardType(.decimalPad)
                         .disabled(isSaving || session.isRefining)
+                }
+
+                Section {
+                    Button { productDraft = session.prepareProductSave() } label: {
+                        Label("Als Produkt speichern", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(!session.canConfirmCurrentDraft)
                 }
 
                 Section("Konfidenz") {
@@ -180,6 +188,13 @@ struct FoodAnalysisReviewView: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("KI-Schätzung")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $productDraft) { draft in
+                FoodProductEditorView(draft: draft, metrics: session.metrics, captureID: session.id) {
+                    session.finishProductSave()
+                    onSaved?()
+                    dismiss()
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Verwerfen", role: .destructive) {
@@ -238,7 +253,8 @@ struct FoodAnalysisReviewView: View {
             calories: input.calories,
             proteinGrams: input.proteinGrams,
             carbsGrams: input.carbsGrams,
-            fatGrams: input.fatGrams
+            fatGrams: input.fatGrams,
+            valueOrigin: FoodProductOrigin.aiEstimate.rawValue
         )
 
         let result = session.save(

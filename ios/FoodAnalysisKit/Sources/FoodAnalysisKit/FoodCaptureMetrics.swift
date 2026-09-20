@@ -2,7 +2,8 @@ import Combine
 import Foundation
 
 public struct FoodCaptureMeasurement: Codable, Equatable, Identifiable {
-    public enum Outcome: String, Codable { case inProgress, saved, discarded, technicalAbort, incomplete }
+    public enum Kind: String, Codable { case aiCapture, productCreation, productReuse }
+    public enum Outcome: String, Codable { case inProgress, saved, productSaved, discarded, technicalAbort, incomplete }
     public struct Operation: Codable, Equatable, Identifiable {
         public let id: UUID
         public let isCorrection: Bool
@@ -16,6 +17,8 @@ public struct FoodCaptureMeasurement: Codable, Equatable, Identifiable {
 
     public let id: UUID
     public let startedAt: Date
+    public var kind: Kind?
+    public var effectiveKind: Kind { kind ?? .aiCapture }
     public var endedAt: Date?
     public var outcome: Outcome = .inProgress
     public var activeSeconds: Double = 0
@@ -65,10 +68,13 @@ public final class FoodCaptureMetrics: ObservableObject {
     @Published public private(set) var storageFailed = false
     public private(set) var archive = Archive()
     @Published public private(set) var currentID: UUID?
+    @Published public private(set) var localCaptureIDs: Set<UUID> = []
+    public var hasActiveCaptures: Bool { currentID != nil || !localCaptureIDs.isEmpty }
     private let fileURL: URL?
     private let clock: () -> Double
     private let date: () -> Date
     private var lastTick: Double?
+    private var localTicks: [UUID: Double] = [:]
     private var active = true
     private var pendingOperation: UUID?
     private var readable = true
@@ -105,12 +111,12 @@ public final class FoodCaptureMetrics: ObservableObject {
     }
 
     @discardableResult
-    public func begin() -> UUID {
+    public func begin(kind: FoodCaptureMeasurement.Kind = .aiCapture) -> UUID {
         if let currentID { return currentID }
         let identifier = UUID()
         currentID = identifier
         lastTick = clock()
-        archive.captures.append(FoodCaptureMeasurement(id: identifier, startedAt: date()))
+        archive.captures.append(FoodCaptureMeasurement(id: identifier, startedAt: date(), kind: kind))
         persist()
         return identifier
     }
@@ -119,6 +125,16 @@ public final class FoodCaptureMetrics: ObservableObject {
         checkpoint()
         active = value
         persist()
+    }
+
+    public func beginLocalCapture(kind: FoodCaptureMeasurement.Kind) -> UUID {
+        checkpoint()
+        let identifier = UUID()
+        localTicks[identifier] = clock()
+        localCaptureIDs.insert(identifier)
+        archive.captures.append(FoodCaptureMeasurement(id: identifier, startedAt: date(), kind: kind))
+        persist()
+        return identifier
     }
 
     public func startOperation(_ identifier: UUID, correction: Bool) {
@@ -148,35 +164,41 @@ public final class FoodCaptureMetrics: ObservableObject {
         persist()
     }
 
-    public func manualCorrection() {
-        guard let index = currentIndex else { return }
+    public func manualCorrection(captureID: UUID? = nil) {
+        guard let index = captureIndex(captureID) else { return }
         archive.captures[index].manualCorrectionRounds += 1
         persist()
     }
 
-    public func saveResult(_ result: FoodEntrySaveResult) {
+    public func saveResult(_ result: FoodEntrySaveResult, captureID: UUID? = nil,
+                           savedOutcome: FoodCaptureMeasurement.Outcome = .saved) {
         switch result {
-        case .saved: finish(.saved)
+        case .saved: finish(savedOutcome, captureID: captureID)
         case .failed:
-            if let index = currentIndex { archive.captures[index].saveFailures += 1 }
+            if let index = captureIndex(captureID) { archive.captures[index].saveFailures += 1 }
             checkpoint()
             persist()
         case .skipped: break
         }
     }
 
-    public func finish(_ outcome: FoodCaptureMeasurement.Outcome) {
+    public func finish(_ outcome: FoodCaptureMeasurement.Outcome, captureID: UUID? = nil) {
         checkpoint()
-        guard let index = currentIndex else { return }
-        if pendingOperation != nil {
+        guard let index = captureIndex(captureID) else { return }
+        let identifier = archive.captures[index].id
+        if identifier == currentID, pendingOperation != nil {
             endOperation(succeeded: false)
             archive.captures[index].timingComplete = false
         }
         archive.captures[index].outcome = outcome
         archive.captures[index].endedAt = date()
         if outcome == .incomplete { archive.captures[index].timingComplete = false }
-        currentID = nil
-        lastTick = nil
+        if identifier == currentID {
+            currentID = nil
+            lastTick = nil
+        }
+        localTicks.removeValue(forKey: identifier)
+        localCaptureIDs.remove(identifier)
         persist()
     }
 
@@ -222,7 +244,7 @@ public final class FoodCaptureMetrics: ObservableObject {
     }
 
     public func deleteMeasurements() throws {
-        guard currentID == nil else { throw CocoaError(.fileWriteUnknown) }
+        guard !hasActiveCaptures else { throw CocoaError(.fileWriteUnknown) }
         if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
             try FileManager.default.removeItem(at: fileURL)
         }
@@ -236,20 +258,36 @@ public final class FoodCaptureMetrics: ObservableObject {
 
     private var currentIndex: Int? { archive.captures.firstIndex { $0.id == currentID } }
 
+    private func captureIndex(_ identifier: UUID?) -> Int? {
+        archive.captures.firstIndex { $0.id == (identifier ?? currentID) && $0.outcome == .inProgress }
+    }
+
     private func checkpoint() {
-        guard let index = currentIndex, let previous = lastTick else { return }
         let now = clock()
+        for identifier in localCaptureIDs {
+            guard let index = captureIndex(identifier), let previous = localTicks[identifier] else { continue }
+            localTicks[identifier] = now
+            let elapsed = now - previous
+            guard elapsed.isFinite, elapsed >= 0 else {
+                archive.captures[index].timingComplete = false
+                continue
+            }
+            if active { archive.captures[index].activeSeconds += elapsed }
+            else { archive.captures[index].inactiveSeconds += elapsed }
+        }
+        guard let index = currentIndex, let previous = lastTick else { return }
         let elapsed = now - previous
         lastTick = now
         guard elapsed.isFinite, elapsed >= 0 else {
             archive.captures[index].timingComplete = false
             return
         }
-        if active { archive.captures[index].activeSeconds += elapsed }
+        let captureActive = active && localCaptureIDs.isEmpty
+        if captureActive { archive.captures[index].activeSeconds += elapsed }
         else { archive.captures[index].inactiveSeconds += elapsed }
         if let operation = archive.captures[index].operations.firstIndex(where: { $0.id == pendingOperation }) {
             archive.captures[index].operations[operation].waitSeconds += elapsed
-            if active { archive.captures[index].operations[operation].activeWaitSeconds += elapsed }
+            if captureActive { archive.captures[index].operations[operation].activeWaitSeconds += elapsed }
         }
     }
 
