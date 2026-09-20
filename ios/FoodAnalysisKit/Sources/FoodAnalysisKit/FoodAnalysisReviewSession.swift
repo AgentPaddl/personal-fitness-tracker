@@ -25,6 +25,8 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
     @Published public private(set) var lastError: FoodAnalysisError?
 
     private let service: FoodAnalysisServicing
+    public let metrics: FoodCaptureMetrics?
+    private var measuredDraft: FoodAnalysisReviewDraft
     private var isClosed = false
     private var refinementTask: Task<FoodAnalysisResponseDTO.Estimate, Error>?
     @Published private var hasUncertainOutcome = false
@@ -55,7 +57,8 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
         sourceKind: FoodAnalysisSourceKind,
         initialEstimate: FoodAnalysisResponseDTO.Estimate,
         service: FoodAnalysisServicing,
-        persistenceCoordinator: FoodEntryPersistenceCoordinator = FoodEntryPersistenceCoordinator()
+        persistenceCoordinator: FoodEntryPersistenceCoordinator = FoodEntryPersistenceCoordinator(),
+        metrics: FoodCaptureMetrics? = nil
     ) {
         self.id = id
         self.originalDescription = originalDescription
@@ -63,8 +66,11 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
         self.initialEstimate = initialEstimate
         self.service = service
         self.persistenceCoordinator = persistenceCoordinator
+        self.metrics = metrics
         self.currentEstimate = initialEstimate
-        self.currentDraft = FoodAnalysisReviewDraft(id: id, estimate: initialEstimate)
+        let draft = FoodAnalysisReviewDraft(id: id, estimate: initialEstimate)
+        self.currentDraft = draft
+        self.measuredDraft = draft
     }
 
     public var assumptions: [String] { currentEstimate.assumptions }
@@ -129,6 +135,8 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
         }
         guard let operation = currentOperation else { return }
 
+        recordDraftEdits()
+        metrics?.startOperation(operation.id, correction: true)
         let requestToken = UUID()
         currentRequestToken = requestToken
         isRefining = true
@@ -147,7 +155,9 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
                 return
             }
             self.currentEstimate = estimate
+            metrics?.endOperation(succeeded: true)
             currentDraft = FoodAnalysisReviewDraft(id: id, estimate: estimate)
+            measuredDraft = currentDraft
             successfulRefinementCount += 1
             hasUncertainOutcome = false
             correctionText = ""
@@ -158,6 +168,7 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
             refinementTask = nil
         } catch {
             guard acceptsResponse(sessionID: id, requestToken: requestToken) else { return }
+            metrics?.endOperation(succeeded: false)
             let failure = Task.isCancelled || task.isCancelled
                 ? FoodAnalysisError.operationInterrupted : (error as? FoodAnalysisError ?? .analysisFailed)
             lastError = failure
@@ -177,6 +188,7 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
 
     public func interruptRefinement() {
         guard isRefining else { return }
+        metrics?.endOperation(succeeded: false)
         currentRequestToken = nil
         refinementTask?.cancel()
         refinementTask = nil
@@ -189,11 +201,34 @@ public final class FoodAnalysisReviewSession: ObservableObject, Identifiable {
     /// Invalidates any in-flight response when the review is dismissed or
     /// replaced. The underlying transport need not support cancellation.
     public func close() {
+        recordDraftEdits()
         interruptRefinement()
+        if metrics?.currentID == id { metrics?.finish(.incomplete) }
         isClosed = true
         currentRequestToken = nil
         isRefining = false
         currentOperation = nil
+    }
+
+    public func discard() {
+        recordDraftEdits()
+        interruptRefinement()
+        if metrics?.currentID == id { metrics?.finish(.discarded) }
+        close()
+    }
+
+    @discardableResult
+    public func save(insert: () -> Void, persist: () throws -> Void, rollback: () -> Void) -> FoodEntrySaveResult {
+        guard canConfirmCurrentDraft else { return .skipped }
+        recordDraftEdits()
+        let result = persistenceCoordinator.save(insert: insert, persist: persist, rollback: rollback)
+        if metrics?.currentID == id { metrics?.saveResult(result) }
+        return result
+    }
+
+    private func recordDraftEdits() {
+        if currentDraft != measuredDraft, metrics?.currentID == id { metrics?.manualCorrection() }
+        measuredDraft = currentDraft
     }
 
     private func acceptsResponse(sessionID: UUID, requestToken: UUID) -> Bool {

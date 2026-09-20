@@ -7,7 +7,11 @@ import Foundation
 /// only after explicit user confirmation in the app's review view.
 @MainActor
 public final class FoodAnalysisViewModel: ObservableObject {
-    @Published public var descriptionText: String = ""
+    @Published public var descriptionText: String = "" {
+        didSet {
+            if descriptionText != oldValue && !descriptionText.isEmpty { metrics.begin() }
+        }
+    }
     @Published public private(set) var isAnalyzing = false
     @Published public var errorMessage: String?
     /// The specific error behind `errorMessage`, if any - lets the UI
@@ -26,6 +30,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
     @Published public private(set) var currentRequestToken: UUID?
 
     private let service: FoodAnalysisServicing?
+    public let metrics: FoodCaptureMetrics
     private let configurationErrorMessage: String?
     private var analysisTask: Task<FoodAnalysisResponseDTO.Estimate, Error>?
     private var operationCompleted = false
@@ -69,20 +74,22 @@ public final class FoodAnalysisViewModel: ObservableObject {
     public convenience init(tokenProvider: AccessTokenProviding? = nil) {
         switch APIConfiguration.resolveBackendBaseURL() {
         case .success(let url):
-            self.init(service: FoodAnalysisService(baseURL: url, tokenProvider: tokenProvider))
+            self.init(service: FoodAnalysisService(baseURL: url, tokenProvider: tokenProvider), metrics: .local())
         case .failure(let error):
-            self.init(configurationError: error)
+            self.init(configurationError: error, metrics: .local())
         }
     }
 
     /// Dependency-injected for tests/previews.
-    public init(service: FoodAnalysisServicing) {
+    public init(service: FoodAnalysisServicing, metrics: FoodCaptureMetrics? = nil) {
         self.service = service
+        self.metrics = metrics ?? FoodCaptureMetrics()
         self.configurationErrorMessage = nil
     }
 
-    private init(configurationError: APIConfigurationError) {
+    private init(configurationError: APIConfigurationError, metrics: FoodCaptureMetrics) {
         self.service = nil
+        self.metrics = metrics
         self.configurationErrorMessage = Self.userMessage(forConfigurationError: configurationError)
     }
 
@@ -96,6 +103,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
 
         guard let service else {
             errorMessage = configurationErrorMessage
+            metrics.finish(.technicalAbort)
             return
         }
 
@@ -115,6 +123,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
         }
         guard let operation = currentOperation else { return }
         closeReviewSession()
+        metrics.startOperation(operation.id, correction: false)
         let requestToken = UUID()
         currentRequestToken = requestToken
         isAnalyzing = true
@@ -145,22 +154,26 @@ public final class FoodAnalysisViewModel: ObservableObject {
                 return
             }
             operationCompleted = true
+            metrics.endOperation(succeeded: true)
             hasUncertainOutcome = false
             isAnalyzing = false
             currentRequestToken = nil
             analysisTask = nil
             reviewSession?.close()
             let session = FoodAnalysisReviewSession(
+                id: metrics.begin(),
                 originalDescription: originalDescription,
                 sourceKind: sourceKind,
                 initialEstimate: estimate,
-                service: service
+                service: service,
+                metrics: metrics
             )
             reviewSession = session
             // Kept as the stable sheet presentation item for the existing UI.
             reviewDraft = session.currentDraft
         } catch {
             guard currentRequestToken == requestToken else { return }
+            metrics.endOperation(succeeded: false)
             let failure = Task.isCancelled || task.isCancelled
                 ? FoodAnalysisError.operationInterrupted : (error as? FoodAnalysisError ?? .analysisFailed)
             errorMessage = failure == .pilotNotActivated && hasUncertainOutcome
@@ -180,6 +193,7 @@ public final class FoodAnalysisViewModel: ObservableObject {
 
     public func interruptAnalysis() {
         guard isAnalyzing else { return }
+        metrics.endOperation(succeeded: false)
         currentRequestToken = nil
         analysisTask?.cancel()
         analysisTask = nil
@@ -204,12 +218,14 @@ public final class FoodAnalysisViewModel: ObservableObject {
     /// strip metadata). On failure, `errorMessage` is set and no image is
     /// retained. Replaces any previously selected image.
     public func setPickedImage(rawData: Data) {
+        metrics.begin()
         switch FoodImagePreprocessor.preprocess(imageData: rawData) {
         case .success(let preprocessed):
             selectedImage = preprocessed
             errorMessage = nil
         case .failure:
             errorMessage = Self.userMessage(for: .imageProcessingFailed)
+            metrics.finish(.technicalAbort)
         }
     }
 
@@ -226,6 +242,12 @@ public final class FoodAnalysisViewModel: ObservableObject {
         }
         reviewSession = nil
         reviewDraft = nil
+    }
+
+    public func leaveCapture() {
+        interruptAnalysis()
+        closeReviewSession()
+        metrics.finish(lastError == nil ? .incomplete : .technicalAbort)
     }
 
     public static func userMessage(for error: FoodAnalysisError) -> String {

@@ -4,6 +4,7 @@ import PhotosUI
 import AVFoundation
 import UIKit
 import FoodAnalysisKit
+import UniformTypeIdentifiers
 
 struct NutritionView: View {
     @Environment(\.modelContext) private var modelContext
@@ -28,8 +29,10 @@ struct NutritionView: View {
         tokenProvider: EntraAuthServiceFactory.configuredProviderOrNil()
     )
     @State private var photoPickerItem: PhotosPickerItem?
+    @State private var isPhotoPickerPresented = false
     @State private var isLoadingPickedPhoto = false
     @State private var isCameraSheetPresented = false
+    @State private var isCaptureSurfaceVisible = false
     @State private var showsLongRunningAnalysisHint = false
     @State private var confirmsNewAnalysis = false
     @State private var confirmsAnalysisRetry = false
@@ -164,15 +167,16 @@ struct NutritionView: View {
                         }
                     } else {
                         HStack {
-                            PhotosPicker(
-                                selection: $photoPickerItem,
-                                matching: .images,
-                                photoLibrary: .shared()
-                            ) {
+                            Button {
+                                foodAnalysisViewModel.metrics.begin()
+                                isPhotoPickerPresented = true
+                            } label: {
                                 Label("Foto auswählen", systemImage: "photo")
                             }
                             .buttonStyle(.borderless)
                             .disabled(foodAnalysisViewModel.isAnalyzing || isLoadingPickedPhoto)
+                            .photosPicker(isPresented: $isPhotoPickerPresented, selection: $photoPickerItem,
+                                          matching: .images, photoLibrary: .shared())
 
                             if isCameraHardwareAvailable {
                                 Button {
@@ -266,6 +270,9 @@ struct NutritionView: View {
             .navigationTitle("Ernährung")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    FoodCaptureMetricsMenu(metrics: foodAnalysisViewModel.metrics)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
                         NutritionHistoryView()
                     } label: {
@@ -287,6 +294,7 @@ struct NutritionView: View {
             }
             .onChange(of: photoPickerItem) { _, newItem in
                 guard let newItem else { return }
+                foodAnalysisViewModel.metrics.begin()
                 isLoadingPickedPhoto = true
                 Task {
                     defer {
@@ -299,6 +307,7 @@ struct NutritionView: View {
                         foodAnalysisViewModel.errorMessage = FoodAnalysisViewModel.userMessage(
                             for: .imageProcessingFailed
                         )
+                        foodAnalysisViewModel.metrics.finish(.technicalAbort)
                     }
                 }
             }
@@ -331,9 +340,24 @@ struct NutritionView: View {
                 Text("Inhalt und Vorgangs-ID bleiben gleich. Ein bereits angenommenes Ergebnis kann nicht abgerufen werden. Ohne aktivierten serverseitigen Wiederholungsschutz ist erneuter Verbrauch beim KI-Anbieter möglich.")
             }
             .onChange(of: scenePhase) { _, phase in
+                foodAnalysisViewModel.metrics.setActive(phase == .active && isCaptureSurfaceVisible)
                 if phase == .background {
                     confirmsNewAnalysis = false
                     confirmsAnalysisRetry = false
+                }
+            }
+            .onAppear {
+                isCaptureSurfaceVisible = true
+                foodAnalysisViewModel.metrics.setActive(scenePhase == .active)
+            }
+            .onDisappear {
+                if !isCameraSheetPresented && !isPhotoPickerPresented
+                    && foodAnalysisViewModel.reviewSession == nil && selectedEntryToEdit == nil {
+                    isCaptureSurfaceVisible = false
+                    foodAnalysisViewModel.metrics.setActive(false)
+                    if !foodAnalysisViewModel.isAnalyzing && !isLoadingPickedPhoto {
+                        foodAnalysisViewModel.leaveCapture()
+                    }
                 }
             }
         }
@@ -342,6 +366,7 @@ struct NutritionView: View {
     /// Only checks/requests camera *permission* here, in direct response to
     /// the user tapping "Foto aufnehmen" - never proactively on view load.
     private func requestCameraCapture() {
+        foodAnalysisViewModel.metrics.begin()
         let decision = CameraCaptureAvailability.decide(
             isCameraHardwareAvailable: isCameraHardwareAvailable,
             authorizationStatus: CameraAuthorizationStatus(AVCaptureDevice.authorizationStatus(for: .video))
@@ -535,6 +560,68 @@ extension CameraAuthorizationStatus {
         case .denied: self = .denied
         case .restricted: self = .restricted
         @unknown default: self = .restricted
+        }
+    }
+}
+
+private struct FoodCaptureMetricsMenu: View {
+    @ObservedObject var metrics: FoodCaptureMetrics
+    @State private var document: BackupDocument?
+    @State private var exporting = false
+    @State private var importing = false
+    @State private var confirmingDeletion = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Menu {
+            if metrics.storageFailed {
+                Label("Messdaten unvollständig", systemImage: "exclamationmark.triangle")
+            }
+            Button {
+                do {
+                    document = BackupDocument(data: try metrics.export())
+                    exporting = true
+                } catch { errorMessage = "Die Messdaten konnten nicht exportiert werden." }
+            } label: {
+                Label("Messdaten exportieren", systemImage: "square.and.arrow.up")
+            }
+            Button { importing = true } label: {
+                Label("Kostenbeleg importieren", systemImage: "square.and.arrow.down")
+            }
+            Button(role: .destructive) { confirmingDeletion = true } label: {
+                Label("Messdaten löschen", systemImage: "trash")
+            }
+            .disabled(metrics.currentID != nil)
+        } label: {
+            Image(systemName: metrics.storageFailed ? "exclamationmark.triangle" : "chart.bar.xaxis")
+        }
+        .accessibilityLabel("Lokale Produktmessung")
+        .help("Lokale Produktmessung")
+        .fileExporter(isPresented: $exporting, document: document, contentType: .json,
+                      defaultFilename: "produktmessung-v1.json") { result in
+            if case .failure = result { errorMessage = "Die Messdaten konnten nicht exportiert werden." }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            do {
+                let url = try result.get()
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                guard let size, size <= 1_000_000 else { throw CocoaError(.fileReadTooLarge) }
+                try metrics.importCosts(Data(contentsOf: url))
+            } catch { errorMessage = "Der Kostenbeleg konnte nicht zugeordnet werden. Messdaten wurden nicht ersetzt." }
+        }
+        .confirmationDialog("Lokale Messdaten löschen?", isPresented: $confirmingDeletion, titleVisibility: .visible) {
+            Button("Messdaten löschen", role: .destructive) {
+                do { try metrics.deleteMeasurements() }
+                catch { errorMessage = "Die Messdaten konnten nicht gelöscht werden." }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        }
+        .alert("Produktmessung", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
     }
 }

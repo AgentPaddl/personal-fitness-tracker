@@ -182,8 +182,8 @@ struct FoodAnalysisReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Abbrechen") {
-                        session.close()
+                    Button("Verwerfen", role: .destructive) {
+                        session.discard()
                         dismiss()
                     }
                     .disabled(isSaving)
@@ -217,6 +217,7 @@ struct FoodAnalysisReviewView: View {
                 Text("Inhalt und Vorgangs-ID bleiben gleich. Bereits angenommene Ergebnisse können nicht abgerufen werden. Ohne aktivierten serverseitigen Wiederholungsschutz ist erneuter Verbrauch beim KI-Anbieter möglich.")
             }
             .onChange(of: scenePhase) { _, phase in
+                session.metrics?.setActive(phase == .active)
                 if phase == .background {
                     confirmsNewRefinement = false
                     confirmsRefinementRetry = false
@@ -240,7 +241,7 @@ struct FoodAnalysisReviewView: View {
             fatGrams: input.fatGrams
         )
 
-        let result = session.persistenceCoordinator.save(
+        let result = session.save(
             insert: { modelContext.insert(entry) },
             persist: { try modelContext.save() },
             rollback: { modelContext.delete(entry) }

@@ -146,6 +146,96 @@ private func makeEstimate() -> FoodAnalysisResponseDTO.Estimate {
 
 @MainActor
 final class FoodAnalysisViewModelTests: XCTestCase {
+    func testPreparedInputResumedAfterLeavingHasIncompleteTiming() async throws {
+        let metrics = FoodCaptureMetrics()
+        let model = FoodAnalysisViewModel(service: StubService(result: .success(makeEstimate())), metrics: metrics)
+        model.descriptionText = "synthetic"
+        model.leaveCapture()
+        await model.analyze()
+        let session = try XCTUnwrap(model.reviewSession)
+        XCTAssertEqual(session.save(insert: {}, persist: {}, rollback: {}), .saved)
+        XCTAssertEqual(metrics.archive.captures.map(\.outcome), [.incomplete, .saved])
+        XCTAssertFalse(metrics.archive.captures[1].timingComplete)
+    }
+
+    func testCaptureMetricsUseReviewAndOperationIDsAndOnlyCommittedSaveCompletes() async throws {
+        var now: Double = 0
+        let metrics = FoodCaptureMetrics(clock: { now })
+        let service = StubService(result: .success(makeEstimate()))
+        let model = FoodAnalysisViewModel(service: service, metrics: metrics)
+        model.descriptionText = "private synthetic input"
+        let identifier = metrics.currentID
+        now = 4
+        await model.analyze()
+        let session = try XCTUnwrap(model.reviewSession)
+        XCTAssertEqual(session.id, identifier)
+        XCTAssertEqual(metrics.archive.captures[0].operations[0].id, service.operations[0].id)
+        session.currentDraft.name = "private edited name"
+        session.correctionText = "private correction"
+        await session.refine()
+        XCTAssertEqual(metrics.archive.captures[0].operations.filter(\.isCorrection).count, 1)
+        XCTAssertEqual(metrics.archive.captures[0].manualCorrectionRounds, 1)
+        XCTAssertEqual(metrics.archive.captures[0].operations[1].id, service.operations[1].id)
+        let failed = session.save(insert: {}, persist: { throw CocoaError(.fileWriteUnknown) }, rollback: {})
+        XCTAssertEqual(failed, .failed)
+        XCTAssertEqual(metrics.archive.captures[0].outcome, .inProgress)
+        now = 12
+        XCTAssertEqual(session.save(insert: {}, persist: {}, rollback: {}), .saved)
+        XCTAssertEqual(session.save(insert: { XCTFail("duplicate") }, persist: {}, rollback: {}), .skipped)
+        model.clearAfterSave()
+        XCTAssertNil(metrics.currentID)
+        XCTAssertEqual(metrics.archive.captures.count, 1)
+        XCTAssertEqual(metrics.archive.captures[0].outcome, .saved)
+        XCTAssertEqual(metrics.archive.captures[0].activeSeconds, 12)
+        XCTAssertEqual(metrics.costSummary.unknownOperations, 2)
+        let exported = String(data: try metrics.export(), encoding: .utf8)!
+        XCTAssertFalse(exported.contains("private"))
+        XCTAssertFalse(exported.contains("Apfel"))
+    }
+
+    func testDiscardAndTechnicalAbortRemainMeasuredWithoutEntries() async throws {
+        let metrics = FoodCaptureMetrics()
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let model = FoodAnalysisViewModel(service: service, metrics: metrics)
+        model.descriptionText = "synthetic"
+        await model.analyze()
+        XCTAssertEqual(metrics.archive.captures[0].outcome, .inProgress)
+        XCTAssertEqual(metrics.archive.captures[0].operations[0].technicalAborts, 1)
+        service.result = .success(makeEstimate())
+        await model.retryOperation()
+        let session = try XCTUnwrap(model.reviewSession)
+        session.discard()
+        model.closeReviewSession()
+        XCTAssertEqual(metrics.archive.captures.map(\.outcome), [.discarded])
+        XCTAssertEqual(metrics.archive.captures[0].operations[0].sends, 2)
+        XCTAssertEqual(metrics.costSummary.unknownOperations, 1)
+        XCTAssertFalse(session.persistenceCoordinator.hasCommitted)
+    }
+
+    func testRetryTimeRemainsInSameCaptureAndLeavingFailureIsTechnicalAbort() async throws {
+        var now: Double = 0
+        let metrics = FoodCaptureMetrics(clock: { now })
+        let service = StubService(result: .failure(FoodAnalysisError.timeout))
+        let model = FoodAnalysisViewModel(service: service, metrics: metrics)
+        model.descriptionText = "synthetic"
+        now = 5
+        await model.analyze()
+        service.result = .success(makeEstimate())
+        now = 20
+        await model.retryOperation()
+        now = 30
+        let session = try XCTUnwrap(model.reviewSession)
+        XCTAssertEqual(session.save(insert: {}, persist: {}, rollback: {}), .saved)
+        XCTAssertEqual(metrics.archive.captures.count, 1)
+        XCTAssertEqual(metrics.archive.captures[0].activeSeconds, 30)
+        model.clearAfterSave()
+        service.result = .failure(FoodAnalysisError.timeout)
+        model.descriptionText = "another synthetic input"
+        await model.analyze()
+        model.leaveCapture()
+        XCTAssertEqual(metrics.archive.captures.map(\.outcome), [.saved, .technicalAbort])
+    }
+
     func testFailedReplacementCannotLeaveAnOldEstimateConfirmable() async throws {
         let service = StubService(result: .success(makeEstimate()))
         let model = FoodAnalysisViewModel(service: service)
