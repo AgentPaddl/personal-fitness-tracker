@@ -14,7 +14,7 @@ import io
 import json
 import os
 import time
-from typing import Annotated, Protocol
+from typing import Annotated, Literal, Protocol
 from uuid import UUID
 
 from PIL import Image
@@ -88,11 +88,22 @@ class AcceptanceRun(BaseModel):
 
 class OwnerUsage(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    daily_attempts: Annotated[int, Field(strict=True, ge=1, le=3)]
-    max_attempts: Annotated[int, Field(strict=True, ge=1, le=12)]
-    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("2.8116"), allow_inf_nan=False)]
+    quota: Literal["owner-100-v1"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    daily_attempts: Annotated[int, Field(strict=True, ge=1, le=10)]
+    max_attempts: Annotated[int, Field(strict=True, ge=1, le=100)]
+    max_reserved_usd: Annotated[Decimal, Field(gt=0, le=Decimal("23.43"), allow_inf_nan=False)]
     max_period_usd: Annotated[Decimal, Field(gt=0, le=Decimal("3.76500465"), allow_inf_nan=False)]
     expires_at: Positive
+
+    @model_validator(mode="after")
+    def quota_bounds(self):
+        if self.quota is None and (self.daily_attempts > 3 or self.max_attempts > 12
+                                  or self.max_reserved_usd > Decimal("2.8116")):
+            raise ValueError("Legacy owner limits cannot expand implicitly.")
+        if self.quota and (self.daily_attempts != 10 or self.max_attempts != 100
+                           or self.max_reserved_usd != Decimal("23.43")):
+            raise ValueError("The prepared owner quota must be exactly 10/100.")
+        return self
 
 
 class PilotPolicy(BaseModel):
@@ -213,7 +224,7 @@ class Coordinator:
         revised_policy = PilotPolicy.model_validate(revised_policy.model_dump(mode="json"))
         previous = self.policy.model_dump(mode="json")
         owner = revised_policy.owner_usage
-        if (self.policy.owner_usage or not self.policy.acceptance or not owner
+        if (self.policy.owner_usage or not self.policy.acceptance or not owner or owner.quota
                 or len(self.allowlist) != 1 or self.policy.acceptance.max_attempts != 16
                 or self.policy.acceptance.max_reserved_usd != Decimal("3.7488")
                 or not self.clock() < owner.expires_at <= self.policy.acceptance.expires_at
@@ -267,6 +278,45 @@ class Coordinator:
         ledger["owner_usage"] = {"attempts": 0, "reserved": 0, "period_cost": cost,
                                  "day": "", "day_attempts": 0, "day_reserved": 0}
         await self.store.commit([("ledger", ledger, etag), ("owner-transition-v1", audit, None)])
+        return audit
+
+    def proposed_owner_quota(self) -> PilotPolicy:
+        owner = self.policy.owner_usage
+        if not owner or owner.quota or len(self.allowlist) != 1:
+            raise PilotError()
+        values = self.policy.model_dump(mode="json")
+        values["owner_usage"].update(quota="owner-100-v1", daily_attempts=10,
+                                     max_attempts=100, max_reserved_usd="23.43")
+        for scope in ("person", "total"):
+            if any(values[scope][field] != expected for field, expected in (
+                    ("minute", 1), ("concurrent", 1), ("day", 19), ("month", 28),
+                    ("daily_usd", "2.343"), ("monthly_usd", "2.343"))):
+                raise PilotError()
+            values[scope].update(day=26, month=116)
+        return PilotPolicy.model_validate(values)
+
+    async def transition_owner_quota(self, revised_policy: PilotPolicy, *, expected_etag: str,
+                                     ledger_sha256: str, revised_policy_sha256: str):
+        if os.environ.get("AI_API_ONLY_ENABLED") != "false":
+            raise PilotError()
+        expected = self.proposed_owner_quota()
+        if (revised_policy.model_dump(mode="json") != expected.model_dump(mode="json")
+                or hashlib.sha256(canonical(expected.model_dump(mode="json"))).hexdigest() != revised_policy_sha256):
+            raise PilotError()
+        ledger, etag = await self._read_ledger()
+        if (not etag or etag != expected_etag or ledger["active"]
+                or not ledger["last_time"] <= self.clock() < expected.owner_usage.expires_at
+                or hashlib.sha256(canonical(ledger)).hexdigest() != ledger_sha256
+                or ledger["owner_usage"]["attempts"] > 100):
+            raise PilotError()
+        revised = Coordinator(self.store, expected, self.secret, self.allowlist, self.prices,
+                              self.routes, self.clock, profile_bindings=self.profile_bindings,
+                              max_output_tokens=self.max_output_tokens)
+        audit = {"previous_policy": self.policy_id, "revised_policy": revised.policy_id,
+                 "previous_ledger_sha256": ledger_sha256, "revised_policy_sha256": revised_policy_sha256,
+                 "owner_usage": dict(ledger["owner_usage"]), "created": self.clock()}
+        ledger["policy"] = revised.policy_id
+        await self.store.commit([("ledger", ledger, etag), ("owner-quota-v1", audit, None)])
         return audit
 
     def bound(self, request: StructuredGenerationRequest) -> int:
@@ -344,8 +394,14 @@ class Coordinator:
         if self.policy.owner_usage:
             run = ledger.get("owner_usage")
             audit, _ = await self.store.read("owner-transition-v1")
+            audit_policy = self.policy_id
+            if self.policy.owner_usage.quota:
+                quota_audit, _ = await self.store.read("owner-quota-v1")
+                if not quota_audit or quota_audit.get("revised_policy") != self.policy_id:
+                    raise PilotError()
+                audit_policy = quota_audit.get("previous_policy")
             if (len(self.allowlist) != 1 or not isinstance(run, dict) or not audit
-                    or audit.get("revised_policy") != self.policy_id
+                    or audit.get("revised_policy") != audit_policy
                     or ledger.get("acceptance") != {"attempts": 16, "reserved": 3748800000}
                     or audit.get("acceptance") != ledger["acceptance"]
                     or audit.get("baseline_cost") != 953404650 or audit.get("holds") != 4

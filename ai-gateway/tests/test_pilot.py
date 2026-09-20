@@ -303,6 +303,106 @@ def owner_metadata():
                               TokenUsage(100, 20, 0, 0), price_version=GPT_54_MINI.price_version,
                               profile_id=GPT_54_MINI.identifier, service_tier="default")
 
+async def migrate_quota(control):
+    import hashlib
+    from app.pilot import canonical
+
+    policy = control.proposed_owner_quota()
+    ledger, etag = await control.store.read("ledger")
+    await control.transition_owner_quota(policy, expected_etag=etag,
+        ledger_sha256=hashlib.sha256(canonical(ledger)).hexdigest(),
+        revised_policy_sha256=hashlib.sha256(canonical(policy.model_dump(mode="json"))).hexdigest())
+    return owner_coordinator(control, policy)
+
+
+def test_prepared_quota_counts_existing_owner_usage_and_preserves_holds(monkeypatch):
+    from tests.test_openai_api import _request
+
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+
+    async def run():
+        old, policy = owner_transition_fixture()
+        await migrate_owner(old, policy)
+        control = owner_coordinator(old, policy)
+        generation = _request(max_output_tokens=2000)
+        for sequence in range(100):
+            instant = 1790726400 + sequence // 10 * 86400 + sequence % 10 * 61
+            control.clock = lambda: instant
+            if sequence == 2:
+                before = deepcopy(control.store.rows)
+                control = await migrate_quota(control)
+                after = control.store.rows["ledger"][0]
+                assert {key: value for key, value in after.items() if key != "policy"} == {
+                    key: value for key, value in before["ledger"][0].items() if key != "policy"}
+                assert all(control.store.rows[key] == value for key, value in before.items() if key != "ledger")
+                assert after["owner_usage"]["attempts"] == 2
+            key = await control.reserve(IDENTITY, operation(instant, sequence), "synthetic",
+                                        control.bound(generation), control.admission(generation))
+            await control.mark_dispatched(key)
+            await control.settle(key, "succeeded", owner_metadata())
+            if sequence % 10 == 9:
+                control.clock = lambda: instant + 61
+                with pytest.raises(PilotError, match="usage limit"):
+                    await control.reserve(IDENTITY, operation(control.clock(), 999), "eleventh",
+                                          234300000, control.admission(generation))
+            control = owner_coordinator(control, control.policy)
+        control.clock = lambda: instant + 86400
+        with pytest.raises(PilotError, match="usage limit"):
+            await control.reserve(IDENTITY, operation(control.clock(), 1000), "101st",
+                                  234300000, control.admission(generation))
+        ledger = control.store.rows["ledger"][0]
+        assert ledger["owner_usage"]["attempts"] == 100
+        assert ledger["owner_usage"]["reserved"] == 23430000000
+        assert ledger["owner_usage"]["period_cost"] >= 953404650
+        assert sum(not row[0].get("usage_known", True) for key, row in control.store.rows.items()
+                   if key.startswith("op-")) == 4
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["enabled", "active", "blocked", "money", "etag", "new_hold"])
+def test_prepared_quota_stays_fail_closed(monkeypatch, failure):
+    from tests.test_openai_api import _request
+    import hashlib
+    from app.pilot import canonical
+
+    monkeypatch.setenv("AI_API_ONLY_ENABLED", "false")
+
+    async def run():
+        old, policy = owner_transition_fixture()
+        await migrate_owner(old, policy)
+        control = owner_coordinator(old, policy)
+        proposed = control.proposed_owner_quota()
+        ledger, etag = await control.store.read("ledger")
+        if failure == "enabled": monkeypatch.setenv("AI_API_ONLY_ENABLED", "true")
+        if failure == "active": control.store.rows["ledger"][0]["active"]["pending"] = "owner"
+        if failure == "blocked": control.store.rows["ledger"][0]["blocked"] = True
+        if failure == "etag": etag = "stale"
+        if failure in {"money", "new_hold"}:
+            control = await migrate_quota(control)
+            generation = _request(max_output_tokens=2000)
+            if failure == "money":
+                control.store.rows["ledger"][0]["owner_usage"]["period_cost"] = 3600000000
+            else:
+                key = await control.reserve(IDENTITY, operation(control.clock()), "hold", 234300000,
+                                            control.admission(generation))
+                await control.mark_dispatched(key)
+                await control.settle(key, "unknown", None)
+                control.clock = lambda: 1789842720
+            before = deepcopy(control.store.rows)
+            with pytest.raises(PilotError):
+                await control.reserve(IDENTITY, operation(control.clock(), 2), "blocked", 234300000,
+                                      control.admission(generation))
+        else:
+            before = deepcopy(control.store.rows)
+            with pytest.raises(PilotError):
+                await control.transition_owner_quota(proposed, expected_etag=etag,
+                    ledger_sha256=hashlib.sha256(canonical(ledger)).hexdigest(),
+                    revised_policy_sha256=hashlib.sha256(canonical(proposed.model_dump(mode="json"))).hexdigest())
+        assert control.store.rows == before
+
+    asyncio.run(run())
+
 
 def test_owner_daily_lifetime_and_money_are_separate_across_months(monkeypatch):
     from tests.test_openai_api import _request
