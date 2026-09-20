@@ -134,3 +134,64 @@ keine Anmeldung, Kamera, KI-Analyse oder Korrekturanfrage ausloesen.
   das `Build8-Testprodukt` einzeln entfernen. Pruefen, dass persoenlicher
   Bestand und urspruengliche Tagessummen unveraendert sind; kein Reset,
   kein Gesamtloeschen und keine Backup-Wiederherstellung fuer diesen Test.
+
+## Build-8-Geraetebefund und Messkorrektur
+
+Build 1.0 (8) wurde anschliessend ausdruecklich als Update ohne Deinstallation
+freigegeben, installiert und ueber App-Metadaten bestaetigt. Im Flugmodus mit
+WLAN aus bestaetigte der Nutzer Datenerhalt, Produktspeichern ohne Eintrag,
+Suche, Skalierung auf 150 g, genau einen Eintrag trotz Doppeltipp sowie die
+unveraenderte 100-g-Basis. Testeintrag und Testprodukt wurden danach vom Nutzer
+gezielt entfernt; urspruengliche Tagessummen und persoenlicher Bestand sind
+laut seiner Sichtpruefung wiederhergestellt.
+
+Die separat freigegebene USB-Pruefung las nur die technische Messdatei aus,
+nicht die Appdatenbank oder den gesamten Container. Befund: eine Erstellung
+als `incomplete`, eine Wiederverwendung als `saved`, drei als `discarded`;
+9.6 Sekunden inaktive Zeit im Hintergrundtest. Keine KI-Operationen oder
+Mahlzeiteninhalte. Der manuelle Export gelang, wurde aber nicht separat vom
+iPhone kopiert; geprueft wurde sein zugrunde liegendes Messarchiv.
+
+### Ursache und Lifecycle
+
+Die lokale Erstellung startete eine Mess-ID in `localCaptureID`, praesentierte
+den Editor aber ueber das separate Bool `showsProductEditor`. Der Sheet-Inhalt
+las die optionale ID aus dem View-Zustand statt aus seinem Praesentationsobjekt.
+Damit war bei SwiftUIs erster Sheet-Auswertung keine aktuelle ID garantiert;
+der Editor konnte ohne ID speichern und den Messaufruf still ueberspringen.
+Das anschliessende `onDismiss` schloss die noch offene Messung als `incomplete`.
+Ein zuvor erfasstes `productSaved` haette der vorhandene Terminalstatus-Guard
+nicht ueberschrieben. Die Diagnose belegt den fehlenden Erfolgsabschluss;
+der konkrete optionale SwiftUI-Wert wurde auf dem Geraet nicht per Debugger
+ausgelesen.
+
+Die Korrektur bindet `.sheet(item:)`, Editor und Messung an dieselbe
+`FoodProductEditorSession` mit fester ID. Der Editor haelt diese Session in
+`@State`; lokale Erstellung verlangt eine Messinstanz. Die Session koordiniert
+den echten isolierten SwiftData-Save und meldet `productSaved` erst nach dessen
+erfolgreicher Rueckkehr. Wiederholte Saves und nachfolgendes `onDisappear`
+bleiben nach Erfolg wirkungslos. Fehler lassen den Vorgang offen und erlauben
+Retry; Abbrechen meldet `discarded`, unbestaetigtes Schliessen `incomplete`.
+Der uebergeordnete View schliesst keine Produkterstellung mehr ueber die
+Such-/Wiederverwendungs-ID. Seine Lifecycle-Sperre beruecksichtigt die Session.
+
+Der KI-Produkteditor verwendet weiterhin die bestehende Review-ID und darf
+auch ohne Instrumentierung laufen. Sein Abbruch laesst den KI-Review offen;
+es wird kein neuer KI-Aufruf und keine zweite Messung angelegt. Vorhandene
+Messdaten werden nicht nachtraeglich als Erfolg umgeschrieben.
+
+### Gezielte Nachweise
+
+- Fuenf neue AppPersistence-Tests mit echter isolierter SwiftData-Persistierung:
+  Erfolg erst nach Save, feste ID auch nach Zuruecksetzen der Praesentation,
+  mehrfaches Schliessen/Doppelsave ohne zweites Ergebnis, Fehler mit Rollback
+  und Retry, Abbruch/Wegwischen vor oder nach Fehler, KI-Review-Kompatibilitaet.
+- Elf betroffene FoodAnalysisKit-Tests bestanden: neun Messungstests und die
+  beiden Produktreview-Tests mit Stub-Service, ohne Modellaufrufe.
+- Debug-Simulator-Build erfolgreich. Keine allgemeine Wiederholung der bereits
+  abgenommenen Produkt-, Migrations- oder Policyfunktionen.
+- Der korrigierte SwiftUI-Lifecycle ist noch nicht auf dem iPhone nachgetestet.
+  Nach gesonderter Installationsfreigabe genuegt eine neue synthetische
+  Produkterstellung mit Save, anschliessendem Schliessen und Diagnoseexport:
+  genau eine `productCreation` mit `productSaved`, keine KI-Operationen und
+  kein Ernaehrungseintrag. Alte fehlerhafte Messung unveraendert lassen.

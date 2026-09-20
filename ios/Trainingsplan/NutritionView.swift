@@ -26,7 +26,7 @@ struct NutritionView: View {
     @State private var notes = ""
     @State private var selectedEntryToEdit: FoodEntry?
     @State private var selectedProduct: FoodPreset?
-    @State private var showsProductEditor = false
+    @State private var productEditorSession: FoodProductEditorSession?
     @State private var productSearch = ""
     @State private var localCaptureID: UUID?
     @StateObject private var foodAnalysisViewModel = FoodAnalysisViewModel(
@@ -49,8 +49,7 @@ struct NutritionView: View {
                     TextField("Nach Name suchen", text: $productSearch)
                     Button {
                         closeLocalCapture()
-                        localCaptureID = foodAnalysisViewModel.metrics.beginLocalCapture(kind: .productCreation)
-                        showsProductEditor = true
+                        productEditorSession = FoodProductEditorSession(metrics: foodAnalysisViewModel.metrics)
                     } label: {
                         Label("Produkt vom Etikett", systemImage: "plus")
                     }
@@ -320,8 +319,8 @@ struct NutritionView: View {
             .sheet(item: $selectedEntryToEdit) { entry in
                 EditFoodEntryView(entry: entry)
             }
-            .sheet(isPresented: $showsProductEditor, onDismiss: { closeLocalCapture() }) {
-                FoodProductEditorView(metrics: foodAnalysisViewModel.metrics, captureID: localCaptureID)
+            .sheet(item: $productEditorSession) { session in
+                FoodProductEditorView(session: session)
             }
             .sheet(item: $selectedProduct, onDismiss: { closeLocalCapture() }) { preset in
                 if let localCaptureID {
@@ -406,7 +405,7 @@ struct NutritionView: View {
     }
 
     private func leaveNutrition() {
-        guard !isCameraSheetPresented, !isPhotoPickerPresented, !showsProductEditor,
+        guard !isCameraSheetPresented, !isPhotoPickerPresented, productEditorSession == nil,
               foodAnalysisViewModel.reviewSession == nil, selectedEntryToEdit == nil,
               selectedProduct == nil else { return }
         isCaptureSurfaceVisible = false

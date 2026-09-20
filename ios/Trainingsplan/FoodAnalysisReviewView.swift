@@ -189,7 +189,8 @@ struct FoodAnalysisReviewView: View {
             .navigationTitle("KI-Schätzung")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $productDraft) { draft in
-                FoodProductEditorView(draft: draft, metrics: session.metrics, captureID: session.id) {
+                FoodProductEditorView(draft: draft,
+                    session: FoodProductEditorSession(metrics: session.metrics, captureID: session.id)) {
                     session.finishProductSave()
                     onSaved?()
                     dismiss()

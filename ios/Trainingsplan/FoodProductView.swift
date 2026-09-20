@@ -6,8 +6,7 @@ struct FoodProductEditorView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     private let onSaved: () -> Void
-    private let metrics: FoodCaptureMetrics?
-    private let captureID: UUID?
+    @State private var session: FoodProductEditorSession
     @State private var measuredValues: [String]?
     @State private var name: String
     @State private var calories: String
@@ -19,10 +18,9 @@ struct FoodProductEditorView: View {
     @State private var origin: FoodProductOrigin
     @State private var packagingConfirmed = false
     @State private var saveError: String?
-    @State private var persistence = FoodProductPersistence()
 
-        init(draft: FoodAnalysisReviewDraft? = nil, metrics: FoodCaptureMetrics? = nil,
-            captureID: UUID? = nil, onSaved: @escaping () -> Void = {}) {
+    init(draft: FoodAnalysisReviewDraft? = nil, session: FoodProductEditorSession,
+         onSaved: @escaping () -> Void = {}) {
         _name = State(initialValue: draft?.name ?? "")
         _calories = State(initialValue: draft?.calories ?? "")
         _protein = State(initialValue: draft?.protein ?? "")
@@ -30,8 +28,7 @@ struct FoodProductEditorView: View {
         _fat = State(initialValue: draft?.fat ?? "")
         _origin = State(initialValue: draft == nil ? .manual : .aiEstimate)
         _measuredValues = State(initialValue: draft.map { [$0.name, $0.calories, $0.protein, $0.carbs, $0.fat] })
-        self.metrics = metrics
-        self.captureID = captureID
+        _session = State(initialValue: session)
         self.onSaved = onSaved
     }
 
@@ -81,9 +78,7 @@ struct FoodProductEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Abbrechen") {
                         recordEdits()
-                        if let captureID, metrics?.localCaptureIDs.contains(captureID) == true {
-                            metrics?.finish(.discarded, captureID: captureID)
-                        }
+                        session.close(cancelled: true)
                         dismiss()
                     }
                 }
@@ -94,15 +89,17 @@ struct FoodProductEditorView: View {
             .onChange(of: [name, calories, protein, carbs, fat, quantity, unit?.rawValue ?? "", origin.rawValue]) { _, _ in
                 packagingConfirmed = false
             }
-            .onDisappear { recordEdits() }
+            .onDisappear {
+                recordEdits()
+                session.close()
+            }
         }
     }
 
     private func saveProduct() {
         guard let basis else { return }
         recordEdits()
-        let result = persistence.saveProduct(name: name, basis: basis, in: modelContext)
-        if let captureID { metrics?.saveResult(result, captureID: captureID, savedOutcome: .productSaved) }
+        let result = session.saveProduct(name: name, basis: basis, in: modelContext)
         switch result {
         case .saved: onSaved(); dismiss()
         case .failed: saveError = "Das Produkt konnte nicht gespeichert werden."
@@ -112,8 +109,8 @@ struct FoodProductEditorView: View {
 
     private func recordEdits() {
         let values = [name, calories, protein, carbs, fat]
-        if let measuredValues, measuredValues != values, let captureID {
-            metrics?.manualCorrection(captureID: captureID)
+        if let measuredValues, measuredValues != values {
+            session.recordCorrection()
         }
         measuredValues = values
     }

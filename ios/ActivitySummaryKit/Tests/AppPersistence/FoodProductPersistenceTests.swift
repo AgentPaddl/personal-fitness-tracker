@@ -6,6 +6,132 @@ import FoodAnalysisKit
 
 final class FoodProductPersistenceTests: XCTestCase {
     @MainActor
+    func testEditorSessionSupportsAIReviewWithoutInstrumentation() throws {
+        let context = ModelContext(try container())
+        let captureID = UUID()
+        let editor = FoodProductEditorSession(metrics: nil, captureID: captureID)
+        let basis = try XCTUnwrap(FoodProductBasis(quantity: 100, unit: .grams, origin: .aiEstimate,
+            nutrition: .init(calories: 200, protein: 10, carbs: 20, fat: 8)))
+        XCTAssertEqual(editor.id, captureID)
+        editor.recordCorrection()
+        XCTAssertEqual(editor.saveProduct(name: "Synthetic", basis: basis, in: context), .saved)
+        editor.close()
+        XCTAssertEqual(editor.saveProduct(name: "Duplicate", basis: basis, in: context), .skipped)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodPreset>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+    }
+
+    @MainActor
+    func testEditorSessionMeasuresOnlyPersistedSuccessOnceAcrossDismissal() throws {
+        let context = ModelContext(try container())
+        let metrics = FoodCaptureMetrics()
+        var presented: FoodProductEditorSession? = FoodProductEditorSession(metrics: metrics)
+        let editor = try XCTUnwrap(presented)
+        let basis = try XCTUnwrap(FoodProductBasis(quantity: 100, unit: .grams, origin: .manual,
+            nutrition: .init(calories: 200, protein: 10, carbs: 20, fat: 8)))
+        XCTAssertEqual(metrics.archive.captures.first?.id, editor.id)
+        XCTAssertEqual(editor.saveProduct(name: "Synthetic", basis: basis, in: context, save: { isolated in
+            XCTAssertEqual(metrics.archive.captures.first?.outcome, .inProgress)
+            try isolated.save()
+            XCTAssertEqual(metrics.archive.captures.first?.outcome, .inProgress)
+        }), .saved)
+        let completed = metrics.archive.captures
+        presented = nil
+        editor.close()
+        editor.close(cancelled: true)
+        editor.recordCorrection()
+        XCTAssertEqual(editor.saveProduct(name: "Duplicate", basis: basis, in: context), .skipped)
+        XCTAssertEqual(metrics.archive.captures, completed)
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.first?.kind, .productCreation)
+        XCTAssertEqual(completed.first?.outcome, .productSaved)
+        XCTAssertEqual(completed.first?.timingComplete, true)
+        XCTAssertEqual(completed.first?.operations.count, 0)
+        XCTAssertFalse(metrics.hasActiveCaptures)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodPreset>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+    }
+
+    @MainActor
+    func testEditorSessionFailureRemainsOpenAndRetryReportsProductSaved() throws {
+        let context = ModelContext(try container())
+        let metrics = FoodCaptureMetrics()
+        let editor = FoodProductEditorSession(metrics: metrics)
+        let basis = try XCTUnwrap(FoodProductBasis(quantity: 100, unit: .grams, origin: .manual,
+            nutrition: .init(calories: 200, protein: 10, carbs: 20, fat: 8)))
+        XCTAssertEqual(editor.saveProduct(name: "Synthetic", basis: basis, in: context,
+            save: { _ in throw CocoaError(.fileWriteUnknown) }), .failed)
+        XCTAssertEqual(metrics.archive.captures.first?.outcome, .inProgress)
+        XCTAssertNil(metrics.archive.captures.first?.endedAt)
+        XCTAssertEqual(metrics.archive.captures.first?.saveFailures, 1)
+        XCTAssertTrue(metrics.localCaptureIDs.contains(editor.id))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodPreset>()), 0)
+        editor.recordCorrection()
+        XCTAssertEqual(editor.saveProduct(name: "Synthetic", basis: basis, in: context), .saved)
+        editor.close()
+        XCTAssertEqual(metrics.archive.captures.count, 1)
+        XCTAssertEqual(metrics.archive.captures.first?.outcome, .productSaved)
+        XCTAssertEqual(metrics.archive.captures.first?.manualCorrectionRounds, 1)
+        XCTAssertEqual(metrics.archive.captures.first?.saveFailures, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodPreset>()), 1)
+    }
+
+    @MainActor
+    func testEditorSessionCancellationAndDismissalNeverReportSuccess() throws {
+        for failedSave in [false, true] {
+            for cancelled in [false, true] {
+                let context = ModelContext(try container())
+                let metrics = FoodCaptureMetrics()
+                let editor = FoodProductEditorSession(metrics: metrics)
+                let basis = try XCTUnwrap(FoodProductBasis(quantity: 100, unit: .grams, origin: .manual,
+                    nutrition: .init(calories: 200, protein: 10, carbs: 20, fat: 8)))
+                if failedSave {
+                    XCTAssertEqual(editor.saveProduct(name: "Synthetic", basis: basis, in: context,
+                        save: { _ in throw CocoaError(.fileWriteUnknown) }), .failed)
+                } else {
+                    XCTAssertEqual(editor.saveProduct(name: " ", basis: basis, in: context), .skipped)
+                }
+                editor.close(cancelled: cancelled)
+                let completed = metrics.archive.captures
+                editor.close()
+                editor.close(cancelled: true)
+                XCTAssertEqual(editor.saveProduct(name: "Late save", basis: basis, in: context), .skipped)
+                XCTAssertEqual(metrics.archive.captures, completed)
+                XCTAssertEqual(completed.count, 1)
+                XCTAssertEqual(completed.first?.outcome, cancelled ? .discarded : .incomplete)
+                XCTAssertEqual(completed.first?.timingComplete, cancelled)
+                XCTAssertEqual(completed.first?.saveFailures, failedSave ? 1 : 0)
+                XCTAssertFalse(metrics.hasActiveCaptures)
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodPreset>()), 0)
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+            }
+        }
+    }
+
+    @MainActor
+    func testEditorSessionKeepsOriginalAIReviewOpenOnDismissal() throws {
+        let context = ModelContext(try container())
+        let metrics = FoodCaptureMetrics()
+        let captureID = metrics.begin()
+        let dismissed = FoodProductEditorSession(metrics: metrics, captureID: captureID)
+        dismissed.close(cancelled: true)
+        dismissed.close()
+        XCTAssertEqual(metrics.currentID, captureID)
+        XCTAssertEqual(metrics.archive.captures.first?.outcome, .inProgress)
+        let reopened = FoodProductEditorSession(metrics: metrics, captureID: captureID)
+        let basis = try XCTUnwrap(FoodProductBasis(quantity: 100, unit: .grams, origin: .aiEstimate,
+            nutrition: .init(calories: 200, protein: 10, carbs: 20, fat: 8)))
+        XCTAssertEqual(reopened.saveProduct(name: "Synthetic", basis: basis, in: context), .saved)
+        reopened.close()
+        metrics.finish(.incomplete, captureID: captureID)
+        XCTAssertEqual(metrics.archive.captures.count, 1)
+        XCTAssertEqual(metrics.archive.captures.first?.kind, .aiCapture)
+        XCTAssertEqual(metrics.archive.captures.first?.outcome, .productSaved)
+        XCTAssertNil(metrics.currentID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+    }
+
+    @MainActor
     func testMalformedProductBackupIsRejectedBeforeAnyWrites() throws {
         let context = ModelContext(try container())
         context.insert(FoodEntry(name: "Existing", calories: 1, proteinGrams: 0, carbsGrams: 0, fatGrams: 0))

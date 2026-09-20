@@ -3,6 +3,46 @@ import SwiftData
 import FoodAnalysisKit
 
 @MainActor
+final class FoodProductEditorSession: Identifiable {
+    let id: UUID
+    private let metrics: FoodCaptureMetrics?
+    private let persistence = FoodProductPersistence()
+    private var isClosed = false
+
+    init(metrics: FoodCaptureMetrics) {
+        self.metrics = metrics
+        id = metrics.beginLocalCapture(kind: .productCreation)
+    }
+
+    init(metrics: FoodCaptureMetrics?, captureID: UUID) {
+        self.metrics = metrics
+        id = captureID
+    }
+
+    func saveProduct(name: String, basis: FoodProductBasis, in context: ModelContext,
+                     save: (ModelContext) throws -> Void = { try $0.save() }) -> FoodEntrySaveResult {
+        guard !isClosed else { return .skipped }
+        let result = persistence.saveProduct(name: name, basis: basis, in: context, save: save)
+        metrics?.saveResult(result, captureID: id, savedOutcome: .productSaved)
+        if result == .saved { isClosed = true }
+        return result
+    }
+
+    func recordCorrection() {
+        guard !isClosed else { return }
+        metrics?.manualCorrection(captureID: id)
+    }
+
+    func close(cancelled: Bool = false) {
+        guard !isClosed else { return }
+        if metrics?.localCaptureIDs.contains(id) == true {
+            metrics?.finish(cancelled ? .discarded : .incomplete, captureID: id)
+        }
+        isClosed = true
+    }
+}
+
+@MainActor
 final class FoodProductPersistence {
     private let coordinator = FoodEntryPersistenceCoordinator()
 
