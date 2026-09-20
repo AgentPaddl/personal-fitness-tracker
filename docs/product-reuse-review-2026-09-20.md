@@ -195,3 +195,32 @@ Messdaten werden nicht nachtraeglich als Erfolg umgeschrieben.
   Produkterstellung mit Save, anschliessendem Schliessen und Diagnoseexport:
   genau eine `productCreation` mit `productSaved`, keine KI-Operationen und
   kein Ernaehrungseintrag. Alte fehlerhafte Messung unveraendert lassen.
+
+## Korrigiertes Update 1.0 (9), Noch Nicht Installiert
+
+Messkorrektur separat als `7b4e846` committed und regulaer gepusht. Danach
+installierten Build 1.0 (8) ausschliesslich ueber App-Metadaten bestaetigt;
+auch lokale Bundles und Archive reichen bis Build 8. Naechste lokale Nummer
+ist 9, ohne App-Store-Connect-Abfrage oder Reservierung.
+
+Buildnummer 8 -> 9 in Debug/Release; lokale Pilotfreigabe um 9 erweitert,
+unfreigegebener Build 10 bleibt gesperrt. 50 gezielte Validator-Tests bestanden.
+Release/Pilot mit `PILOT_ACCEPTANCE` signiert fuer ARM64/iPhoneOS gebaut.
+Bundle-Version 1.0 (9), `com.benedikt.Trainingsplan`, Team `2SF7PV3WCD`;
+`codesign --verify --deep --strict` bestanden. Oeffentliche Pilotwerte gegen
+die bereits geprueften lokalen Deployment-Outputs und Build 8 abgeglichen.
+Entitlements, Callback, Keychain-Gruppe und Entwicklungsprofil unveraendert;
+Profil weiterhin bis 04.09.2027 gueltig. Keine neue Provisionierung.
+
+```text
+/Users/benedikt/Library/Developer/Xcode/DerivedData/pft-iphone-update9-20260920/Build/Products/Release-iphoneos/Trainingsplan.app
+```
+
+SHA-256 des signierten App-Executables:
+`db49de28919455fbd355b0f1d5bf9ebcaed9b5bb606d2aa707ca1985fd063895`.
+
+Build 9 wurde nicht installiert oder gestartet. Keine persoenlichen Appdaten,
+Diagnosehistorien, Cloudkonfiguration, Kontingente, Policys oder CLI-Kontexte
+veraendert. Kein Modellaufruf und kein Upload. Der Buildnummercommit enthaelt
+nur die zwei Versionszeilen der Projektdatei; der vorbestehende reine
+Formatierungsdiff bleibt erhalten und uncommitted.
