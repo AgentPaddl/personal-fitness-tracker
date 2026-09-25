@@ -54,6 +54,9 @@ struct FoodLabelScanView: View {
                             LabeledContent("Eiweiß", value: display(selected.protein, unit: "g"))
                             LabeledContent("Kohlenhydrate", value: display(selected.carbs, unit: "g"))
                             LabeledContent("Fett", value: display(selected.fat, unit: "g"))
+                            ForEach(Array(issues.filter { $0.columnID == selected.id && $0.reason == .nonExactValue }.enumerated()), id: \.offset) { _, issue in
+                                Text(issueDescription(issue)).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -64,6 +67,7 @@ struct FoodLabelScanView: View {
                             LabeledContent("Bild für OCR", value: "\(recognition.image.width) × \(recognition.image.height)")
                             LabeledContent("Textbereiche / Wörter", value: "\(recognition.lines.count) / \(recognition.tokens.count)")
                             LabeledContent("Bereiche mit geringer Sicherheit", value: "\(recognition.lowConfidenceCount)")
+                            LabeledContent("Am Bildrand begrenzte Wörter", value: "\(recognition.clippedWordCount)")
                             ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
                                 Text(issueDescription(issue)).font(.caption)
                             }
@@ -205,7 +209,8 @@ struct FoodLabelScanView: View {
         case .repeatedRows: reason = "Mehrere passende Beschriftungen; Zuordnung bleibt offen."
         case .missingValueOrUnit: reason = "Zahl und explizite Einheit nicht eindeutig derselben Zelle zugeordnet."
         case .ambiguousValues: reason = "Mehrere Werte ohne eindeutige Zuordnung."
-        case .ambiguousOCRNumber: reason = "Vision liefert unterschiedliche Zahlenlesarten. Die Angabe bleibt offen."
+        case .ambiguousOCRNumber: reason = "Widersprüchliche Zahlenlesarten oder angeschnittene Angabe. Die Angabe bleibt offen."
+        case .nonExactValue: reason = "Ungleichheitsangabe auf dem Etikett. Kein exakter Wert speicherbar; bitte im Editor manuell prüfen und ergänzen."
         case .outsideColumn: reason = "Kein Wert eindeutig innerhalb dieser Bezugsspalte."
         case .outOfRange: reason = "Wert außerhalb des zulässigen Bereichs."
         }

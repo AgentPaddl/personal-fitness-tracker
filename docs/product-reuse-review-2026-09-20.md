@@ -4,6 +4,202 @@ Stand: 2026-09-20. Aufbauend auf Messpaket `ed6a59d`. Ausschliesslich lokale
 Entwicklung und synthetische Tests; keine Anmeldung, Modellaufrufe, Cloud-
 oder Policyaktivierung. Keine Installation und keine Buildnummeraenderung.
 
+## Pruefbare Scanner-Zwischenversion 25.09.2026
+
+Nach gesonderter Nutzerfreigabe wird der aktuelle Scannerstand committed und
+gepusht; die naechste Buildnummer und das signierte Pilotupdate werden separat
+vorbereitet. Keine Installation, kein Appstart, kein Cloud-/Modellaufruf.
+
+Der abschliessende Diffreview fand zwei konkrete Sicherheitsluecken im neuen
+vertikalen Panelpfad. Gegenproben im bestehenden Test schlugen jeweils vor der
+Korrektur fehl: ein Fat-Wort innerhalb von Saturated Fat konnte als Gesamtfett
+gelten, und eine zusaetzliche nackte 100-g-Ueberschrift konnte neben der
+Portionsbasis uebersehen werden. Beide Faelle sperren nun die betreffende
+Zuordnung. Keine weiteren Parsererweiterungen ohne neuen konkreten Befund.
+
+208 Pakettests und 13 Produktspeichertests bestanden, ein Test fuer das fehlende
+IMG_1288 wurde uebersprungen. Die sechs vorhandenen Original-/JPEG-Durchlaeufe
+haben weiterhin genau den unten dokumentierten Feldstatus. Simulator-Build
+erfolgreich. Vorbestehende Xcode-Formatierung bleibt unveraendert und ausserhalb
+der beiden Commits.
+
+Review zeigt nil als "Offen", echte Null bleibt eine Zahl. Teilwerte sind
+uebernehmbar; unbekannte Werte und Basis werden im Editor leer und ergaenzbar.
+Vorhandene Werte werden nur nach expliziter Ersetzungsbestaetigung geloescht oder
+ersetzt; der Name bleibt erhalten. Ungleichheiten erscheinen direkt als Hinweis
+zur manuellen Pruefung. Kein automatisches Speichern, kein FoodEntry durch Scan.
+Diese UI-Pfade sind im Code geprueft, aber mit dem neuen Bundle noch nicht am
+Geraet bestaetigt: Teiluebernahme, manuelle Ergaenzung, Null/offen, Spaltenwechsel,
+Abbruch, Ersetzungsdialog und anschliessendes ausdrueckliches Produktspeichern.
+
+IMG_1288 und ein noch nicht zur Anpassung verwendetes unabhaengiges Etikett
+bleiben offene Bildpruefungen. Weder bestandene Tests noch ein signiertes Bundle
+sind eine vollstaendige Erkennungs- oder Geraeteabnahme.
+
+## Falluebergreifender Scannerreview 25.09.2026: Zwischenstand nach Build 11
+
+Build 11 wurde nach ausdruecklicher Freigabe als Update ueber WLAN installiert;
+Zielgeraet und Version 1.0 (11) wurden danach geprueft. Dieser anschliessende
+Review bereitet **kein weiteres Geraetebuild** vor. Aenderungen bleiben
+uncommitted. Kein Cloud-/Modellaufruf und keine CLI-Kontextaenderung.
+
+### Belegarten und Referenzen
+
+Drei iPhone-Diagnosen dokumentieren zwei globale Eingabeabbrueche sowie einen
+Teiltreffer. Die zuerst genannten Dateien mit Endungen 91/93/95 sind Screenshots
+mit Wortrechtecken, keine unveraenderten OCR-Eingaben. Sie wurden nicht als
+Originale erneut durch OCR geschickt. Neue, vom Nutzer bereitgestellte HEICs
+mit Endungen 97/98/99 sind **Reproduktionsaufnahmen**, nicht dieselben frueheren
+Kamera-Bytes. 97/98 zeigen abfotografierte Bildschirmetiketten, 99 eine direkte
+Verpackungsaufnahme. Alle Originale bleiben ausserhalb des Repositories und
+unveraendert. Temporaere Vorschauen werden nach der lokalen Sichtung entfernt.
+
+Referenzen werden nur im Test verglichen, niemals dem Produktionsparser
+uebergeben. Rohtexte und Bilder werden weder in Tests eingebettet noch exportiert.
+Der bestehende AppPersistence-Harness ruft den echten App-Vision-Adapter und
+den echten Parser auf; je HEIC wird zusaetzlich eine JPEG-Variante nur im Speicher
+erzeugt. macOS-Vision ist kein Nachweis identischer iPhone-OCR.
+
+| Fall / neue Datei in Downloads | Referenz | Ausgangszustand neue Aufnahme | Aktueller lokaler Stand, HEIC und JPEG |
+| --- | --- | --- | --- |
+| 1 / IMG_1298.heic | 100 ml; 26 kcal; Fett <0,1 g; KH 6 g; Eiweiss 0,12 g | keine Spalte: invalidInput | Basis, kcal, KH und Eiweiss korrekt; Fett bewusst offen: nonExactValue |
+| 2 / IMG_1297.heic | Portion 125 g; 119 Calories; Fett 2,1 g; keine KH-/Eiweissmenge angegeben | keine Spalte: missingOrConflictingHeader | Portionsbasis und kcal korrekt; Fett fehlt; KH/Eiweiss mangels Mengenangabe offen |
+| 3 / IMG_1299.HEIC | 100 g; 577 kcal; Fett 41,1 g; KH 37,4 g; Eiweiss 14,3 g | 100 g korrekt, alle Naehrwerte offen | Basis, kcal und KH korrekt; Fett/Eiweiss fehlen |
+
+Keine falsch zugeordneten angebotenen Felder in den sechs abschliessenden
+Durchlaeufen. Das ist **keine vollstaendige Erkennungsabnahme**. Der Test verlangt
+die oben genannten korrekten Felder ausdruecklich, nicht bloss das Ausbleiben
+falscher Werte. Bekannte Luecken bleiben sichtbar. Der Vergleich mit frueheren
+iPhone-Diagnosen ist kein Vorher-/Nachher-Vergleich identischer Eingaben.
+
+### Fortsetzung: Feldstatus und Verbleibende Ursachen
+
+Jeweils gleicher Endstatus fuer Original und JPEG; "fehlend" bedeutet nicht null.
+Die opt-in Diagnose bestaetigt die Referenzziffern auch fuer die fehlenden
+Fett-/Eiweisswerte. Daraus allein folgt noch keine sichere Feldzuordnung.
+
+| Fall | Feld | Ergebnis | Ursache / Zuordnung |
+| --- | --- | --- | --- |
+| 1 | Basis | korrekt | explizite 100-ml-Ueberschrift mit Doppelpunkt |
+| 1 | kcal | korrekt | getrennte kJ/kcal-Token und gebogene Beschriftungs-/Wertzeile |
+| 1 | KH | korrekt | beschriftete Grammzelle |
+| 1 | Eiweiss | korrekt | gebogene Beschriftungs-/Wertzeile, explizite Grammangabe |
+| 1 | Fett | fehlend, bewusst | lesbare Ungleichheit; nonExactValue, kein exakter speicherbarer Wert |
+| 2 | Basis | korrekt | explizite serving-Masse, keine Umrechnung auf 100 g |
+| 2 | kcal | korrekt | Calories ueber dem Wert, gemeinsame geneigte Beschriftungsreihe |
+| 2 | Fett | fehlend | Zielzahl vorhanden, primaeres Fat-Label fehlt; siehe OCR-Grenze unten |
+| 2 | KH | fehlend, korrekt offengelassen | nur Sugar-Menge sichtbar; kein Gesamt-KH-Feld |
+| 2 | Eiweiss | fehlend, korrekt offengelassen | Werbehinweis ohne Eiweissmenge |
+| 3 | Basis | korrekt | explizite 100-g-Ueberschrift |
+| 3 | kcal | korrekt | vollstaendige Energiezeile wird nicht in die Ueberschrift erweitert |
+| 3 | KH | korrekt | exakt erkannte Beschriftungsalternative; JPEG benoetigt lokalen Wortausschnitt |
+| 3 | Fett | fehlend | Zahl/Grammangabe vorhanden, keine belastbare Fett-Beschriftung; missingRow |
+| 3 | Eiweiss | fehlend | keine belastbare Eiweiss-Beschriftung; zusaetzlich Einheitenfragment als Ziffer erkannt; missingRow |
+
+Bei Fall 2 liefert der begrenzte Ausschnittversuch im JPEG einen Fat-Treffer mit
+Confidence 1,0, dessen Rechteck aber nur ca. 0,662 Intersection-over-Union mit
+dem Ausgangswort erreicht. Der unveraenderte Uebernahmegrenzwert 0,8 sperrt ihn;
+das Original liefert dort keinen unterstuetzten Beschriftungstreffer. Dies ist
+eine verbleibende OCR-/Geometriegrenze, nicht eine unlesbare Fettzahl. Bei Fall 3
+liefern weder Vollbild- noch lokale Beschriftungserkennung belastbare Fett- oder
+Eiweisslabels. Daraus wird nicht behauptet, dass diese Aufdrucke fuer Menschen
+unlesbar seien. Es bleiben echte Erkennungsdefizite; keine geratenen Aliasregeln.
+
+Ein gesonderter lokaler Vision-Lauf mit festem deutschem/englischem
+Naehrwertvokabular kann nur nichtnumerische, bisher nicht erkannte Beschriftungen
+ergaenzen. Zusaetzliche Wortausschnitte sind auf 32 begrenzt und bleiben im
+Speicher. Treffer benoetigen Confidence >= 0,8 und Boxueberlappung >= 0,8;
+widerspruechliche Labels werden nicht uebernommen. Bereits erkannte Sugar-/Fat-
+Labels werden nie umgedeutet. Zahlen und Einheiten stammen weiter ausschliesslich
+aus dem primaeren unkorrigierten Lauf. Optionale OCR-Fehler verwerfen keine
+primaeren Ergebnisse; keine automatische Sprachdetektion hinzugefuegt, da der
+lokale Versuch keinen Zusatznutzen zeigte. Der reine Versuchscode wurde entfernt.
+
+Die Beschriftungswiedergewinnung deckte zwischenzeitlich eine falsche KH-Zuordnung
+in Fall 3 auf: aufeinanderfolgende Vision-Beobachtungen sind keine garantierte
+Tabellenreihenfolge. Eine oberhalb liegende Wertzeile darf nicht ueber diese
+Paarregel gebunden werden. Nachweislich flache, vollstaendige geometrische Zeilen
+haben Vorrang; gekruemmte Zeilen werden separat behandelt. Beide Konflikte sind
+synthetisch und anschliessend mit allen sechs Bildvarianten abgesichert.
+
+Englische Tabellen und vertikale Portionsfelder werden ueber allgemeine
+Beschriftungen, gemessene Textneigung und eindeutige Zellnachbarschaften gelesen.
+Sugar/Saturates/Salt, Prozentangaben und Protein-Werbeaussagen bleiben ausgeschlossen.
+Pro-100-g/ml- und Portionsspalten werden nicht vermischt. Fehlende Portionsmasse
+bleibt leer; widerspruechliche Bezugsangaben sperren die Zuordnung.
+
+Ungleichheiten werden pro Zelle als nonExactValue diagnostiziert, niemals als
+exakte Null oder Grenzzahl gespeichert. Der unveraenderte Speichervertrag kennt
+keine Obergrenze. Deshalb erscheint der Hinweis direkt im Review, nicht erst in
+der aufgeklappten Diagnose, und verlangt manuelle Pruefung/Ergaenzung im Editor.
+
+### Nachgewiesene Ursachen und Begrenzte Korrekturen
+
+- Fall 1: Ein peripheres Wortrechteck endet bei Y ca. 1,00225 (JPEG ca. 1,00159).
+  Ein einziger Randtoken loeste bisher die globale Eingabeablehnung aus. Der
+  Adapter schneidet nun teilweise sichtbare Boxen an den Bildgrenzen ab, statt
+  allgemeine Geometrie-/Confidence-Schwellen zu lockern. Vollstaendig ausserhalb
+  liegende, nichtendliche oder leere Boxen werden weiterhin abgelehnt. Angeschnittene
+  Zahlen und Einheiten bleiben unsicher; Anzahl begrenzter Woerter in der
+  ausschliesslich fluechtigen Diagnose. Keine stillschweigend geloeschten Tokens.
+- Danach belegte Fall 1 einen Doppelpunkt hinter der expliziten Bezugsangabe
+  sowie ein verbundenes kJ/Zahl-Token. Satzzeichen nach Einheiten werden akzeptiert;
+  der Adapter trennt am kJ/Zahl-Uebergang mit echten Vision-Substring-Boxen.
+  Referenzspalte und Kohlenhydrate werden dadurch pruefbar. Energie/Eiweiss waren
+  im ersten Zwischenstand trotz vorhandener Zahlen und Beschriftungen offen;
+  die oben beschriebene Fortsetzung loest diese geschwungene Tabellenzuordnung.
+  Fett hat eine echte Ungleichheit und darf nicht als exakter Wert erscheinen.
+- Fall 2: Die neue Aufnahme reproduziert den frueheren invalidInput-Abbruch nicht.
+  Bezugszahl und Zielzahlen sind im OCR-Ergebnis vorhanden. Englische
+  serving/Calories-Beschriftung, fehlende exakte Fat-Beschriftung und vertikale,
+  schraeg nebeneinander angeordnete Felder passen nicht zur bisherigen deutschen
+  Zeilentabellenlogik. Keine erfundene Gramm-/kcal-Einheit, keine Uebernahme von
+  Sugar als Kohlenhydrate und keine Ableitung einer Eiweisszahl aus einem Werbehinweis.
+- Fall 3: Eine vollstaendige Energiezeile wurde durch die Nachbarschaftserweiterung
+  mit der nahen Bezugsueberschrift vermischt. Eine neue synthetische Pruefung
+  schlug vor der Korrektur fehl und besteht danach. Vollstaendige Zeilen werden
+  nicht mehr erweitert. Das echte Foto liefert nun korrekt kcal. Die drei
+  Makrozahlen sind vorhanden, ihre exakt unterstuetzten Beschriftungen fehlen
+  im primaeren OCR-Lauf. Die Fortsetzung gewinnt KH als beobachtete Alternative
+  zurueck. Keine unscharfen produktspezifischen Aliasregeln eingefuehrt.
+- Allgemein: Beschriftete, explizit bezifferte Teilwerte einer eindeutig
+  ausgerichteten einzelnen Spalte koennen ohne Header zur Pruefung erscheinen.
+  Bezugsmenge UND Einheit bleiben leer und muessen im bestehenden Editor ergaenzt
+  werden. Mehrspaltenhinweise, numerische ungeklaerte Header sowie widerspruechliche
+  Header sperren diesen Fallback. Keine Vorgabe von 100 g oder Portionsrechnung.
+
+### Verifikation und Noch Fehlende Gegenpruefung
+
+- 208 FoodAnalysisKit-Tests bestanden, darunter 39 Parserfaelle inklusive alter
+  portabler Fixtures, englischer Tabellen/Portionsfelder, Ungleichheiten,
+  widerspruechlicher Labelalternativen und Zeilenreihenfolge-/Geometrieregressionen.
+- Sechs echte Bilddurchlaeufe im opt-in Korpustest bestanden mit explizit
+  geforderten Teiltreffern fuer alle drei Faelle sowie Verbot falscher Werte und
+  geprueften Ablehnungsgruenden fuer die verbleibenden Luecken.
+- FoodProductPersistenceTests: 14 Faelle, davon 13 bestanden und ein fehlendes
+  Referenzbild uebersprungen. Scan-Produktspeichertest: kein FoodEntry, keine KI-Operation.
+  Manuelle Ergaenzbarkeit wurde am Geraet angefragt, aber noch nicht bestaetigt.
+- Simulator Debug erfolgreich gebaut; geaenderte Dateien ohne gemeldete Diagnostik.
+- Frueheres Referenzfoto IMG_1288.HEIC liegt nicht mehr am bekannten Downloads-Pfad.
+  Der bestehende opt-in HEIC/JPEG-Test blieb unveraendert und wurde ausdruecklich
+  uebersprungen; ein neuer Dateipfad ist fuer die erneute Bildregression erforderlich.
+- Ein weiteres, bisher nicht zur Anpassung verwendetes Etikett fehlt noch fuer
+  die unabhaengige Gegenpruefung. Keine Gesamtfreigabe vor diesem Test.
+
+Aufruf im bestehenden Harness: `PFT_LABEL_CASES` enthaelt ein JSON-Array aus
+`id`, absolutem lokalem `file`, `expected` (kanonische Dezimalstrings fuer
+`basis/calories/protein/carbs/fat` und `unit`) und `required` (erforderliche
+Teiltreffer). Optional `expectedIssues` ordnet Feldern erwartete Reason-Rohwerte
+zu. Fehlende Referenzfelder verbieten eine erfundene Zahl. Optional
+`PFT_LABEL_TRACE=YES` gibt ausschliesslich Kategorien, Koordinaten und boolesche
+Referenz-Praesenz aus, niemals OCR-Rohtext. Ohne explizite Faelle wird uebersprungen.
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+zsh ios/ActivitySummaryKit/Tests/AppPersistence/run-tests.sh \
+  --filter FoodProductPersistenceTests.testLocalLabelCorpusWithExplicitPrivateImages
+```
+
 ## Fehlerreview 25.09.2026: Echter Mehrsprachiger Etikettenfall
 
 Build 10 wurde nach gesonderter Freigabe als Update ueber WLAN installiert.

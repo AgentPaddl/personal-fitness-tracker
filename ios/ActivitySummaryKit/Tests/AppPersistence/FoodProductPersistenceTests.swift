@@ -6,6 +6,106 @@ import FoodAnalysisKit
 @testable import MarkerAppPersistence
 
 final class FoodProductPersistenceTests: XCTestCase {
+    private struct LabelImageCase: Decodable {
+        let id: String
+        let file: String
+        let expected: [String: String]
+        let required: [String]
+        let expectedIssues: [String: String]?
+    }
+
+    func testLocalLabelCorpusWithExplicitPrivateImages() async throws {
+        guard let manifest = ProcessInfo.processInfo.environment["PFT_LABEL_CASES"] else {
+            throw XCTSkip("Explicit local image cases required; no image is bundled or downloaded.")
+        }
+        let cases = try JSONDecoder().decode([LabelImageCase].self, from: Data(manifest.utf8))
+        XCTAssertFalse(cases.isEmpty)
+        for imageCase in cases {
+            let data = try Data(contentsOf: URL(fileURLWithPath: imageCase.file))
+            let original = try await FoodLabelTextRecognizer.inspect(data)
+            let jpeg = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(jpeg, "public.jpeg" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, original.image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            for (variant, result) in [("original", original), ("jpeg", try await FoodLabelTextRecognizer.inspect(jpeg as Data))] {
+                let prefix = "\(imageCase.id)/\(variant)"
+                let invalid = result.tokens.filter {
+                    ![$0.x, $0.y, $0.width, $0.height].allSatisfy(\.isFinite)
+                        || $0.x < 0 || $0.y < 0 || $0.width <= 0 || $0.height <= 0
+                        || $0.x + $0.width > 1.001 || $0.y + $0.height > 1.001
+                        || $0.text.isEmpty || $0.text.count > 200
+                }
+                let analysis = FoodLabelRecognition.analyze(result.tokens)
+                XCTAssertTrue(analysis.columns.count <= 1, "\(prefix): unexpected extra reference column")
+                let reasons = analysis.issues.map { "\($0.field ?? "input"):\($0.reason.rawValue)" }.joined(separator: ",")
+                print("\(prefix): lines=\(result.lines.count), words=\(result.tokens.count), invalid=\(invalid.count), lowConfidence=\(result.lowConfidenceCount), columns=\(analysis.columns.count), issues=\(reasons)")
+                for token in invalid {
+                    print("\(prefix): invalidBox=\([token.x, token.y, token.width, token.height]), characters=\(token.text.count)")
+                }
+                let column = FoodLabelRecognition.selectedColumn(from: analysis.columns, id: nil)
+                for (field, reason) in imageCase.expectedIssues ?? [:] {
+                    XCTAssertTrue(analysis.issues.contains { $0.field == field && $0.reason.rawValue == reason },
+                        "\(prefix): \(field) rejection reason mismatch")
+                }
+                let values: [String: Decimal?] = ["basis": column?.quantity, "calories": column?.calories,
+                    "protein": column?.protein, "carbs": column?.carbs, "fat": column?.fat]
+                for field in ["basis", "calories", "protein", "carbs", "fat"] {
+                    let actual = values[field] ?? nil
+                    let reference = imageCase.expected[field].flatMap { Decimal(string: $0) }
+                    let state = actual == nil ? "open" : actual == reference ? "correct" : "incorrect"
+                    print("\(prefix): \(field)=\(state)")
+                    XCTAssertTrue(actual == nil || actual == reference, "\(prefix): \(field) incorrectly assigned")
+                    if imageCase.required.contains(field) {
+                        XCTAssertNotNil(actual, "\(prefix): \(field) missing")
+                    }
+                    if ProcessInfo.processInfo.environment["PFT_LABEL_TRACE"] == "YES", let reference {
+                        let expression = try NSRegularExpression(pattern: #"[0-9]+(?:[,.][0-9]+)?"#)
+                        let numberSeen = result.tokens.contains { token in
+                            expression.matches(in: token.text, range: NSRange(token.text.startIndex..., in: token.text)).contains { match in
+                                guard let range = Range(match.range, in: token.text) else { return false }
+                                return FoodProductBasis.parseNumber(String(token.text[range])) == reference
+                            }
+                        }
+                        print("\(prefix): \(field) referenceDigitsPresent=\(numberSeen)")
+                    }
+                }
+                if let unit = column?.unit {
+                    XCTAssertTrue(unit.rawValue == imageCase.expected["unit"], "\(prefix): incorrect reference unit")
+                }
+                if imageCase.required.contains("basis") {
+                    XCTAssertNotNil(column?.unit, "\(prefix): reference unit missing")
+                }
+                if ProcessInfo.processInfo.environment["PFT_LABEL_TRACE"] == "YES" {
+                    let headerPunctuation = result.tokens.filter {
+                        $0.text.range(of: #"^[0-9]+\s*(g|ml):$"#, options: [.regularExpression, .caseInsensitive]) != nil
+                    }.count
+                    let joinedEnergy = result.tokens.filter {
+                        $0.text.range(of: #"kj/[0-9]"#, options: [.regularExpression, .caseInsensitive]) != nil
+                    }.count
+                    print("\(prefix): headerWithColon=\(headerPunctuation), joinedEnergy=\(joinedEnergy), clipped=\(result.clippedWordCount)")
+                    let labels = ["calories": ["energie", "brennwert", "calories"], "fat": ["fett", "fat"],
+                        "carbs": ["kohlenhydrate", "carbohydrate"], "protein": ["eiweiss", "protein"],
+                        "excluded": ["zucker", "sugar", "salz", "salt", "saturates", "fettsauren", "ballaststoffe"],
+                        "basis": ["pro", "portion", "serving"], "unit": ["g", "ml", "kcal", "kj"]]
+                    for token in result.tokens {
+                        let normalized = token.text.lowercased().folding(options: .diacriticInsensitive, locale: Locale(identifier: "de_DE"))
+                            .replacingOccurrences(of: "ß", with: "ss")
+                        let categories = labels.filter { $0.value.contains(normalized) }.map(\.key).sorted()
+                        let alternateCategories = labels.filter { entry in
+                            (token.alternatives ?? []).contains { alternative in
+                                entry.value.contains(alternative.lowercased().folding(options: .diacriticInsensitive,
+                                    locale: Locale(identifier: "de_DE")).replacingOccurrences(of: "ß", with: "ss"))
+                            }
+                        }.map(\.key).sorted()
+                        let number = normalized.range(of: "[0-9]", options: .regularExpression) != nil
+                        guard !categories.isEmpty || !alternateCategories.isEmpty || number else { continue }
+                        print("\(prefix): categories=\(categories), alternatives=\(alternateCategories), line=\(token.lineID ?? -1), slope=\(token.lineSlope ?? 0), numeric=\(number), ambiguous=\(token.numberIsAmbiguous == true), box=\([token.x, token.y, token.width, token.height])")
+                    }
+                }
+            }
+        }
+    }
+
     func testLocalLabelCameraPipelineWithExplicitPrivateImage() async throws {
         guard let filePath = ProcessInfo.processInfo.environment["PFT_LABEL_IMAGE_PATH"] else {
             throw XCTSkip("Explicit local regression image required; no image is bundled or downloaded.")
