@@ -36,6 +36,40 @@ IMG_1288 und ein noch nicht zur Anpassung verwendetes unabhaengiges Etikett
 bleiben offene Bildpruefungen. Weder bestandene Tests noch ein signiertes Bundle
 sind eine vollstaendige Erkennungs- oder Geraeteabnahme.
 
+### Signiertes Update 1.0 (12), Nicht Installiert
+
+Scannercommit `04b5b3357014170a7abdd16942578fae7fe2d271` ist auf `origin/main`.
+Dieser separate Buildstand umfasst nur die zwei Versionszeilen 11 -> 12,
+die lokale Pilot-Buildfreigabe samt bestehendem Test und diesen Nachweis.
+Die geprueften lokalen Bundles/Archive und Git-Referenzen endeten bei Build 11;
+12 ist damit die naechste lokal freie Nummer. Keine App-Store-Connect-Abfrage.
+80 gezielte Pilotkonfigurationstests bestanden; Build 13 bleibt gesperrt.
+
+Release wurde mit `ios/Config/Pilot.xcconfig`, bestehenden Signiermitteln und
+fest aufgeloesten Paketen gebaut, ohne Provisionierungsupdates. Bundle:
+
+```text
+/Users/benedikt/Library/Developer/Xcode/DerivedData/pft-iphone-update12-20260925/Build/Products/Release-iphoneos/Trainingsplan.app
+```
+
+- Version 1.0 (12), `com.benedikt.Trainingsplan`, arm64, Team `2SF7PV3WCD`.
+- `codesign --verify --deep --strict` erfolgreich.
+- Effektive Pilot-Buildsettings durch den lokalen Validator geprueft;
+  eingebettete API-/Entra-Werte entsprechen diesen Settings und Build 11.
+- Callback, URL-/ATS-Konfiguration und signierte Keychain-/App-Entitlements
+  unveraendert gegenueber Build 11. Lokale Pilotdateien byteidentisch zum Stand
+  vor dem Build. Der alte Pfad `infra/pilot/local/deployment-outputs.json` ist
+  derzeit nicht vorhanden; kein erneuter Abgleich mit diesen Outputs behauptet.
+- Profil byteidentisch zu Build 11: UUID `7423a2df-47ea-4cf0-be4f-7aa4bd207a98`,
+  gueltig bis `2027-09-04T19:20:25Z`.
+- Executable SHA256:
+  `40de2b32150f3123b53b0ba6e4c04d472bbdda71b2bc63c020727927da7466a2`.
+
+Keine Installation oder Ausfuehrung, kein Zugriff auf den App-Datencontainer.
+Die oben genannten Bild- und Geraetepruefungen bleiben offen. Keine Cloud- oder
+Modellaufrufe, keine CLI-Kontextaenderung. Fremde Xcode-Formatierung bleibt
+unveraendert im Arbeitsbaum und ausserhalb des Buildcommits.
+
 ## Falluebergreifender Scannerreview 25.09.2026: Zwischenstand nach Build 11
 
 Build 11 wurde nach ausdruecklicher Freigabe als Update ueber WLAN installiert;
