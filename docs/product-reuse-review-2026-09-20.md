@@ -154,6 +154,44 @@ werden. Vollstaendige UI-/Kamera-/Lifecyclepruefung am Geraet bleibt offen.
    keine Fotos/Texte/Werte im Messarchiv. Nur das Testprodukt danach entfernen.
    Keine neue Modellanalyse, persoenlichen Daten nicht zuruecksetzen.
 
+## Signiertes Scannerupdate 1.0 (10), Noch Nicht Installiert
+
+Am 25.09.2026 Scanner samt Abschlussreview separat als `fc4235e` committed und
+regulaer nach `origin/main` gepusht. Installierte Trainingsplan-App ausschliesslich
+ueber App-Metadaten geprueft: 1.0 (9). Vorhandene lokale iPhone-Bundles und
+Xcode-Archive reichen ebenfalls bis Build 9. Damit ist 10 die naechste freie
+lokale Nummer; keine App-Store-Connect-Abfrage oder globale Reservierung.
+
+- Debug/Release nur von 9 auf 10 erhoeht. Lokale Pilot-Buildfreigabe um 10
+  erweitert; Build 11 bleibt gesperrt. Alle 60 gezielten Validatorfaelle bestanden.
+  Keine Gateway-Laufzeit-, Cloud-, Quoten- oder Policyaenderung.
+- Bestehende Pilotdatei bytegenau gegen den vorhandenen Generator und die schon
+  geprueften lokalen Deploymentoutputs abgeglichen. Aufgeloeste Buildsettings
+  und finale Bundlewerte stimmen damit und mit Build 9 ueberein. Keine neue
+  Provisionierung, Paketaktualisierung oder Aktivierung einer anderen Umgebung.
+- Release/Pilot mit `PILOT_ACCEPTANCE`, ARM64/iPhoneOS, 1.0 (10), Bundle-ID
+  `com.benedikt.Trainingsplan`, Team `2SF7PV3WCD`. Apple-Development-Signatur;
+  `codesign --verify --deep --strict` bestanden. Entitlements, Keychain-Gruppe
+  und Callback unveraendert. Entwicklungsprofil bytegleich zu Build 9:
+  `7423a2df-47ea-4cf0-be4f-7aa4bd207a98`, gueltig bis 04.09.2027 19:20:25 UTC.
+  Lokales Entwicklungsupdate, kein TestFlight-Verteilungsartefakt.
+
+App-Bundle ausserhalb von Git:
+
+```text
+/Users/benedikt/Library/Developer/Xcode/DerivedData/pft-iphone-update10-20260925/Build/Products/Release-iphoneos/Trainingsplan.app
+```
+
+SHA-256 des signierten App-Executables:
+`2eee679f980368ea40488e06c819de46faed4deca22983f792c2ece9e1a97a40`.
+
+Nicht installiert oder gestartet. Keine persoenlichen Appdaten gelesen,
+exportiert oder veraendert, kein Modellaufruf und keine Aenderung am CLI-Kontext.
+Die reale Kamera-/Dialogabnahme steht weiterhin aus. Der separate
+Buildnummercommit umfasst die Freigabe, Tests und diesen Nachweis; aus der
+Projektdatei nur die zwei Versionszeilen. Die vorbestehende Xcode-Formatierung
+bleibt uncommitted erhalten.
+
 ## Implementierter Ablauf
 
 - "Produkt vom Etikett" oeffnet den lokalen Editor. "Als Produkt speichern"

@@ -1682,7 +1682,7 @@ def test_native_analysis_probe_is_nonmanifest_bounded_and_stops_on_mismatch(monk
     assert "private-token" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("build", ["5", "6", "7", "8", "9"])
+@pytest.mark.parametrize("build", ["5", "6", "7", "8", "9", "10"])
 @pytest.mark.parametrize("mutation", [None, "url", "tenant", "scope", "team", "bundle", "build", "unreviewed_build", "missing", "legacy"])
 def test_pilot_ios_build_requires_complete_separate_configuration(mutation, build):
     validator = load_local_module("ios/Config/validate_pilot.py")
@@ -1696,7 +1696,7 @@ def test_pilot_ios_build_requires_complete_separate_configuration(mutation, buil
         field = {"url": "API_BASE_URL", "tenant": "ENTRA_TENANT_ID", "scope": "ENTRA_API_SCOPE", "team": "DEVELOPMENT_TEAM",
                  "bundle": "PRODUCT_BUNDLE_IDENTIFIER", "build": "CURRENT_PROJECT_VERSION", "unreviewed_build": "CURRENT_PROJECT_VERSION",
                  "missing": "PILOT_API_BASE_URL", "legacy": "PILOT_BUILD"}[mutation]
-        values[field] = {"legacy": "NO", "unreviewed_build": "10"}.get(mutation, "")
+        values[field] = {"legacy": "NO", "unreviewed_build": "11"}.get(mutation, "")
     if mutation in {None, "legacy"}:
         validator.validate(values)
     else:
