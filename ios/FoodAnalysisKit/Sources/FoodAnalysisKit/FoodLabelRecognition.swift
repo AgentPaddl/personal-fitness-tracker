@@ -6,13 +6,15 @@ public struct FoodLabelText: Codable, Equatable, Sendable {
     public let y: Double
     public let width: Double
     public let height: Double
+    public let numberIsAmbiguous: Bool?
 
-    public init(text: String, x: Double, y: Double, width: Double, height: Double) {
+    public init(text: String, x: Double, y: Double, width: Double, height: Double, numberIsAmbiguous: Bool? = nil) {
         self.text = text
         self.x = x
         self.y = y
         self.width = width
         self.height = height
+        self.numberIsAmbiguous = numberIsAmbiguous
     }
 
     var centerX: Double { x + width / 2 }
@@ -37,33 +39,98 @@ public struct FoodLabelColumn: Equatable, Identifiable {
     public var hasValues: Bool { [calories, protein, carbs, fat].contains { $0 != nil } }
 }
 
+public struct FoodLabelAnalysis {
+    public let columns: [FoodLabelColumn]
+    public let issues: [FoodLabelIssue]
+}
+
+public struct FoodLabelIssue: Equatable {
+    public enum Reason: String {
+        case noText, invalidInput, noNutrientLabels, missingOrConflictingHeader, tooManyColumns
+        case missingRow, repeatedRows, missingValueOrUnit, ambiguousValues, outsideColumn, outOfRange
+        case ambiguousOCRNumber
+    }
+    public let columnID: Int?
+    public let field: String?
+    public let reason: Reason
+}
+
 public enum FoodLabelRecognition {
-    private enum Nutrient: CaseIterable { case calories, protein, carbs, fat }
+    private enum Nutrient: String, CaseIterable { case calories, protein, carbs, fat }
     private struct Measurement {
         let value: Decimal
         let unit: String
         let centerX: Double
+        let numberIsAmbiguous: Bool
     }
     private struct Header {
         var centerX: Double
         var quantity: Decimal?
         var unit: FoodProductUnit?
         var portion: Bool
+        var numberIsAmbiguous = false
     }
 
     public static func columns(from input: [FoodLabelText]) -> [FoodLabelColumn] {
-        guard input.count <= 2048, input.allSatisfy(\.isValid) else { return [] }
+        analyze(input).columns
+    }
+
+    public static func hasConflictingNumbers(in candidates: [String]) -> Bool {
+        let expression = try! NSRegularExpression(pattern: #"[<>≤≥~≈−+-]?\s*[0-9]+(?:[,.][0-9]+)?"#)
+        let readings = candidates.map { candidate -> [String] in
+            let text = normalized(candidate)
+            return expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+                guard let range = Range(match.range, in: text) else { return nil }
+                return text[range].filter { !$0.isWhitespace }.replacingOccurrences(of: ",", with: ".")
+            }
+        }
+        guard let first = readings.first else { return false }
+        return readings.dropFirst().contains { $0 != first }
+    }
+
+    public static func analyze(_ input: [FoodLabelText]) -> FoodLabelAnalysis {
+        func rejected(_ reason: FoodLabelIssue.Reason) -> FoodLabelAnalysis {
+            FoodLabelAnalysis(columns: [], issues: [.init(columnID: nil, field: nil, reason: reason)])
+        }
+        guard !input.isEmpty else { return rejected(.noText) }
+        guard input.count <= 2048, input.allSatisfy(\.isValid) else { return rejected(.invalidInput) }
         let rows = makeRows(input)
-        guard let firstNutrient = rows.firstIndex(where: { nutrient(in: $0) != nil }) else { return [] }
+        guard let firstNutrient = rows.firstIndex(where: { nutrient(in: $0) != nil }) else { return rejected(.noNutrientLabels) }
         let headerRows = Array(rows[..<firstNutrient]).filter {
             (rows[firstNutrient].first?.y ?? 0) - ($0.first?.y ?? 0) < 0.22
         }
         let headers = findHeaders(headerRows)
-        guard !headers.isEmpty, headers.count <= 6 else { return [] }
-        return headers.enumerated().map { index, header in
+        guard !headers.isEmpty else { return rejected(.missingOrConflictingHeader) }
+        guard headers.count <= 6 else { return rejected(.tooManyColumns) }
+        let nutrientRows = rows.map { row -> [FoodLabelText] in
+            guard let kind = nutrient(in: row),
+                  let anchor = row.first(where: { nutrient(in: [$0]) == kind }),
+                  kind != .calories || contains(#"\b(brennwert|energie|kalorien)\b"#, in: normalized(anchor.text)) else { return row }
+            let boundaries = input.filter { token in
+                if contains(#"gesattigt|fettsaur|zucker|ballaststoff|salz"#, in: normalized(token.text)) { return true }
+                return nutrient(in: [token]).map { $0 != kind } ?? false
+            }
+            let nearby = input.filter { token in
+                token.x >= anchor.x && abs(token.centerY - anchor.centerY) <= max(token.height, anchor.height)
+                    && boundaries.allSatisfy { boundary in
+                        abs(token.centerY - anchor.centerY) + min(token.height, boundary.height) * 0.1
+                            < abs(token.centerY - boundary.centerY)
+                    }
+            }.sorted { $0.x < $1.x }
+            return nutrient(in: nearby) == kind ? nearby : row
+        }
+        var issues: [FoodLabelIssue] = []
+        let columns = headers.enumerated().map { index, header in
+            if header.numberIsAmbiguous || header.quantity == nil || header.unit == nil {
+                issues.append(.init(columnID: index, field: "basis",
+                                    reason: header.numberIsAmbiguous ? .ambiguousOCRNumber : .missingValueOrUnit))
+            }
             var values: [Nutrient: Decimal] = [:]
             for kind in Nutrient.allCases {
-                let matchingRows = rows.enumerated().compactMap { rowIndex, row -> [FoodLabelText]? in
+                func reject(_ reason: FoodLabelIssue.Reason) {
+                    issues.append(.init(columnID: index, field: kind.rawValue, reason: reason))
+                }
+                let matchingRows = nutrientRows.enumerated().compactMap { rowIndex, row -> [FoodLabelText]? in
                     guard nutrient(in: row) == kind else { return nil }
                     if kind == .calories {
                         let label = normalized(row.prefix { !contains(#"[0-9]"#, in: $0.text) }.map(\.text).joined(separator: " "))
@@ -81,10 +148,14 @@ public enum FoodLabelRecognition {
                     }
                     return row
                 }
-                guard matchingRows.count == 1, let row = matchingRows.first else { continue }
+                guard matchingRows.count == 1, let row = matchingRows.first else {
+                    reject(matchingRows.isEmpty ? .missingRow : .repeatedRows)
+                    continue
+                }
                 let readings = measurements(in: row, implicitUnit: implicitUnit(in: row, kind: kind))
                     .filter { $0.unit == (kind == .calories ? "kcal" : "g") }
-                guard headers.count != 1 || readings.count <= 1 else { continue }
+                guard !readings.isEmpty else { reject(.missingValueOrUnit); continue }
+                guard headers.count != 1 || readings.count <= 1 else { reject(.ambiguousValues); continue }
                 let assigned = readings.filter { reading in
                     let distances = headers.map { abs($0.centerX - reading.centerX) }
                     guard let nearest = distances.min(), nearest <= 0.15,
@@ -92,21 +163,27 @@ public enum FoodLabelRecognition {
                           distances.filter({ abs($0 - nearest) < 0.025 }).count == 1 else { return false }
                     return true
                 }
-                if assigned.count == 1, let value = assigned.first?.value,
+                if assigned.contains(where: \.numberIsAmbiguous) {
+                    reject(.ambiguousOCRNumber)
+                } else if assigned.count == 1, let value = assigned.first?.value,
                    value <= (kind == .calories ? 10000 : 1000) {
                     values[kind] = value
+                } else {
+                    reject(assigned.isEmpty ? .outsideColumn : assigned.count > 1 ? .ambiguousValues : .outOfRange)
                 }
             }
-            let basis = header.quantity.map { NSDecimalNumber(decimal: $0).stringValue }
+            let quantity = header.numberIsAmbiguous ? nil : header.quantity
+            let basis = quantity.map { NSDecimalNumber(decimal: $0).stringValue }
             let heading: String
             if let basis, let unit = header.unit {
                 heading = header.portion ? "Portion (\(basis) \(unit.rawValue))" : "\(basis) \(unit.rawValue)"
             } else {
-                heading = "Portion ohne eindeutige Bezugsmenge"
+                heading = header.portion ? "Portion ohne eindeutige Bezugsmenge" : "Bezugsmenge nicht eindeutig"
             }
-            return FoodLabelColumn(id: index, heading: heading, quantity: header.quantity, unit: header.unit,
+            return FoodLabelColumn(id: index, heading: heading, quantity: quantity, unit: header.unit,
                 calories: values[.calories], protein: values[.protein], carbs: values[.carbs], fat: values[.fat])
         }
+            return FoodLabelAnalysis(columns: columns, issues: issues)
     }
 
     public static func selectedColumn(from columns: [FoodLabelColumn], id: Int?) -> FoodLabelColumn? {
@@ -162,9 +239,9 @@ public enum FoodLabelRecognition {
     private static func measurements(in row: [FoodLabelText], implicitUnit: String? = nil) -> [Measurement] {
         var result: [Measurement] = []
         guard !row.contains(where: { contains(#"[<>≤≥~≈−]|^[+-]$"#, in: $0.text) }) else { return [] }
-        let expression = try! NSRegularExpression(pattern: #"^([0-9]+(?:[,.][0-9]+)?)\s*(kcal|kj|ml|g)?$"#)
+        let expression = try! NSRegularExpression(pattern: #"^([0-9]+(?:[,.][0-9]+)?)\s*(kcal|kj|ml|g|г)?$"#)
         for (index, token) in row.enumerated() {
-            let text = normalized(token.text).trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+            let text = normalized(token.text).trimmingCharacters(in: CharacterSet(charactersIn: "()/"))
             guard let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                   let numberRange = Range(match.range(at: 1), in: text) else { continue }
             let number = String(text[numberRange])
@@ -176,22 +253,29 @@ public enum FoodLabelRecognition {
             let next = index + 1 < row.count ? row[index + 1] : nil
             if let next, next.x - token.x - token.width < 0.04,
                contains(#"^[0-9]+$|^%$"#, in: normalized(next.text)) { continue }
-            var unit = Range(match.range(at: 2), in: text).map { String(text[$0]) }
+            var unit = Range(match.range(at: 2), in: text).flatMap { canonicalUnit(String(text[$0])) }
             var endX = token.x + token.width
             if unit == nil, let next, next.x - endX < 0.04 {
-                let nextText = normalized(next.text).trimmingCharacters(in: CharacterSet(charactersIn: "()"))
-                if ["g", "ml", "kcal", "kj"].contains(nextText) {
-                    unit = nextText
+                let nextText = normalized(next.text).trimmingCharacters(in: CharacterSet(charactersIn: "()/"))
+                if let nextUnit = canonicalUnit(nextText) {
+                    unit = nextUnit
                     endX = next.x + next.width
                 } else if contains(#"[a-z%]"#, in: nextText) {
                     continue
                 }
             }
             if let unit = unit ?? implicitUnit {
-                result.append(Measurement(value: value, unit: unit, centerX: (token.x + endX) / 2))
+                result.append(Measurement(value: value, unit: unit, centerX: (token.x + endX) / 2,
+                                          numberIsAmbiguous: token.numberIsAmbiguous == true))
             }
         }
         return result
+    }
+
+    private static func canonicalUnit(_ text: String) -> String? {
+        let parts = text.split(separator: "/").map(String.init)
+        if !parts.isEmpty, parts.allSatisfy({ $0 == "g" || $0 == "г" }) { return "g" }
+        return ["ml", "kcal", "kj"].contains(text) ? text : nil
     }
 
     private static func findHeaders(_ rows: [[FoodLabelText]]) -> [Header] {
@@ -210,8 +294,10 @@ public enum FoodLabelRecognition {
                     if headers[existing].quantity != reading.value || headers[existing].unit != unit {
                         return []
                     }
+                    headers[existing].numberIsAmbiguous = headers[existing].numberIsAmbiguous || reading.numberIsAmbiguous
                 } else {
-                    headers.append(Header(centerX: reading.centerX, quantity: reading.value, unit: unit, portion: portion))
+                    headers.append(Header(centerX: reading.centerX, quantity: reading.value, unit: unit,
+                                          portion: portion, numberIsAmbiguous: reading.numberIsAmbiguous))
                 }
             }
         }

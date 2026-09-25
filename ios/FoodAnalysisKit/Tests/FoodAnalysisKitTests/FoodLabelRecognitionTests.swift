@@ -15,6 +15,105 @@ final class FoodLabelRecognitionTests: XCTestCase {
          token("Eiweiß", 0.10, 0.43), token("8,2g", 0.60, 0.43)]
     }
 
+    func testConflictingOCRNumbersAreDistinctFromLabelOrDecimalSpelling() {
+        XCTAssertTrue(FoodLabelRecognition.hasConflictingNumbers(in: ["Fett 4,9 g", "Fett 9,9 g"]))
+        XCTAssertTrue(FoodLabelRecognition.hasConflictingNumbers(in: ["100 g", "10 g"]))
+        XCTAssertTrue(FoodLabelRecognition.hasConflictingNumbers(in: ["0,5 g", "<0,5 g"]))
+        XCTAssertFalse(FoodLabelRecognition.hasConflictingNumbers(in: ["Fett 4,9 g", "Fett 4.9 g"]))
+        XCTAssertFalse(FoodLabelRecognition.hasConflictingNumbers(in: ["Fett", "Felt"]))
+    }
+
+    func testAmbiguousOCRNumbersRemainOpenWithoutBorrowingFromAnotherColumn() {
+        let input = [token("100g", 0.48, 0.10), token("Portion", 0.77, 0.06), token("30g", 0.77, 0.10),
+            token("Fett", 0.10, 0.20),
+            FoodLabelText(text: "10g", x: 0.48, y: 0.20, width: 0.08, height: 0.025, numberIsAmbiguous: true),
+            token("3g", 0.77, 0.20)]
+        let analysis = FoodLabelRecognition.analyze(input)
+        XCTAssertEqual(analysis.columns.count, 2)
+        XCTAssertNil(analysis.columns.first?.fat)
+        XCTAssertEqual(analysis.columns.last?.fat, 3)
+        XCTAssertTrue(analysis.issues.contains { $0.columnID == 0 && $0.field == "fat" && $0.reason == .ambiguousOCRNumber })
+    }
+
+    func testAmbiguousOCRBasisRemainsOpenWhileOtherValuesStayReviewable() {
+        let analysis = FoodLabelRecognition.analyze([
+            FoodLabelText(text: "100g", x: 0.60, y: 0.10, width: 0.08, height: 0.025, numberIsAmbiguous: true),
+            token("Fett", 0.10, 0.20), token("0g", 0.60, 0.20)])
+        XCTAssertEqual(analysis.columns.count, 1)
+        XCTAssertNil(analysis.columns.first?.quantity)
+        XCTAssertEqual(analysis.columns.first?.fat, 0)
+        XCTAssertEqual(analysis.columns.first?.hasValues, true)
+        XCTAssertTrue(analysis.issues.contains { $0.field == "basis" && $0.reason == .ambiguousOCRNumber })
+    }
+
+    func testDiagnosticsDistinguishMissingTextHeaderAndValues() {
+        XCTAssertEqual(FoodLabelRecognition.analyze([]).issues.first?.reason, .noText)
+        XCTAssertEqual(FoodLabelRecognition.analyze([token("Fett", 0.1, 0.2)]).issues.first?.reason, .missingOrConflictingHeader)
+        let input = [token("100g", 0.6, 0.1), token("Fett", 0.1, 0.2), token("3", 0.6, 0.2)]
+        let analysis = FoodLabelRecognition.analyze(input)
+        XCTAssertEqual(analysis.columns, FoodLabelRecognition.columns(from: input))
+        XCTAssertTrue(analysis.issues.contains { $0.field == "fat" && $0.reason == .missingValueOrUnit })
+    }
+
+    func testCurvedCellsDoNotMixReferenceAndPortionColumns() {
+        let input = [token("100g", 0.48, 0.10), token("Portion", 0.77, 0.06), token("30g", 0.77, 0.10),
+            token("Fett", 0.10, 0.20), token("12", 0.48, 0.20), token("g/", 0.57, 0.216),
+            token("3,6", 0.77, 0.209), token("g/", 0.86, 0.223),
+            token("gesättigte Fettsäuren", 0.10, 0.26, width: 0.3), token("9g", 0.48, 0.26), token("2,7g", 0.77, 0.26)]
+        let columns = FoodLabelRecognition.columns(from: input)
+        XCTAssertEqual(columns.count, 2)
+        XCTAssertNil(FoodLabelRecognition.selectedColumn(from: columns, id: nil))
+        XCTAssertEqual(columns.first?.quantity, 100)
+        XCTAssertEqual(columns.first?.fat, 12)
+        XCTAssertEqual(columns.last?.quantity, 30)
+        XCTAssertEqual(columns.last?.fat, Decimal(string: "3.6"))
+        XCTAssertTrue(columns.allSatisfy { $0.protein == nil && $0.carbs == nil })
+    }
+
+    func testPartialColumnWithUnknownBasisRemainsReviewableAndDiagnosed() {
+        let analysis = FoodLabelRecognition.analyze([token("Portion", 0.60, 0.10),
+            token("Fett", 0.10, 0.20), token("0g", 0.60, 0.20)])
+        let selected = FoodLabelRecognition.selectedColumn(from: analysis.columns, id: nil)
+        XCTAssertEqual(selected?.hasValues, true)
+        XCTAssertNil(selected?.quantity)
+        XCTAssertEqual(selected?.fat, 0)
+        XCTAssertTrue(analysis.issues.contains { $0.field == "basis" && $0.reason == .missingValueOrUnit })
+    }
+
+    func testTallCarbohydrateLabelDoesNotAbsorbNeighboringSugarCell() throws {
+        let input = [token("100g", 0.60, 0.10),
+            FoodLabelText(text: "Kohlenhydrate", x: 0.10, y: 0.20, width: 0.30, height: 0.05),
+            token("23,4", 0.60, 0.225), token("g/", 0.69, 0.225),
+            token("Zucker", 0.10, 0.26), token("9,8", 0.60, 0.26), token("g/", 0.69, 0.26)]
+        let column = try XCTUnwrap(FoodLabelRecognition.columns(from: input).first)
+        XCTAssertEqual(column.carbs, Decimal(string: "23.4"))
+        XCTAssertNil(column.fat)
+    }
+
+    func testExplicitBilingualGramUnitsDoNotGuessOtherUnits() {
+        for unitText in ["г/", "г/g", "g/г", "mg/g", "g/mg"] {
+            let columns = FoodLabelRecognition.columns(from: [token("100g", 0.60, 0.10),
+                token("Fett", 0.10, 0.20), token("7,3", 0.60, 0.20), token(unitText, 0.69, 0.20)])
+            if unitText.contains("mg") { XCTAssertNil(columns.first?.fat) }
+            else { XCTAssertEqual(columns.first?.fat, Decimal(string: "7.3")) }
+        }
+    }
+
+    func testWrappedUnitsAndCurvedMultilingualCellsRemainTogether() throws {
+        let input = [token("100g", 0.60, 0.10),
+            token("Valore", 0.10, 0.18), token("Energie", 0.10, 0.21),
+            token("143", 0.60, 0.19), token("kcal/", 0.63, 0.21),
+            token("Grassi/", 0.10, 0.27), token("Fett", 0.10, 0.30),
+            token("7,3", 0.60, 0.30), token("g/", 0.69, 0.316),
+            FoodLabelText(text: "Kohlenhydrate", x: 0.10, y: 0.37, width: 0.30, height: 0.04),
+            token("42,1", 0.60, 0.395), token("g/", 0.69, 0.395)]
+        let column = try XCTUnwrap(FoodLabelRecognition.columns(from: input).first)
+        XCTAssertEqual(column.calories, 143)
+        XCTAssertEqual(column.fat, Decimal(string: "7.3"))
+        XCTAssertEqual(column.carbs, Decimal(string: "42.1"))
+        XCTAssertNil(column.protein)
+    }
+
     func testGermanDecimalCommaEnergyAndSaturatedFat() throws {
         let column = try XCTUnwrap(FoodLabelRecognition.columns(from: table()).first)
         XCTAssertEqual(column.quantity, 100)

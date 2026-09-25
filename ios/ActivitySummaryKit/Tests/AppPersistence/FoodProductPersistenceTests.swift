@@ -1,10 +1,52 @@
 import Foundation
+import ImageIO
 import SwiftData
 import XCTest
 import FoodAnalysisKit
 @testable import MarkerAppPersistence
 
 final class FoodProductPersistenceTests: XCTestCase {
+    func testLocalLabelCameraPipelineWithExplicitPrivateImage() async throws {
+        guard let filePath = ProcessInfo.processInfo.environment["PFT_LABEL_IMAGE_PATH"] else {
+            throw XCTSkip("Explicit local regression image required; no image is bundled or downloaded.")
+        }
+        let original = try Data(contentsOf: URL(fileURLWithPath: filePath))
+        let first = try await FoodLabelTextRecognizer.inspect(original)
+        XCTAssertTrue(first.image.width == 2250 && first.image.height == 3000, "Unexpected normalized dimensions")
+        let jpeg = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(jpeg, "public.jpeg" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, first.image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination), "In-memory JPEG conversion failed")
+        for (imageKind, input) in [("HEIC", original), ("JPEG", jpeg as Data)] {
+            let result = try await FoodLabelTextRecognizer.inspect(input)
+            XCTAssertFalse(result.lines.isEmpty, "Vision returned no text")
+            XCTAssertTrue(result.tokens.allSatisfy {
+                $0.x >= 0 && $0.y >= 0 && $0.width > 0 && $0.height > 0
+                    && $0.x + $0.width <= 1.001 && $0.y + $0.height <= 1.001
+            }, "Unexpected word geometry")
+            let analysis = FoodLabelRecognition.analyze(result.tokens)
+            XCTAssertTrue(analysis.columns.count == 1, "Expected one unambiguous reference column")
+            guard let column = FoodLabelRecognition.selectedColumn(from: analysis.columns, id: nil) else {
+                XCTFail("No reviewable column")
+                return
+            }
+            XCTAssertTrue(column.quantity == 100 && column.unit == .grams, "Reference basis mismatch")
+            XCTAssertTrue(column.calories == 381, "Energy does not match the manually reviewed reference")
+            let fatReason = analysis.issues.filter { $0.field == "fat" }.map { $0.reason.rawValue }.joined(separator: ",")
+            if imageKind == "HEIC" {
+                XCTAssertTrue(column.fat == Decimal(string: "4.9"), "HEIC: fat missing or mismatched; \(fatReason)")
+            } else {
+                XCTAssertTrue(column.fat == nil || column.fat == Decimal(string: "4.9"), "JPEG: incorrect fat value")
+                if column.fat == nil {
+                    XCTAssertTrue(analysis.issues.contains { $0.field == "fat" && $0.reason == .missingRow }, "Missing JPEG label must be diagnosed")
+                }
+            }
+            XCTAssertTrue(column.carbs == Decimal(string: "71.6"), "Carbohydrates do not match the manually reviewed reference")
+            XCTAssertTrue(column.protein == nil || column.protein == Decimal(string: "12.7"), "Incorrect protein value")
+            XCTAssertTrue(column.hasValues, "Partial results must remain reviewable")
+        }
+    }
+
     @MainActor
     func testLocalLabelScanSavesOnlyProductAndNeverAddsAnAIOperation() throws {
         let context = ModelContext(try container())

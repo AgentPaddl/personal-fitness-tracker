@@ -4,6 +4,128 @@ Stand: 2026-09-20. Aufbauend auf Messpaket `ed6a59d`. Ausschliesslich lokale
 Entwicklung und synthetische Tests; keine Anmeldung, Modellaufrufe, Cloud-
 oder Policyaktivierung. Keine Installation und keine Buildnummeraenderung.
 
+## Fehlerreview 25.09.2026: Echter Mehrsprachiger Etikettenfall
+
+Build 10 wurde nach gesonderter Freigabe als Update ueber WLAN installiert.
+Anschliessender Nutzerbefund: Scanner oeffnet, liefert auf mehreren Verpackungen
+aber keine eindeutigen Naehrwerte. Dieser Fehlerreview basiert auf einem vom
+Nutzer explizit freigegebenen Original-HEIC ausserhalb des Repositories und
+dessen manuell abgelesener Referenz. Keine Produktnamen oder OCR-Rohtexte im
+Reviewprotokoll; Originalbild und erkannte Texte wurden nicht exportiert.
+
+### Nachgewiesene Verluststellen
+
+Der unveraenderte Build-10-Adapter wurde lokal unter macOS mit Apple Vision
+Revision 3/de-DE und dem echten HEIC ausgefuehrt, nicht durch simulierten
+OCR-Text ersetzt. ImageIO verarbeitet EXIF-Orientierung 6 zu einem aufrechten
+2250-x-3000-Bild; kein Ausschnitt und keine Perspektiventzerrung. Die Wortboxen
+werden von Vision links unten nach links oben normalisiert. Alle 73 zunaechst
+uebergebenen Wortrechtecke waren gueltig. Ein Orientierungsfehler ist fuer
+diesen Durchlauf nicht belegt.
+
+- Vision lieferte 94 Textbereiche und erkannte bereits alle vier Referenzzahlen.
+  66 Bereiche wurden jedoch durch die Confidence-Grenze 0.5 verworfen, darunter
+  alle erkannten 100-g-Angaben und die Fettbeschriftung mit Confidence 0.3.
+  Folge: keine Bezugsspalte, obwohl Text und Zahlen vorhanden waren.
+- Ohne diesen Filter gelangen 313 Woerter zum Parser und eine Bezugsspalte
+  entsteht. Noch kein Wert: globale Zeilengruppierung trennt Zellteile bei
+  unterschiedlichen Texthoehen und schraegem Druck. Energiezahl und kcal stehen
+  untereinander; Fett/Einheit sowie Kohlenhydratbeschriftung/Zahl landen getrennt.
+- Mehrsprachige Grammfragmente mit Schraegstrichen und kyrillischem Grammzeichen
+  vor lateinischem g wurden nicht als explizite Einheit akzeptiert.
+- Eine benachbarte Zuckerbeschriftung sperrte den erweiterten Bereich der hohen
+  Kohlenhydratbeschriftung pauschal. Begrenzung an der jeweils naeheren anderen
+  Beschriftung loest diese Sperre, ohne Zuckerwerte zu Kohlenhydraten zu machen.
+
+### Korrektur und Ergebnis
+
+OCR verwirft Kontext nicht mehr allein aufgrund der Confidence. Niedrige
+Sicherheit wird in der lokalen Diagnose gezaehlt, nicht als Verlaesslichkeit
+behauptet. Der Parser bildet eng begrenzte Zellnachbarschaften um erkannte
+Beschriftungen und begrenzt sie gegen andere Naehrwert-/Ausschlussbeschriftungen.
+Explizite g-/kyrillische Grammzeichen werden gleich behandelt; mg/g und andere
+unklare Einheiten bleiben offen. Keine unscharfe Korrektur von Nahrungsmitteln,
+Zahlen oder Beschriftungen und keine produktspezifische Erkennungsregel.
+
+Beim Original-HEIC stimmen nun **100 g, 381 kcal, 4.9 g Fett und 71.6 g
+Kohlenhydrate** mit der manuellen Referenz ueberein. Eiweiss bleibt offen:
+seine Zahl ist vorhanden, aber keine unterstuetzte eindeutige Beschriftung.
+Eine nur im Speicher erzeugte JPEG-Variante liefert korrekt kcal und
+Kohlenhydrate; dort fehlt auch die erkannte Fettbeschriftung. Fehlende Werte
+werden nicht aus der bekannten Referenz 12.7 g Eiweiss oder anderen Werten
+eingesetzt. Unterschiede zwischen HEIC und JPEG sind damit nachgewiesen.
+
+Die bestehende Uebernahme erlaubt Teilresultate, verlangt bei vorhandenen
+Editorwerten weiterhin die Ersetzungsbestaetigung und setzt fehlende Felder leer.
+Erst der vollstaendig gepruefte Editor darf ausdruecklich ein Produkt speichern.
+Herkunft, Messabschluss, Produkt-/Eintragstrennung und Cloudpfad unveraendert.
+
+Die aufklappbare **Lokale Erkennungsdiagnose** zeigt ausschliesslich fluechtig:
+das tatsaechlich normalisierte OCR-Bild mit Wortrechtecken, Textbereiche,
+Woerter, niedrige Confidence, erkannten Text und konkrete Parserablehnungen.
+Neue Aufnahme und Schliessen verwerfen diese Daten. Kein Logging, Teilen,
+Export, Dateischreiben, Fotospeichern oder Cloud-Fallback. Fehlende Bilddaten,
+fehlende deutsche Vision-Unterstuetzung, leere OCR und fehlende Wortpositionen
+werden getrennt behandelt.
+
+### Verifikation und Noch Offene Abnahme
+
+- 23 gezielte Parsertests bestanden, einschliesslich mehrzeiliger/gekruemmter
+  Zellen, naher Zuckerzeile, bilingualer Einheiten, zweier Bezugsspalten und
+  pruefbarem echtem Nullwert bei fehlender Bezugsmenge. Keine Bildgenauigkeit
+  aus diesen synthetischen Tests abgeleitet.
+- Ein explizit aktivierter echter Bildtest im bestehenden AppPersistence-Harness
+  bestand mit Original-HEIC und fluechtigem JPEG, jeweils durch denselben
+  App-OCR-Adapter und Parser. Er prueft korrekte Basis, korrekte erkannte Werte,
+  offene statt erfundener Werte und Uebernehmbarkeit. Bild nicht eingebettet;
+  ohne `PFT_LABEL_IMAGE_PATH` wird nur dieser Test uebersprungen. Assertions
+  protokollieren weder Rohtext noch erkannte Zahlen. Aufruf mit lokalem Pfad:
+
+  ```sh
+  PFT_LABEL_IMAGE_PATH=/absoluter/pfad/zum/freigegebenen-original.heic \
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  zsh ios/ActivitySummaryKit/Tests/AppPersistence/run-tests.sh \
+    --filter FoodProductPersistenceTests.testLocalLabelCameraPipelineWithExplicitPrivateImage
+  ```
+
+- Simulator Debug und unsigniertes Device Release erfolgreich gebaut. Keine
+  erneute Auth-Gesamtsuite, kein Modellaufruf, keine Cloud-/CLI-Aenderung.
+  Buildnummer bleibt 10; vorbestehende Xcode-Formatierung bleibt unangetastet.
+- **Noch nicht am iPhone abgenommen:** Die lokale macOS-Vision-Ausgabe belegt
+  diesen Bildfall, nicht identische iOS-OCR oder echte Kameraqualitaet ueber
+  verschiedene Verpackungen. Die JPEG-Variante ist keine Aufnahme durch den
+  UIKit-Kameradialog. Nach separater Build-/Installationsfreigabe dasselbe
+  Etikett erneut aufnehmen, Diagnose/Boxen und fehlende Felder pruefen;
+  danach zweite Verpackung mit Portionsspalten, Spaltenwechsel, Abbruch und
+  manuellen Ersetzungsdialog testen. Kein automatisches Produktspeichern.
+
+### Abschlussreview fuer den Geraete-Nachtest
+
+Der Review fand eine verbleibende Luecke: Die alleinige beste Vision-Lesart
+transportierte keine Information ueber widerspruechliche Zahlenalternativen.
+Der Adapter vergleicht nun die Zahlensequenzen der ersten drei angebotenen
+Kandidaten. Abweichende Ziffern, Vorzeichen oder Ungleichheiten markieren
+betroffene Zahlwoerter; Dezimalkomma und -punkt gelten dabei als gleich.
+Beschriftungen mit niedriger Confidence bleiben weiterhin als Kontext erhalten.
+
+Markierte Naehrwerte bleiben offen, statt als eindeutiger Wert in den Editor
+zu gelangen. Eine markierte Bezugsmenge bleibt leer; andere eindeutige Werte
+derselben Spalte bleiben pruefbar. Kein Ausweichen auf die andere Spalte oder
+den zweitbesten Wert. Das optionale Tokenfeld `numberIsAmbiguous` erweitert den
+portablen Vertrag rueckwaertskompatibel; bestehende JSON-Fixtures bleiben gueltig.
+Vision-Kandidaten sind kein Vollstaendigkeits- oder Genauigkeitsnachweis: auch
+eine einzige, scheinbar klare OCR-Lesart muss gegen das Etikett geprueft werden.
+
+Drei neue gezielte Zahlensicherheitspruefungen und die bestehenden portablen
+Fixtures bestanden; auch der echte HEIC/JPEG-Regressionstest bestand erneut.
+Die bisherigen 23 Parserpruefungen und erfolgreichen App-/Auth-Pruefungen
+wurden nicht pauschal wiederholt. Diagnose weiterhin nur per Aufklappen,
+fluechtig im Scan-State, ohne Teilen/Export/Logging oder automatische Speicherung.
+
+Reparatur und nachfolgende Buildnummer werden separat committed; keine neue
+Installation in diesem Abschlussauftrag. Der erste Fehlerreviewstand war
+ausdruecklich uncommitted zur Durchsicht belassen worden.
+
 ## Nachtrag 25.09.2026: Lokaler Etikettscan V1
 
 Implementierter Reviewstand. Im bestehenden Produkteditor fuehrt "Etikett scannen"

@@ -11,7 +11,7 @@ ln -s "$ios_dir/ActivitySummaryKit" "$temporary_dir/ActivitySummaryKit"
 ln -s "$ios_dir/FoodAnalysisKit" "$temporary_dir/FoodAnalysisKit"
 mkdir -p "$temporary_dir/Sources/MarkerAppPersistence" "$temporary_dir/Tests/MarkerAppPersistenceTests"
 
-for source_name in Exercise WorkoutSession ExercisePerformance WorkoutSet Activity FoodEntry FoodPreset WeightEntry UserGoals BackupModels BackupService ExerciseWeightIncreaseMarkerPersistence WorkoutSessionDeletionService FoodProductPersistence; do
+for source_name in Exercise WorkoutSession ExercisePerformance WorkoutSet Activity FoodEntry FoodPreset WeightEntry UserGoals BackupModels BackupService ExerciseWeightIncreaseMarkerPersistence WorkoutSessionDeletionService FoodProductPersistence FoodLabelTextRecognizer; do
     ln -s "$ios_dir/Trainingsplan/$source_name.swift" "$temporary_dir/Sources/MarkerAppPersistence/$source_name.swift"
 done
 

@@ -16,6 +16,8 @@ struct FoodLabelScanView: View {
     @State private var permissionTask: Task<Void, Never>?
     @State private var pendingReplacement: FoodLabelColumn?
     @State private var confirmsReplacement = false
+    @State private var recognition: FoodLabelTextRecognizer.Result?
+    @State private var issues: [FoodLabelIssue] = []
 
     private var selected: FoodLabelColumn? { FoodLabelRecognition.selectedColumn(from: columns, id: selectedID) }
 
@@ -54,6 +56,22 @@ struct FoodLabelScanView: View {
                             LabeledContent("Fett", value: display(selected.fat, unit: "g"))
                         }
                     }
+                }
+                if let recognition {
+                    Section {
+                        DisclosureGroup("Lokale Erkennungsdiagnose") {
+                            diagnosticImage(recognition)
+                            LabeledContent("Bild für OCR", value: "\(recognition.image.width) × \(recognition.image.height)")
+                            LabeledContent("Textbereiche / Wörter", value: "\(recognition.lines.count) / \(recognition.tokens.count)")
+                            LabeledContent("Bereiche mit geringer Sicherheit", value: "\(recognition.lowConfidenceCount)")
+                            ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
+                                Text(issueDescription(issue)).font(.caption)
+                            }
+                            if issues.isEmpty { Text("Keine offenen Parserfelder.").font(.caption) }
+                            Text(recognition.lines.joined(separator: "\n")).font(.caption.monospaced())
+                        }
+                    }
+                    .privacySensitive()
                 }
                 if let errorMessage {
                     Section {
@@ -97,6 +115,8 @@ struct FoodLabelScanView: View {
                     pendingReplacement = nil
                     photo = data
                     columns = []
+                    recognition = nil
+                    issues = []
                     selectedID = nil
                     errorMessage = nil
                     reading = true
@@ -107,15 +127,31 @@ struct FoodLabelScanView: View {
             .task(id: scanID) {
                 guard let photo else { return }
                 do {
-                    let tokens = try await FoodLabelTextRecognizer.recognize(photo)
+                    let result = try await FoodLabelTextRecognizer.inspect(photo)
                     try Task.checkCancellation()
-                    columns = FoodLabelRecognition.columns(from: tokens)
+                    recognition = result
+                    let analysis = FoodLabelRecognition.analyze(result.tokens)
+                    columns = analysis.columns
+                    issues = analysis.issues
                     selectedID = columns.count == 1 ? columns.first?.id : nil
                     if !columns.contains(where: \.hasValues) {
-                        errorMessage = "Keine eindeutigen Nährwerte erkannt. Die Angaben bleiben offen."
+                        if result.lines.isEmpty {
+                            errorMessage = "Vision hat keinen Text erkannt. Die Angaben bleiben offen."
+                        } else if result.tokens.isEmpty {
+                            errorMessage = "Text erkannt, aber keine Wortpositionen verfügbar. Die Angaben bleiben offen."
+                        } else {
+                            errorMessage = "Text erkannt, aber keine Nährwerte eindeutig zugeordnet. Die Angaben bleiben offen."
+                        }
                     }
                 } catch is CancellationError {
                     return
+                } catch let failure as FoodLabelTextRecognizer.Failure {
+                    guard !Task.isCancelled else { return }
+                    switch failure {
+                    case .unsupported: errorMessage = "Die deutsche Texterkennung ist auf diesem Gerät nicht verfügbar."
+                    case .invalidImage: errorMessage = "Das Kamerabild konnte nicht für die Texterkennung vorbereitet werden."
+                    case .tooMuchText: errorMessage = "Das Bild enthält zu viele Textbereiche für diese Prüfung."
+                    }
                 } catch {
                     guard !Task.isCancelled else { return }
                     errorMessage = "Das Etikett konnte auf diesem Gerät nicht gelesen werden."
@@ -128,6 +164,8 @@ struct FoodLabelScanView: View {
                     photo = nil
                     columns = []
                     pendingReplacement = nil
+                    recognition = nil
+                    issues = []
                 }
             }
         }
@@ -136,6 +174,42 @@ struct FoodLabelScanView: View {
     private func display(_ value: Decimal?, unit: String) -> String {
         guard let value else { return "Offen" }
         return NSDecimalNumber(decimal: value).stringValue.replacingOccurrences(of: ".", with: ",") + " " + unit
+    }
+
+    private func diagnosticImage(_ result: FoodLabelTextRecognizer.Result) -> some View {
+        Canvas { context, size in
+            context.draw(Image(decorative: result.image, scale: 1), in: CGRect(origin: .zero, size: size))
+            for token in result.tokens {
+                let rect = CGRect(x: token.x * size.width, y: token.y * size.height,
+                                  width: token.width * size.width, height: token.height * size.height)
+                context.stroke(Path(rect), with: .color(.orange), lineWidth: 1)
+            }
+        }
+        .aspectRatio(CGFloat(result.image.width) / CGFloat(result.image.height), contentMode: .fit)
+        .frame(maxHeight: 420)
+        .accessibilityLabel("Normalisiertes Kamerabild mit erkannten Wortbereichen")
+    }
+
+    private func issueDescription(_ issue: FoodLabelIssue) -> String {
+        let fields = ["calories": "Kalorien", "protein": "Eiweiß", "carbs": "Kohlenhydrate", "fat": "Fett", "basis": "Bezugsmenge"]
+        let prefix = issue.columnID.map { "Spalte \($0 + 1), " } ?? ""
+        let field = issue.field.flatMap { fields[$0] }.map { $0 + ": " } ?? ""
+        let reason: String
+        switch issue.reason {
+        case .noText: reason = "Keine OCR-Wörter vorhanden."
+        case .invalidInput: reason = "Ungültige Wortgeometrie oder Eingabegrenze überschritten."
+        case .noNutrientLabels: reason = "Keine unterstützte Nährwertbeschriftung erkannt."
+        case .missingOrConflictingHeader: reason = "Keine eindeutige Bezugsüberschrift oberhalb der Nährwerte erkannt."
+        case .tooManyColumns: reason = "Mehr als sechs Bezugsspalten erkannt."
+        case .missingRow: reason = "Keine passende beschriftete Zeile mit erforderlichem Kontext erkannt."
+        case .repeatedRows: reason = "Mehrere passende Beschriftungen; Zuordnung bleibt offen."
+        case .missingValueOrUnit: reason = "Zahl und explizite Einheit nicht eindeutig derselben Zelle zugeordnet."
+        case .ambiguousValues: reason = "Mehrere Werte ohne eindeutige Zuordnung."
+        case .ambiguousOCRNumber: reason = "Vision liefert unterschiedliche Zahlenlesarten. Die Angabe bleibt offen."
+        case .outsideColumn: reason = "Kein Wert eindeutig innerhalb dieser Bezugsspalte."
+        case .outOfRange: reason = "Wert außerhalb des zulässigen Bereichs."
+        }
+        return prefix + field + reason
     }
 
     private func requestCamera() {
