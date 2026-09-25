@@ -90,7 +90,8 @@ werden getrennt behandelt.
 
 - Simulator Debug und unsigniertes Device Release erfolgreich gebaut. Keine
   erneute Auth-Gesamtsuite, kein Modellaufruf, keine Cloud-/CLI-Aenderung.
-  Buildnummer bleibt 10; vorbestehende Xcode-Formatierung bleibt unangetastet.
+  In diesem ersten Fehlerreview blieb die Buildnummer 10; vorbestehende
+  Xcode-Formatierung blieb unangetastet. Signierter Folgebuild siehe unten.
 - **Noch nicht am iPhone abgenommen:** Die lokale macOS-Vision-Ausgabe belegt
   diesen Bildfall, nicht identische iOS-OCR oder echte Kameraqualitaet ueber
   verschiedene Verpackungen. Die JPEG-Variante ist keine Aufnahme durch den
@@ -125,6 +126,43 @@ fluechtig im Scan-State, ohne Teilen/Export/Logging oder automatische Speicherun
 Reparatur und nachfolgende Buildnummer werden separat committed; keine neue
 Installation in diesem Abschlussauftrag. Der erste Fehlerreviewstand war
 ausdruecklich uncommitted zur Durchsicht belassen worden.
+
+### Signiertes Update 1.0 (11), Noch Nicht Installiert
+
+Reparaturcommit `3fa2d00a3aafa8f9bfda82e68788a2cc90f8c128` wurde regulaer
+nach `origin/main` gepusht. Die anschliessende Buildvorbereitung ist getrennt:
+nur zwei Projekt-Versionszeilen, lokale Pilot-Buildfreigabe samt Regression
+und dieser Nachweis. Vorbestehende Xcode-Formatierung bleibt uncommitted.
+
+Read-only-Geraeteabfrage bestaetigte weiterhin 1.0 (10). Vorhandene lokale
+iPhone-Bundles und Archive enthielten hoechstens Build 10; damit ist 11 die
+naechste lokal freie Nummer, keine Aussage ueber App-Store-Connect-Reservierungen.
+70 gezielte Pilotkonfigurationstests bestanden; Build 12 bleibt gesperrt.
+Nach der Zahlenalternativenkorrektur bestand der inkrementelle Simulator-Build;
+anschliessend wurde Release 1.0 (11) fuer iPhoneOS erfolgreich signiert gebaut.
+Keine pauschale Wiederholung bereits erfolgreicher Gesamtsuiten.
+
+Bundle ausserhalb des Repositories:
+
+```text
+/Users/benedikt/Library/Developer/Xcode/DerivedData/pft-iphone-update11-20260925/Build/Products/Release-iphoneos/Trainingsplan.app
+```
+
+- Bundle-ID `com.benedikt.Trainingsplan`, arm64, Team `2SF7PV3WCD`.
+- Apple-Development-Signatur mit `codesign --verify --deep --strict` bestaetigt.
+- Effektive Release-Einstellungen und eingebettete API-/Entra-Werte stimmen
+  mit den bereits geprueften lokalen Deploymentoutputs ueberein.
+- Pilotdateien, Callback, Keychain/Entitlements und URL-/ATS-Konfiguration
+  unveraendert. Profil byteidentisch zu Build 10, UUID
+  `7423a2df-47ea-4cf0-be4f-7aa4bd207a98`, gueltig bis `2027-09-04T19:20:25Z`.
+- Executable SHA256:
+  `8e8107889705e592deb6ea333c82420b5e535c34ee9c116409759ce5996b1b95`.
+
+Nicht installiert oder gestartet. Kein Provisionierungsupdate, keine Cloud-,
+Modell- oder CLI-Kontextaenderung. Der gezielte Kameratest am iPhone bleibt
+offen: derselbe Etikettenfall, fehlendes Eiweiss bzw. JPEG-Fett manuell ergaenzen,
+zweite Verpackung mit Portionsspalten sowie Abbruch/Ersetzungsdialog pruefen.
+Die Diagnose muss ausdruecklich aufgeklappt werden und bleibt fluechtig.
 
 ## Nachtrag 25.09.2026: Lokaler Etikettscan V1
 
