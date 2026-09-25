@@ -58,7 +58,7 @@ def resource_projection(kind, resource):
             "minimumTlsVersion", "publicNetworkAccess", "networkAcls", "primaryEndpoints")}
     if kind == "backend":
         return {"identity": resource["identity"], **{key: properties.get(key) for key in
-            ("httpsOnly", "functionAppConfig", "lastModifiedTimeUtc", "serverFarmId", "enabledHostNames")}}
+            ("httpsOnly", "functionAppConfig", "serverFarmId", "enabledHostNames")}}
     require(kind == "auth", "unknown_resource_kind")
     return properties
 

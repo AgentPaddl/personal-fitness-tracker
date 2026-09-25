@@ -11,6 +11,247 @@ Grant wird automatisch erneuert, ohne Budget-, Policy- oder Periodenreset.
 `policy.proposed.json` weiter unten bleibt der historische Zwei-Personen-Entwurf,
 nicht die aktuelle Ein-Nutzer-Konfiguration.
 
+### Betriebsreparatur 25.09.2026
+
+Das laufende Gateway hatte einen seit **2026-09-20T20:29:20Z** abgelaufenen
+Grant geladen; die Freigabepruefung lieferte reproduzierbar `pilot_unavailable`.
+Der Backend-Fingerabdruck der Erneuerung wich ausschliesslich im von Azure
+gepflegten `lastModifiedTimeUtc` ab. Dieser Betriebszeitstempel gehoert nicht
+mehr zum Konfigurationsfingerabdruck. Identitaet, HTTPS, Functionkonfiguration,
+Serverfarm und Hostnamen bleiben gebunden; alte zeitstempelgebundene Plaene
+werden nicht automatisch akzeptiert. Dies ist kein Codepaket-Integritaetscheck.
+Die Ursache jedes historischen Fehlversuchs ist mangels alter Logs nicht belegt.
+
+Nach separater Freigabe wurden nur das Erneuerungsjobimage und dessen gepruefter
+Backend-Fingerabdruck aktualisiert. Image:
+`pftposyuw3m453fx4.azurecr.io/gateway@sha256:0e4a46b7eee9f9d9d77500cc4601584b1b2b42bfc6e0ea9a33a28fbc8011b41f`.
+Es ersetzt auf dem bisherigen Image ausschliesslich `app/pilot_renewal.py`.
+25 lokale Erneuerungstests bestanden, darunter Zeitstempelunabhaengigkeit,
+Ablehnung alter Plaene und weiterhin gesperrte echte Konfigurationsaenderungen.
+Offline-Imagepruefung bestanden; Trivy meldete keine Schwachstellen/Secrets.
+
+Genau ein manuell gestarteter Job `pft-pilot-20260919-renewal-es00jj5` endete
+mit `Succeeded` und dem Prozessbeleg `renewed`, `model_requests=0`.
+Neuer Grant: **2026-09-25T17:32:38Z bis 2026-09-26T17:32:29Z**.
+Die bestehende versionslose Key-Vault-Referenz wurde nach weiterer Freigabe
+identisch aufgefrischt. Da der Prozess noch den alten Wert hielt, wurde einmal
+dieselbe Revision `pft-pilot-20260919-gateway--owner-auto1` neu gestartet.
+Danach waren der neue Grant tatsaechlich geladen sowie `app.active()` und
+die lesende `app.ready()`-Ledgerpruefung erfolgreich.
+
+Gatewayimage und -konfiguration sowie Auth-, Backend-, Storage-, Modell- und
+Rollenfingerabdruecke blieben unveraendert. Zeitplan `15 7,19 * * *`, Retrylimit0,
+3/Tag, 12 insgesamt, Originalende und vier Altholds bleiben bestehen.
+Der Job bestaetigte drei verbrauchte Owneradmissions; keine Modellanfrage,
+Ledgeraenderung, Quotenerhoehung oder neue Policy durch diese Reparatur.
+Kostenbeleg des Jobs: EUR0.969802729349133 netto gebucht; konservative
+All-in-Prognose EUR16.83566448337555135185185185, keine neue Budgetfreigabe.
+
+Pruefgrenzen: Der oeffentliche Backend-Readiness-Aufruf ohne Anmeldung lieferte
+401; ein authentifizierter Ende-zu-Ende-Aufruf und eine Modellantwort wurden
+hier nicht geprueft. Die naechste automatische Erneuerung und die vollstaendige
+iPhone-Analyse bleiben zu beobachten. Keine Appneuinstallation oder Datenloeschung.
+
+#### Lesende Nachpruefung und Ruecknahmeplan
+
+Nachpruefung25.09.,17:52UTC: Die vollstaendige verfuegbare Jobhistorie zeigt
+**elf regulaere Fehllaeufe** vom20.09.,07:15UTC bis25.09.,07:15UTC, nicht nur
+die zuvor betrachteten acht. Die Starts entsprechen dem unveraenderten Cron
+`15 7,19 * * *`; Timeout180 Sekunden, keine Wiederholungsversuche. Fuer jeden
+dieser elf Laeufe liefert Azure keine verbliebenen Replikate/Logendpunkte;
+zentraler Logexport ist nicht konfiguriert. Ihre individuellen Fehlergruende
+sind deshalb nicht nachtraeglich belegbar.
+
+Letzter belegter automatischer Erfolg vor der Reparatur:
+`pft-pilot-20260919-renewal-29830829`,19.09.,20:29:00-20:29:37UTC
+(22:29 Uhr Berlin). Dies war der zeitgesteuerte Abnahmelauf mit temporaerem
+Cron `29 20 19 9 *`; der gespeicherte Prozessbeleg lautet `renewed` und
+erklaert den spaeter abgelaufenen Grant. Der fehlgeschlagene Lauf vom19.09.,
+20:26UTC war dagegen ein absichtlicher `missing_evidence`-Negativtest und
+gehoert nicht zu den elf Betriebsfehlern. Der letzte Erfolg insgesamt ist der
+oben dokumentierte, zuvor ausdruecklich genehmigte manuelle Reparaturlauf.
+
+Der am25.09. reproduzierte konkrete Blocker ist `evidence_drift` am Backend:
+der gespeicherte Zeitstempel19.09.,05:44:48.9966667 unterscheidet sich von
+24.09.,22:54:50.1466667; alle anderen geprueften Backendfelder stimmen ueberein.
+Der neue Zeitstempel allein erklaert insbesondere nicht die frueheren Ausfaelle.
+Auch die sieben historischen Analysefehler werden dieser Ursache nicht ohne
+Einzelbelege zugeordnet. Die Ablehnung eines abgelaufenen Grants durch das
+Gateway ist korrekt; korrigiert wurde die technische Erneuerungspruefung.
+
+Aktuelle ARM-Metadaten: alle fuenf gebundenen Secrets aktiviert, ohne `exp` oder
+`nbf`; beim versionsgebundenen Release-Key wurde die konkrete Version abgeglichen.
+Der erfolgreiche Worker belegt funktionierende Managed-Identity-Zugriffe auf
+ARM, Key Vault, Ledger und Kostenquelle zum Reparaturzeitpunkt. Unveraenderte
+Rollen-/Authfingerabdruecke und korrekte Signatur-/Konfigurationsbindung wurden
+geprueft, nicht durch neue Rechte oder Entra-Regeln ersetzt. Keine Aussage ueber
+historische Authfehler ohne damalige Logs.
+
+Keine beabsichtigte Budget-/Periodensperre zum belegten Reparaturzeitpunkt:
+EUR0.969802729349133 netto liegt unter EUR12, die konservative Prognose
+EUR16.83566448337555135185185185 unter EUR18. Drei von zwoelf Owneradmissions
+sind verbraucht, vier Altholds erhalten, keine aktive Operation oder Ledgersperre;
+Originalende18.10.,22:19:10UTC. Erreichte Limits, fehlende Kostenevidenz,
+Widerruf, neue Holds und echte Konfigurationsdrift sperren weiterhin.
+Die25 lokalen Erneuerungstests wurden erneut erfolgreich ausgefuehrt.
+
+**Aenderungsumfang und Ruecknahme, nicht erneut ausfuehren:** Betroffen sind nur
+das Image von `pft-pilot-20260919-renewal` und der Backendhash seines Plans;
+die zusaetzlich genehmigte Grantuebernahme betraf die identische bestehende
+Key-Vault-Referenz und einen Neustart derselben Gatewayrevision. Fuer eine
+gesondert freizugebende Ruecknahme zuerst aktuellen Job gegen den genehmigten
+Nachzustand vergleichen und bei Drift stoppen. Dann ausschliesslich Jobimage
+und Backendhash gemeinsam aus dem privaten Vorzustandsbeleg zuruecksetzen,
+nicht blind die gesamte alte Ressource ueberschreiben. Originalimage:
+`pftposyuw3m453fx4.azurecr.io/gateway@sha256:9cd006e46fada0fba8ebacf77b9697d1444fcb18ef64540fb4bcfa7ca4fb8f1b`;
+dessen Verfuegbarkeit vor Ausfuehrung pruefen. Zeitplan, Rechte, Quoten, Ledger,
+Holds, Gesamtfrist und Gatewayimage bleiben erhalten. Kein weiterer Jobstart,
+kein Zurueckschreiben eines alten Grants und kein Secret-/Schluesselreset.
+Die Ruecknahme stellt den bekannten Erneuerungsblocker wieder her; sie ist
+keine Verfuegbarkeitsreparatur und widerruft den aktuellen Grant nicht sofort.
+
+Modellfreie Erfolgskontrolle der Korrektur: exakter Job-/Ressourcenabgleich,
+Prozessbeleg `renewed` mit `model_requests=0`, signierter Grant innerhalb der
+Originalfrist, tatsaechliche Gatewayuebernahme, `app.active()`/`app.ready()`
+und unveraenderte Ledgerzaehler. Diese Kontrollen erfolgten nach der frueheren
+Ausfuehrungsfreigabe; die erneute Diagnose hat keine weitere Cloudaenderung,
+Freigabeausstellung, CLI-Neuanmeldung oder Kontextumschaltung vorgenommen.
+
+#### Offener Pruefauftrag nach regulaerer Erneuerung
+
+Lesender Zeitplanabgleich25.09.2026,18:02:38UTC: Jobkonfiguration entspricht
+weiterhin exakt dem genehmigten Nachzustand. Naechster regulaerer Start:
+**25.09.2026,21:15 Uhr MESZ (Europe/Berlin), entsprechend19:15UTC**.
+Keine manuelle Ausfuehrung und kein neuer Grant durch diesen Abschluss.
+Die25 bereits bestandenen Tests werden ohne Codeaenderung nicht nochmals
+wiederholt; Dokumentations-/Gitpruefungen sind davon getrennt.
+
+**Prueffenster: einmalig ab25.09.,21:55 Uhr MESZ.** Der Abstand beruecksichtigt
+180 Sekunden Jobtimeout und bis zu30 Minuten fuer die automatische Uebernahme
+einer versionslosen Key-Vault-Referenz nach erfolgreicher Veroeffentlichung.
+Das ist ein dokumentierter Betreiberauftrag, kein eingerichteter Timer oder
+Hintergrundprozess. Nicht bis dahin warten oder pollen. Alle folgenden Schritte
+bleiben lesend, im vorhandenen privaten CLI-Kontext, ohne Modellaufruf:
+
+1. Per ARM `GET` die Ausfuehrungen von `pft-pilot-20260919-renewal` lesen.
+  Den regulaeren Lauf zum19:15UTC-Termin anhand Ausfuehrungsname und Startzeit
+  vom manuellen Reparaturlauf unterscheiden. `Succeeded`, Endzeit sowie den
+  vorhandenen Prozessbeleg `status=renewed`, `model_requests=0` festhalten.
+  Soweit noch vorhanden, Replikatlogs sofort lesen und nur diese technischen
+  Felder sichern. Ein fehlender Lauf, `Running`, `Failed` oder fehlender
+  Prozessbeleg bleibt offen bzw. fehlerhaft, nicht als Erfolg umdeuten.
+2. Im laufenden Gateway nur `issued_at` und `expires_at` der geladenen Freigabe
+  pruefen: Ausgabezeit passend zum neuen regulaeren Lauf, neuer als
+  `2026-09-25T17:32:38Z`, identisch mit dessen signiertem Grant, noch gueltig,
+  hoechstens24 Stunden Laufzeit und niemals ueber das Originalende hinaus.
+  Signatur/Konfigurationsbindung intern pruefen, Bundle und Schluessel nicht
+  ausgeben. Nur ein neuer Key-Vault-Wert beweist noch keine Gatewayuebernahme.
+3. Tatsaechlich `app.active()` und `app.ready()` im Gateway ausfuehren;
+  ausdrueckliche Erfolgsbelege verlangen. Anonymous `/healthz` oder ein
+  erfolgreicher CLI-Verbindungsaufbau ersetzen diese Pruefung nicht.
+4. Ledger ausschliesslich lesen und gegen den Reparaturbeleg abgleichen:
+  Owner3 Admissions, `reserved=702900000`, `period_cost=957589050`, Tagesstand
+  `20260920` mit3 Admissions/`day_reserved=702900000`; Abnahme16 Admissions,
+  `reserved=3748800000`, vier unveraenderte historische Holds und deren
+  gespeicherte Operationen/Audithashes; `blocked=false`, keine aktive Operation.
+  Bei zwischenzeitlicher bewusster Appnutzung deren belegten Verbrauch getrennt
+  erklaeren, niemals zur Baseline zuruecksetzen oder als unveraendert bestaetigen.
+5. Job-/Gateway-/Rollen-/Policybindung abgleichen: 3/UTC-Tag,12 insgesamt,
+  Vollreserve USD0.2343, Periodengeldgrenze USD3.76500465, Netto-Stopp EUR12,
+  Prognosegrenze EUR18 und Gesamtende **2026-10-18T22:19:10Z** unveraendert.
+  Alle weiteren Budget-/Reservegrenzen bleiben gebunden; die gebuchten Istkosten
+  duerfen steigen, nicht die Grenzen. Frischen Kostenbeleg des regulaeren Jobs
+  mit diesen Grenzen vergleichen, fehlende Kostenevidenz nicht als null werten.
+
+Ergebnis mit UTC-Pruefzeit, Ausfuehrungskennung, sicheren Grantzeiten und
+PASS/FAIL je Punkt privat dokumentieren; keine Rohlogs, Inhalte, Tokens oder
+vollstaendigen Ledgerdaten ins Git. Bei Fehler/ungeklaerter Abweichung Diagnose
+berichten und erneute Freigabe einholen: kein Retry, manueller Grant, Neustart,
+Quoten-/Policy-/Rechteeingriff oder Ledgerreset in diesem Pruefauftrag.
+
+#### Dauerhafte Minimaldiagnose: nur vorbereitet, nicht aktiviert
+
+**Vorschlag:** bestehende technische Worker-Endmeldungen und passende
+Plattformereignisse ueber Azure Monitor in einen separaten Log-Analytics-
+Workspace in Sweden Central, Pay-as-you-go/Analytics, uebernehmen. Kein neues
+Workerimage, keine zusaetzlichen Runtime-/Key-Vault-/Ledgerrechte notwendig.
+Erforderliche spaetere Cloudaenderungen: Workspace mit zwei Tabellen,
+Workspace-Transformations-DCR, Environment-Ziel `azure-monitor` und genau eine
+Diagnoseeinstellung mit `ContainerAppConsoleLogs`/`ContainerAppSystemLogs`.
+Keine Metriken, kein `allLogs`, kein Application Insights/Sentinel, kein
+Event Hub und kein zweiter Rohdatenexport. Zugriff nur fuer den berechtigten
+Betreiber; konkrete Berechtigungen vor Aktivierung separat pruefen/freigeben.
+
+Die Diagnoseeinstellung ist **environmentweit**, nicht jobexklusiv. Deshalb
+zuerst Transformationen erstellen und pruefen, erst danach die Quelle aktivieren:
+exakte Environmentbindung und gepruefte Zuordnung des Job-/Ausfuehrungsnamens
+zu `pft-pilot-20260919-renewal`; fremde App-/Gateway-/Jobdaten verwerfen. Die
+konkrete `JobName`-/Replikatbelegung des Providers vor Freigabe validieren,
+keinen ungeprueften Praefixfilter als sichere Zuordnung behaupten.
+
+Dauerhaft erlaubte Felder: UTC-Zeit, technische Ausfuehrungs-/Replikatkennung,
+Ergebnisenum, Fehlercodeenum und optional Grant-Ausgabe-/Ablaufzeit sowie
+`model_requests`. Console-JSON neu aus diesen validierten Feldern zusammensetzen;
+keine unveraenderte `Log`-Spalte speichern. `reason` nur aus fester Codeliste
+(z.B. `evidence_drift`, `configuration_drift`, `cost_stop`, `cost_forecast`,
+`missing_evidence`, validierte HTTP-Fehlercodes); unbekannte Texte/Exceptions
+auf `other_error` abbilden, ungueltige Meldungen als `invalid_diagnostic`.
+Systemereignisse nur mit festem Reasonenum und technischer Zuordnung speichern,
+deren Freitext ebenfalls entfernen. Keine URLs, Header, Secretwerte, Signaturen,
+Identitaetsclaims, Nutzerkennungen, Eingaben, Antworten, Stacktraces oder Dumps.
+Nicht benoetigte Providerfelder vor Speicherung leeren/verwerfen.
+
+Beide Tabellen unterstuetzen laut Microsoft Workspace-DCR-Transformationen;
+Console-Endmeldungen erklaeren fachliche Pruefblocker, Systemereignisse koennen
+Image-Pull-/Start-/Abbruchfehler vor dem Worker erfassen. Fehlende Abschluss-
+oder Plattformmeldungen bleiben eine Diagnoseluecke und werden mit dem ARM-
+Ausfuehrungsstatus abgeglichen; keine Garantie vollstaendiger Logzustellung.
+Die Filterung erfolgt vor Log-Analytics-Speicherung, aber **nach Uebertragung
+an Azure Monitor**: auch diesen erweiterten Datenweg vor Aktivierung bewerten.
+Keine Behauptung, verworfene Daten wuerden nie transportiert/verarbeitet.
+
+**Aufbewahrung:**30 Tage ab Ereignis, keine Langzeitaufbewahrung/Archivierung
+oder weitere Kopie. Workspace-/Tabellenretention entsprechend setzen;
+`immediatePurgeDataOn30Days=true` fuer den30-Tage-Workspace pruefen und setzen,
+sonst kann die dokumentierte Frist31 Tage betragen. Am Pilotende Export nach
+Sicherung des letzten technischen Ergebnisses abschalten, Restdaten nach dieser
+Frist auslaufen lassen und Loeschung/Kostenende pruefen. Nur replikatunabhaengig
+dauerhaft innerhalb dieser Frist, nicht unbegrenzt.
+
+**Moegliche Zusatzkosten, noch keine Ausgabe-/Aktivierungsfreigabe:** regionale
+EUR-Preise fuer Ingestion und Transformation vor Umsetzung frisch ermitteln;
+keine Free-Tier-Annahme. Analytics enthaelt31 Tage Aufbewahrung, regulaere
+interaktive Abfragen haben keine gesonderte Scanabrechnung. Gefilterte Daten
+koennen trotzdem Verarbeitungskosten verursachen, wenn mehr als50% entfallen.
+Mit eingehenden GB `S`, gespeicherten GB `I` und den jeweiligen Preisen `P`/`Q`
+ist die vereinfachte Planung `I * P + max(0, S / 2 - I) * Q`, zuzueglich
+gegebenenfalls Export/Netzwerk/Steuer; keine harte Kostengarantie.
+60 Laeufe mit angenommenen10 technischen Datensaetzen zu je2kB waeren nur
+1.2MB Nutzvolumen, **ohne** Metadaten und environmentweiten Eingangsverkehr.
+Der Eingang muss separat abgeschaetzt werden; aus der kleinen Ergebnismenge
+folgt kein kostenloser Betrieb. Vorschlag: maximal EUR0.25 Planreserve innerhalb
+der bestehenden EUR4.30-Betriebshuelse nach frischem Kostenabgleich, keine
+Budgeterhoehung. Passt das nicht, keine Aktivierung. Daily Cap/Alarm allein
+ist kein harter Kostendeckel; zusaetzliche Alarme sind hier nicht vorgesehen.
+
+Vor spaeterer Aktivierung: synthetische Erfolg-/Fehler-/Timeout-/Startfehler-
+Belege, fremde Jobdaten und Testgeheimnisse gegen beide Transformationen pruefen;
+nur erlaubte Felder duerfen persistieren. Schema, technische Jobzuordnung,
+Retention und Kosten muessen belegt sein. Erst dann separaten Cloud-Diff
+freigeben; bis dahin bleiben die vorhandenen Loggingeinstellungen unveraendert.
+Ruecknahme: nur diese Diagnoseeinstellung deaktivieren und das zuvor gesicherte
+Environment-Loggingziel wiederherstellen, sofern keine fremden Aenderungen
+vorliegen; vorhandene Diagnosedaten fristgerecht auslaufen lassen. Keine
+Aenderung an Grant, Zeitplan, Sicherheitspruefungen oder Verbrauchszaehlern.
+
+Technische Grundlagen (25.09.2026 geprueft):
+[ACA-Logziele](https://learn.microsoft.com/en-us/azure/container-apps/log-options),
+[Console-Tabelle](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/containerappconsolelogs),
+[System-Tabelle](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/containerappsystemlogs),
+[Transformationen/Kosten](https://learn.microsoft.com/en-us/azure/azure-monitor/data-collection/data-collection-transformations),
+[Aufbewahrung](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/data-retention-configure),
+[Abrechnung](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/cost-logs).
+
 Ausgangspunkt war der abgeschlossene Build7-Test unter `d5de5c6`: **16/16**
 Abnahmeversuche, vier unveraenderte Holds, KI aus, Grant widerrufen. Nur der
 bereits verifizierte Betreiber ist zugelassen; die Ehefrau bleibt

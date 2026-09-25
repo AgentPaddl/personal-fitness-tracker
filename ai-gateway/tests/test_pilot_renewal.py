@@ -93,6 +93,56 @@ def test_renewal_preserves_all_records_budget_privacy_and_period(renewal):
     assert {name: renewal.cloud.signed["approval"]["evidence"][name] for name in ("budget", "privacy")} == renewal.plan["fixed_evidence"]
 
 
+def test_backend_modified_timestamp_does_not_change_reviewed_configuration(renewal):
+    backend = renewal.cloud.resource("backend")
+    backend["properties"]["lastModifiedTimeUtc"] = "2026-09-19T05:44:48.9966667"
+    entry = next(item for item in renewal.plan["resources"] if item["kind"] == "backend")
+    entry["sha256"] = pilot_renewal.sha(pilot_renewal.resource_projection("backend", backend))
+    before = deepcopy(renewal.control.store.rows)
+    backend["properties"]["lastModifiedTimeUtc"] = "2026-09-24T22:54:50.1466667"
+
+    assert run(renewal)["status"] == "renewed"
+    assert len(renewal.cloud.writes) == 1
+    assert renewal.control.store.rows == before
+
+
+def test_timestamp_bound_backend_plan_requires_explicit_reapproval(renewal):
+    backend = renewal.cloud.resource("backend")
+    legacy = {**pilot_renewal.resource_projection("backend", backend),
+              "lastModifiedTimeUtc": "2026-09-19T05:44:48.9966667"}
+    entry = next(item for item in renewal.plan["resources"] if item["kind"] == "backend")
+    entry["sha256"] = pilot_renewal.sha(legacy)
+    before = deepcopy(renewal.control.store.rows)
+
+    with pytest.raises(pilot_renewal.RenewalBlocked, match="^evidence_drift$"):
+        run(renewal)
+
+    assert renewal.cloud.writes == []
+    assert renewal.control.store.rows == before
+
+
+@pytest.mark.parametrize("field,value", [
+    ("identity", {"type": "SystemAssigned"}),
+    ("httpsOnly", False),
+    ("functionAppConfig", {"runtime": {"version": "changed"}}),
+    ("serverFarmId", "/synthetic/other-plan"),
+    ("enabledHostNames", ["other.example"]),
+])
+def test_backend_configuration_changes_still_block_renewal(renewal, field, value):
+    backend = renewal.cloud.resource("backend")
+    if field == "identity":
+        backend[field] = value
+    else:
+        backend["properties"][field] = value
+    before = deepcopy(renewal.control.store.rows)
+
+    with pytest.raises(pilot_renewal.RenewalBlocked, match="^evidence_drift$"):
+        run(renewal)
+
+    assert renewal.cloud.writes == []
+    assert renewal.control.store.rows == before
+
+
 @pytest.mark.parametrize("fault", ["disabled", "revoked", "network", "cost", "drift", "blocked", "hold", "audit", "missing"])
 def test_failures_publish_nothing_and_preserve_ledger(renewal, monkeypatch, fault):
     if fault == "disabled": renewal.cloud.resource_value["properties"]["template"]["containers"][0]["env"][0]["value"] = "false"
