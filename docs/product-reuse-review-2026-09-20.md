@@ -4,6 +4,156 @@ Stand: 2026-09-20. Aufbauend auf Messpaket `ed6a59d`. Ausschliesslich lokale
 Entwicklung und synthetische Tests; keine Anmeldung, Modellaufrufe, Cloud-
 oder Policyaktivierung. Keine Installation und keine Buildnummeraenderung.
 
+## Nachtrag 25.09.2026: Lokaler Etikettscan V1
+
+Implementierter Reviewstand. Im bestehenden Produkteditor fuehrt "Etikett scannen"
+zu "Foto aufnehmen", lokaler Erkennung, Spaltenpruefung und "Werte uebernehmen".
+Bei mehreren Bezugsspalten ist eine explizite Auswahl erforderlich. Das Foto
+bleibt fuer den Vergleich in der Scanpruefung sichtbar. Abbrechen veraendert
+die bisherigen Editorwerte nicht; "Manuell fortfahren" kehrt zum Editor zurueck.
+Ein erfolgreich uebernommener Scan ersetzt dessen vier Naehrwerte und Basis,
+einschliesslich leerer Felder bei fehlenden Werten, nicht den Produktnamen.
+Bei vorhandenen Naehrwerten, Menge oder Einheit verlangt die Uebernahme zuerst
+"Vorhandene Werte ersetzen?". Abbrechen dieses Dialogs laesst den Editor
+unveraendert; erst "Werte ersetzen" gibt den vollstaendigen Austausch frei.
+Er speichert noch nichts. Erst "Produkt speichern" schreibt ein `FoodPreset`;
+kein `FoodEntry`, keine Aenderung der Tagesbilanz.
+
+Die Herkunft nach Scan ist **manuell/unbekannt**, nicht bestaetigte Verpackung
+und nicht KI. Fuer Verpackungswerte bleibt die vorhandene Herkunftswahl mit
+ausdruecklichem Abgleich von Werten und Bezugsmenge erforderlich. Jede Aenderung
+entwertet die Bestaetigung. Name, kcal, Eiweiss, Kohlenhydrate, Fett, Menge und
+Einheit bleiben vor dem Save editierbar; fehlende Pflichtangaben sperren ihn.
+Keine Schema-/Backupmigration und keine geaenderte Speicherroutine.
+
+### Getrennte Komponenten und portable Regeln
+
+- Kamera: bestehender `CameraCaptureView`, Berechtigung nur nach Benutzertipp;
+  fehlende Hardware, Ablehnung und Einschraenkung zeigen einen lokalen Fehler,
+  ohne den manuellen Produkteditor zu sperren. Kein DataScanner-Hardwarezwang.
+- OCR: `FoodLabelTextRecognizer`, Apple Vision `VNRecognizeTextRequest` Revision3,
+  accurate/de-DE, keine Sprachkorrektur numerischer Zeichen. Orientiertes Bild
+  ueber ImageIO, maximal3000 Pixel laengste Seite; Erkennung ausserhalb des
+  MainActors. Fehlende deutsche Vision-Unterstuetzung bleibt ein lokaler Fehler.
+  Wortrechtecke stammen aus Vision-Substring-Bounding-Boxes, nicht aus
+  gleichmaessig geschaetzten Zeichenabstaenden. Kandidaten unter0.5 Confidence
+  werden verworfen; diese Schwelle ist keine Qualitaetsgarantie.
+- Zuordnung: reines Foundation-Modul `FoodLabelRecognition` in FoodAnalysisKit,
+  ohne Vision/UIKit/Netzwerk. Eingabe `FoodLabelText` mit `text,x,y,width,height`;
+  Rechtecke auf0...1 normalisiert, Ursprung links oben. Vision-Y wird umgekehrt.
+  Maximal2048 Tokens, maximal200 Zeichen pro Token; ungueltige Geometrie
+  verwirft die Eingabe. Kein Plattform-OCR-Objekt ist Teil dieses Vertrags.
+- Regeln V1: Zeilenabstand der Zentren hoechstens0.45 der kleineren Texthoehe;
+  sortiert nachY undX. Bezugsueberschriften oberhalb der ersten Naehrwertzeile
+  im Abstand unter0.22 Bildhoehen; explizite100g/ml oder pro/je-Menge bzw.
+  Portion mit g/ml. Portionsmenge/-einheit ohne eindeutigen Beleg bleiben leer.
+  Ueberschriften derselben X-Lage mit widerspruechlichen Mengen/Einheiten
+  verwerfen die Zuordnung. Hoechstens6 Spalten, keine Standardauswahl bei mehreren.
+- Zahlen werden der eindeutig naechsten Spalte zugewiesen, maximal0.15
+  Bildbreiten vom Zentrum; Abstandsvorteil unter0.025 ist mehrdeutig. Doppelte
+  Naehrwertzeilen oder mehrere passende Werte derselben Spalte bleiben offen.
+  Bei nur einer erkannten Ueberschrift und mehreren Werten einer Naehrwertzeile
+  wird diese Zeile nicht stillschweigend auf die erste Spalte reduziert.
+- Dezimalkomma/-punkt und explizites0 sind erlaubt. Fehlend ist `nil`, nicht0.
+  Ungleichheiten, Prozente, negative/unklare Zahlen und mehrdeutige Tausender-
+  Schreibweisen wie1.234 werden nicht geraten. Einheiten muessen am Wert oder
+  eindeutig in der Zeilenbeschriftung stehen; benachbarte separate Einheiten
+  werden nur bei engem Abstand zugeordnet. Bestehende Wertebereiche bleiben.
+- Nur kcal, keine kJ-Umrechnung. Eine separate kcal-Folgezeile muss unmittelbar
+  nach einer beschrifteten kJ-Energiezeile stehen (hoechstens3 Texthoehen).
+  Frei stehende kcal-Werbung ausserhalb dieses Kontexts wird nicht verwendet.
+  Fettzeilen mit gesaettigten Fettsaeuren werden ausgeschlossen; Zucker/Salz/
+  Ballaststoffe sind keine gesuchten Makros. Keine g/ml-Umrechnung, keine
+  Portionshochrechnung, kein Ableiten fehlender Werte aus anderen Naehrwerten.
+
+Sprachneutrale synthetische Eingabe-/Erwartungsdaten:
+[nutrition-label-v1.json](../ios/FoodAnalysisKit/Tests/FoodAnalysisKitTests/Fixtures/nutrition-label-v1.json).
+Dezimalwerte sind dort kanonische Strings, Fehlendes ist JSON-null. Der Swift-
+Test liest dieselbe Datei; Android kann Vertrag, Regeln und Vektoren spaeter
+uebernehmen. Keine Android-Implementierung, kein neues SDK und keine Paywall.
+
+### Datenschutz und Messung
+
+Kein Aufruf von Analyse-ViewModel, Netzwerkservice oder Cloud-Fallback im Scan.
+Foto nur im fluechtigen Scan-State, kein Schreiben in Fotomediathek, Dateien,
+SwiftData oder Messarchiv. OCR-Text nur waehrend der Zuordnung; Schliessen
+verwirft Foto und Ergebnis. Laufende Arbeit wird beim Schliessen verworfen;
+eine bereits laufende synchrone Vision-Anforderung kann noch kurz auslaufen.
+Fehlertexte sind feste lokale UI-Texte, kein Logging von OCR-, Bild- oder
+Produktinhalten. Nur ausdruecklich gespeicherte Produktdaten werden persistent.
+
+Der vorhandene Editor-Messlauf bleibt waehrend des untergeordneten Scans offen.
+Scan, Wiederholung und Spaltenwahl erzeugen keine neue KI-Operation. Nach
+Uebernahme sind Wertkorrekturen weiterhin messbar; der explizite Produktsave
+endet mit `productSaved`. Ein abgebrochener Scan beendet nicht den Editor;
+Editorabbruch/-schliessen behaelt die vorhandene discarded/incomplete-Semantik.
+Aus einem KI-Review geoeffnete Editoren behalten dessen vorherige KI-Operationen,
+der lokale Scan fuegt ihnen keine weitere hinzu.
+
+### Verifikation und Grenzen
+
+- 17 synthetische Parsertests, darunter4 portable JSON-Faelle: Spalten/Portionen,
+  Dezimalkomma, ml/g, kJ/kcal, fehlende Felder, explizite Auswahl, Duplikate,
+  Grenzpositionen, unklare Einheiten, Prozentwerte und Wertebereichsgrenzen.
+- 12 Produktpersistenztests im bestehenden SwiftData-Harness bestanden,
+  einschliesslich Scan -> Produkt, null Ernaehrungseintraege, manuelle Herkunft,
+  genau ein lokaler Messabschluss und null KI-Operationen. Bestehende
+  Abbruch-/Doppelsave-/Rollback-/Migrationspruefungen bleiben gruen.
+- Vorgeschriebene Paketregressionen:184 FoodAnalysisKit-Tests und28
+  EntraAuthKit-Tests bestanden; ausschliesslich lokale Testdoubles.
+- Simulator Debug und Device Release (`generic/platform=iOS`) gebaut mit
+  `CODE_SIGNING_ALLOWED=NO`, DerivedData ausserhalb des Repos. Keine Installation,
+  Buildnummeraenderung oder Bearbeitung der vorbestehenden Xcode-Formatierung.
+
+Gezielter Abschlussreview am 25.09.: Der einzige konkret gefundene Fehler war
+die fehlende ausdrueckliche Ersetzungsfrage fuer vorhandene Editorwerte. Behoben
+durch einen Dialog mit unveraenderlichem Snapshot der gewaehlten Spalte.
+Spaltenwechsel liest immer ein komplettes Spaltenergebnis; neue Aufnahmen
+leeren Ergebnis und Auswahl vor der OCR. Fehlende Felder ersetzen alte Werte
+durch leer, nicht durch null oder Werte einer anderen Spalte. Kein Callback
+bei Scan-/Kamera-/Dialogabbruch, kein Speichern im OCR- oder Kamerapfad.
+Herkunft wird erst bei bestaetigter Uebernahme manuell/unbestaetigt, der
+vorhandene Messlauf endet erst am Editorabschluss. Kamera und Vision verwenden
+keinen Netzwerkclient und schreiben keine Bilder/OCR-Texte in lokale Archive.
+
+Nach dem Review nur die beiden neuen Tests fuer Spaltenwechsel (einschliesslich
+null gegen fehlend) und zweite Erkennung ausgefuehrt: beide bestanden. Der
+inkrementelle Simulator-Build mit Ersetzungsdialog bestand ebenfalls. Die zuvor
+erfolgreichen Gesamtsuiten und Persistenzpruefungen wurden nicht pauschal
+wiederholt. Die Dialogbedienung selbst ist nicht durch diese Parsertests belegt.
+
+**Keine Abnahme echter Kameraqualitaet:** Tests liefern synthetischen OCR-Text
+mit Rechtecken, keine real fotografierten Verpackungen. Reflexionen, Rundungen,
+kleine Schrift, schraege Perspektive, verbundene Zellen, umgebrochene Beschriftung
+und ungewoehnliche Tabellen koennen zu offenen Feldern oder falscher OCR fuehren.
+Eine Portion ohne Masse/Volumen wird nicht als ein Stueck interpretiert.
+Keine automatische Produkterkennung aus Werbetext oder Namensuebernahme.
+V1 arbeitet konservativ; alle Werte muessen gegen das sichtbare Etikett geprueft
+werden. Vollstaendige UI-/Kamera-/Lifecyclepruefung am Geraet bleibt offen.
+
+### Kurzer Geraetepruefplan (nach separater Installationsfreigabe)
+
+1. Im Flugmodus eine gut beleuchtete flache Verpackung mit100g-Spalte scannen.
+   kcal gegen kJ, Eiweiss/Dezimalkomma und Gesamtfett gegen gesaettigte Fettsaeuren
+   abgleichen; Werte bearbeiten. Herkunft bleibt ungeprueft bis zur eigenen
+   Verpackungsbestaetigung, jede nachfolgende Aenderung hebt sie auf.
+2. Getraenk mit100ml und Portion250ml scannen: ohne Spaltenwahl keine Uebernahme;
+   beide Spalten getrennt pruefen, keine Umrechnung in g. Verpackung mit
+  100g/Portion30g und RI%-Spalte ebenso pruefen.
+3. Unscharfes/glitzerndes Etikett, verdeckten Makrowert, kJ ohne kcal und
+   "<0,5g" pruefen: fehlende Werte nicht0, keine geschaetzten Einheiten.
+   Bei Misserfolg manuell fortfahren; keine Cloudaktion anbieten/ausloesen.
+4. Kamera ablehnen, Kamera abbrechen, Scan wegwischen, erneute Aufnahme sowie
+   Hintergrundwechsel pruefen. Editorwerte bei Abbruch unveraendert, Messlauf
+   offen bis Editorabschluss. Ohne Kamera im Simulator bleibt manuell verfuegbar.
+  Vorhandene manuelle Werte und einen zweiten Scan pruefen: Ersetzungsfrage
+  abbrechen laesst alles unveraendert; bestaetigen ersetzt die gesamte Basis
+  samt Naehrwerten, auch wenn im zweiten Ergebnis Angaben fehlen.
+5. Ein Testprodukt ausdruecklich speichern: genau ein Produkt, kein Eintrag,
+   Tagessumme unveraendert; Messung `productCreation/productSaved`,0 KI-Vorgaenge,
+   keine Fotos/Texte/Werte im Messarchiv. Nur das Testprodukt danach entfernen.
+   Keine neue Modellanalyse, persoenlichen Daten nicht zuruecksetzen.
+
 ## Implementierter Ablauf
 
 - "Produkt vom Etikett" oeffnet den lokalen Editor. "Als Produkt speichern"

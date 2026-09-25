@@ -26,7 +26,7 @@
 	     requested when the user explicitly taps that action; never on
 	     launch. Captured photos are never saved to the Photos library. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Wird verwendet, um ein Foto deines Essens für die KI-Analyse aufzunehmen.</string>
+	<string>Wird verwendet, um Nährwerttabellen lokal auszulesen oder ein Foto deines Essens für die KI-Analyse aufzunehmen.</string>
 	<!-- MSAL's documented default iOS/macOS redirect URI format is
 	     msauth.[BUNDLE_ID]://auth (see
 	     https://learn.microsoft.com/entra/msal/objc/redirect-uris-ios).

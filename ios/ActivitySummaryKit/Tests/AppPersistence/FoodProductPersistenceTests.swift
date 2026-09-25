@@ -6,6 +6,40 @@ import FoodAnalysisKit
 
 final class FoodProductPersistenceTests: XCTestCase {
     @MainActor
+    func testLocalLabelScanSavesOnlyProductAndNeverAddsAnAIOperation() throws {
+        let context = ModelContext(try container())
+        let metrics = FoodCaptureMetrics()
+        let editor = FoodProductEditorSession(metrics: metrics)
+        var tokens = [FoodLabelText(text: "100g", x: 0.60, y: 0.10, width: 0.08, height: 0.025)]
+        for (index, pair) in [("Energie", "200kcal"), ("Eiweiss", "10g"),
+                              ("Kohlenhydrate", "20g"), ("Fett", "8g")].enumerated() {
+            let position = 0.20 + Double(index) * 0.06
+            tokens.append(.init(text: pair.0, x: 0.10, y: position, width: 0.25, height: 0.025))
+            tokens.append(.init(text: pair.1, x: 0.60, y: position, width: 0.08, height: 0.025))
+        }
+        let columns = FoodLabelRecognition.columns(from: tokens)
+        let column = try XCTUnwrap(FoodLabelRecognition.selectedColumn(from: columns, id: nil))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodPreset>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+        let nutrition = try FoodProductNutrition(calories: XCTUnwrap(column.calories),
+            protein: XCTUnwrap(column.protein), carbs: XCTUnwrap(column.carbs), fat: XCTUnwrap(column.fat))
+        let basis = try XCTUnwrap(FoodProductBasis(quantity: XCTUnwrap(column.quantity),
+            unit: XCTUnwrap(column.unit), origin: .manual, nutrition: nutrition))
+        XCTAssertEqual(editor.saveProduct(name: "Synthetic label", basis: basis, in: context), .saved)
+        editor.close()
+        let products = try context.fetch(FetchDescriptor<FoodPreset>())
+        XCTAssertEqual(products.count, 1)
+        XCTAssertEqual(products.first?.valueOrigin, FoodProductOrigin.manual.rawValue)
+        XCTAssertEqual(products.first?.productBasis, basis)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+        XCTAssertEqual(metrics.archive.captures.count, 1)
+        XCTAssertEqual(metrics.archive.captures.first?.id, editor.id)
+        XCTAssertEqual(metrics.archive.captures.first?.kind, .productCreation)
+        XCTAssertEqual(metrics.archive.captures.first?.outcome, .productSaved)
+        XCTAssertEqual(metrics.archive.captures.first?.operations.count, 0)
+    }
+
+    @MainActor
     func testEditorSessionSupportsAIReviewWithoutInstrumentation() throws {
         let context = ModelContext(try container())
         let captureID = UUID()

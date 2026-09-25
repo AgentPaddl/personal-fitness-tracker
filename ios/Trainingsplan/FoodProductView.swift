@@ -18,6 +18,8 @@ struct FoodProductEditorView: View {
     @State private var origin: FoodProductOrigin
     @State private var packagingConfirmed = false
     @State private var saveError: String?
+    @State private var isLabelScanPresented = false
+    @State private var hasScannedValues = false
 
     init(draft: FoodAnalysisReviewDraft? = nil, session: FoodProductEditorSession,
          onSaved: @escaping () -> Void = {}) {
@@ -48,9 +50,16 @@ struct FoodProductEditorView: View {
         NavigationStack {
             Form {
                 Section("Produkt") {
+                    Button { isLabelScanPresented = true } label: {
+                        Label("Etikett scannen", systemImage: "camera.viewfinder")
+                    }
                     TextField("Name", text: $name)
                     Picker("Herkunft", selection: $origin) {
                         ForEach(FoodProductOrigin.allCases) { Text($0.title).tag($0) }
+                    }
+                    if hasScannedValues && !packagingConfirmed {
+                        Label("Etikett nicht bestätigt", systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Section("Bezug der Nährwerte") {
@@ -83,13 +92,19 @@ struct FoodProductEditorView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Produkt speichern") { saveProduct() }.disabled(basis == nil)
+                    Button("Produkt speichern") { saveProduct() }.disabled(basis == nil || isLabelScanPresented)
                 }
             }
+            .sheet(isPresented: $isLabelScanPresented) {
+                FoodLabelScanView(replacesExistingValues: unit != nil || [calories, protein, carbs, fat, quantity]
+                    .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, onSelected: applyScan)
+            }
+            .interactiveDismissDisabled(isLabelScanPresented)
             .onChange(of: [name, calories, protein, carbs, fat, quantity, unit?.rawValue ?? "", origin.rawValue]) { _, _ in
                 packagingConfirmed = false
             }
             .onDisappear {
+                guard !isLabelScanPresented else { return }
                 recordEdits()
                 session.close()
             }
@@ -105,6 +120,24 @@ struct FoodProductEditorView: View {
         case .failed: saveError = "Das Produkt konnte nicht gespeichert werden."
         case .skipped: break
         }
+    }
+
+    private func applyScan(_ column: FoodLabelColumn) {
+        recordEdits()
+        func text(_ value: Decimal?) -> String {
+            value.map { NSDecimalNumber(decimal: $0).stringValue.replacingOccurrences(of: ".", with: ",") } ?? ""
+        }
+        calories = text(column.calories)
+        protein = text(column.protein)
+        carbs = text(column.carbs)
+        fat = text(column.fat)
+        quantity = text(column.quantity)
+        unit = column.unit
+        origin = .manual
+        packagingConfirmed = false
+        hasScannedValues = true
+        saveError = nil
+        measuredValues = [name, calories, protein, carbs, fat]
     }
 
     private func recordEdits() {

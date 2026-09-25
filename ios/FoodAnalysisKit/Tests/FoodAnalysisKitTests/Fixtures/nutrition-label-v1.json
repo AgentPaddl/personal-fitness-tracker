@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "coordinates": "normalized-top-left",
+  "cases": [
+    {
+      "id": "two-columns-milliliters-and-portion",
+      "tokens": [
+        {"text":"100ml","x":0.48,"y":0.10,"width":0.08,"height":0.025},
+        {"text":"Portion","x":0.77,"y":0.06,"width":0.08,"height":0.025},
+        {"text":"250ml","x":0.77,"y":0.10,"width":0.08,"height":0.025},
+        {"text":"Energie","x":0.10,"y":0.20,"width":0.20,"height":0.025},
+        {"text":"40kcal","x":0.48,"y":0.20,"width":0.08,"height":0.025},
+        {"text":"100kcal","x":0.77,"y":0.20,"width":0.08,"height":0.025},
+        {"text":"Eiweiss","x":0.10,"y":0.27,"width":0.20,"height":0.025},
+        {"text":"3,5g","x":0.48,"y":0.27,"width":0.08,"height":0.025},
+        {"text":"8,75g","x":0.77,"y":0.27,"width":0.08,"height":0.025},
+        {"text":"Fett","x":0.10,"y":0.34,"width":0.20,"height":0.025},
+        {"text":"0g","x":0.48,"y":0.34,"width":0.08,"height":0.025}
+      ],
+      "expected": [
+        {"quantity":"100","unit":"ml","calories":"40","protein":"3.5","carbs":null,"fat":"0"},
+        {"quantity":"250","unit":"ml","calories":"100","protein":"8.75","carbs":null,"fat":null}
+      ]
+    },
+    {
+      "id": "kilojoules-and-kilocalories-on-separate-lines",
+      "tokens": [
+        {"text":"100g","x":0.60,"y":0.10,"width":0.08,"height":0.025},
+        {"text":"Brennwert","x":0.10,"y":0.20,"width":0.20,"height":0.025},
+        {"text":"840kJ","x":0.60,"y":0.20,"width":0.08,"height":0.025},
+        {"text":"200kcal","x":0.60,"y":0.25,"width":0.08,"height":0.025},
+        {"text":"Fett","x":0.10,"y":0.31,"width":0.20,"height":0.025},
+        {"text":"4,5g","x":0.60,"y":0.31,"width":0.08,"height":0.025},
+        {"text":"davon gesaettigte Fettsaeuren","x":0.10,"y":0.37,"width":0.35,"height":0.025},
+        {"text":"1,2g","x":0.60,"y":0.37,"width":0.08,"height":0.025}
+      ],
+      "expected": [{"quantity":"100","unit":"g","calories":"200","protein":null,"carbs":null,"fat":"4.5"}]
+    },
+    {
+      "id": "contradictory-basis-unit",
+      "tokens": [
+        {"text":"100g","x":0.60,"y":0.10,"width":0.08,"height":0.025},
+        {"text":"100ml","x":0.60,"y":0.14,"width":0.08,"height":0.025},
+        {"text":"Fett","x":0.10,"y":0.20,"width":0.20,"height":0.025},
+        {"text":"4g","x":0.60,"y":0.20,"width":0.08,"height":0.025}
+      ],
+      "expected": []
+    },
+    {
+      "id": "portion-without-amount-and-censored-value",
+      "tokens": [
+        {"text":"Portion","x":0.60,"y":0.10,"width":0.08,"height":0.025},
+        {"text":"Fett","x":0.10,"y":0.20,"width":0.20,"height":0.025},
+        {"text":"<0,5g","x":0.60,"y":0.20,"width":0.08,"height":0.025},
+        {"text":"Eiweiss","x":0.10,"y":0.27,"width":0.20,"height":0.025},
+        {"text":"3g","x":0.60,"y":0.27,"width":0.08,"height":0.025}
+      ],
+      "expected": [{"quantity":null,"unit":null,"calories":null,"protein":"3","carbs":null,"fat":null}]
+    }
+  ]
+}
